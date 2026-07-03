@@ -2,7 +2,7 @@
   "templates": [
     {
       "name": "Client-PWA (React + MobX)",
-      "description": "Schlanke Progressive Web App ohne Server: React, MobX, Vite. Mit Excel-Upload per Drag & Drop (SheetJS) und Recharts für Dashboards — ideal für interaktive Auswertungen, die komplett im Browser laufen.",
+      "description": "Schlanke Progressive Web App ohne Server: React, MobX, Bun-native Toolchain (Bun.serve mit HMR, Bun.build — kein Vite). Mit Excel-Upload per Drag & Drop (SheetJS) und Recharts für Dashboards — ideal für interaktive Auswertungen, die komplett im Browser laufen.",
       "dir": "pwa",
       "devCommand": "bun run dev",
       "previewPort": 5173

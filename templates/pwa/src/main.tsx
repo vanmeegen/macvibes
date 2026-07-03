@@ -11,3 +11,10 @@ if (!container) {
 }
 
 createRoot(container).render(<App store={store} />);
+
+// Service Worker nur im Produktions-Build registrieren (PWA).
+if (process.env.NODE_ENV === 'production' && 'serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch((error) => {
+    console.error('Service-Worker-Registrierung fehlgeschlagen:', error);
+  });
+}
