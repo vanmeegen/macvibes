@@ -167,8 +167,15 @@ Apps, die rein im Browser laufen. Wichtigstes Template.
       mit Backoff wiederholt; erst nach endgültigem Scheitern erscheint eine
       Fehler-Nachricht im Chat mit **Retry-Button**. Eingereihte Eingaben
       gehen dabei nicht verloren.
-- [ ] Die Chat-Historie eines Projekts wird in SQLite persistiert und beim
-      erneuten Öffnen vollständig wieder angezeigt.
+- [ ] Die Chat-Historie eines Projekts wird **fortlaufend** (pro Nachricht /
+      Agent-Event, nicht erst am Turn-Ende) in SQLite persistiert. Wird eine
+      Session abgebrochen — VM-Stopp, Crash, Stop-Button, Verbindungsabriss —
+      geht nichts verloren: Beim Neustart wird der komplette Verlauf inklusive
+      des angefangenen Turns wieder angezeigt.
+- [ ] Der Gesprächskontext des Agenten liegt zusätzlich als Claude-Session-
+      Dateien auf dem Projekt-Volume im Workspace und wird beim Neustart per
+      `--resume` wieder aufgenommen (Anzeige-Historie: DB; Agenten-Kontext:
+      Datei im Workspace-Volume).
 - [ ] Der Agent arbeitet im Projekt-Workspace (Checkout des Projekt-Branches
       auf dem Projekt-Volume) innerhalb der Sandbox; er hat keinen Zugriff
       auf das Host-Dateisystem und keine Claude-Credentials (API läuft über
