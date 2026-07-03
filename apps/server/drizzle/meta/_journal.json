@@ -8,6 +8,13 @@
       "when": 1783104840196,
       "tag": "0000_pink_leper_queen",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1783106868805,
+      "tag": "0001_chat",
+      "breakpoints": true
     }
   ]
 }

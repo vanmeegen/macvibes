@@ -20,6 +20,8 @@ export const projects = sqliteTable(
     lastActivityAt: integer('last_activity_at', { mode: 'timestamp' })
       .notNull()
       .$defaultFn(() => new Date()),
+    /** Claude-Session des Agenten — für --resume nach Sandbox-Neustart (R9). */
+    claudeSessionId: text('claude_session_id'),
   },
   (table) => ({
     // Projektnamen müssen nur pro User eindeutig sein.

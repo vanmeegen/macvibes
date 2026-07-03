@@ -1,33 +1,94 @@
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import SendIcon from '@mui/icons-material/Send';
+import StopIcon from '@mui/icons-material/Stop';
 import Alert from '@mui/material/Alert';
 import AppBar from '@mui/material/AppBar';
 import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
 import IconButton from '@mui/material/IconButton';
+import LinearProgress from '@mui/material/LinearProgress';
 import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
 import Toolbar from '@mui/material/Toolbar';
 import Typography from '@mui/material/Typography';
 import { observer } from 'mobx-react-lite';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import type { ChatMessage } from '../api/types';
+import type { ChatStore } from '../models/ChatStore';
 import { sandboxStatusLabel, type ProjectsStore } from '../models/ProjectsStore';
 
 export interface ChatPageProps {
   projectsStore: ProjectsStore;
+  chatStore: ChatStore;
 }
 
+const MessageBubble = observer(function MessageBubble({
+  message,
+}: {
+  message: ChatMessage;
+}): JSX.Element {
+  if (message.role === 'system' || message.role === 'error') {
+    return (
+      <Alert
+        severity={message.role === 'error' ? 'error' : 'info'}
+        data-testselector="chat-message"
+        data-role={message.role}
+      >
+        {message.content}
+      </Alert>
+    );
+  }
+
+  if (message.role === 'tool') {
+    return (
+      <Typography
+        variant="caption"
+        color="text.secondary"
+        sx={{ fontFamily: 'monospace', px: 1 }}
+        data-testselector="chat-message"
+        data-role="tool"
+      >
+        ⚙ {message.content}
+      </Typography>
+    );
+  }
+
+  const isUser = message.role === 'user';
+  return (
+    <Box
+      sx={{ display: 'flex', justifyContent: isUser ? 'flex-end' : 'flex-start' }}
+      data-testselector="chat-message"
+      data-role={message.role}
+    >
+      <Paper
+        variant={isUser ? 'elevation' : 'outlined'}
+        sx={{
+          px: 2,
+          py: 1,
+          maxWidth: '85%',
+          whiteSpace: 'pre-wrap',
+          bgcolor: isUser ? 'primary.dark' : 'background.paper',
+        }}
+      >
+        <Typography variant="body2">{message.content}</Typography>
+      </Paper>
+    </Box>
+  );
+});
+
 /**
- * Phase-A-Hülle der Projektansicht: zweispaltiges Layout mit
- * Chat-Platzhalter (links) und Preview-Platzhalter (rechts).
- * Der Besitzvergleich (Nur-Lese-Modus) läuft über projectsStore.isOwn,
- * das intern den AuthStore nutzt.
+ * Projektansicht: Chat mit dem Agenten (links) und Preview (rechts).
+ * Nur der Owner darf schreiben; andere lesen live mit (R6/R10).
  */
-export const ChatPage = observer(function ChatPage({ projectsStore }: ChatPageProps): JSX.Element {
+export const ChatPage = observer(function ChatPage({
+  projectsStore,
+  chatStore,
+}: ChatPageProps): JSX.Element {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (projectsStore.projects.length === 0 && !projectsStore.loading) {
@@ -53,6 +114,20 @@ export const ChatPage = observer(function ChatPage({ projectsStore }: ChatPagePr
       void projectsStore.leaveProject(projectId);
     };
   }, [projectsStore, projectId, isOwner]);
+
+  // Chat-Historie + Live-Stream (alle angemeldeten Besucher, R10).
+  useEffect(() => {
+    if (projectId === null) return;
+    void chatStore.connect(projectId);
+    return () => chatStore.disconnect();
+  }, [chatStore, projectId]);
+
+  // Immer ans Ende scrollen, wenn neue Events eintreffen.
+  const messageCount = chatStore.messages.length;
+  const lastContentLength = chatStore.messages[messageCount - 1]?.content.length ?? 0;
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+  }, [messageCount, lastContentLength]);
 
   return (
     <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -106,19 +181,33 @@ export const ChatPage = observer(function ChatPage({ projectsStore }: ChatPagePr
           sx={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}
         >
           <Box
-            sx={{
-              flexGrow: 1,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              p: 3,
-            }}
+            ref={scrollRef}
+            sx={{ flexGrow: 1, overflowY: 'auto', p: 2, display: 'flex', flexDirection: 'column' }}
           >
-            <Typography variant="body1" color="text.secondary">
-              Chat folgt in Phase B
-            </Typography>
+            <Stack spacing={1.5}>
+              {chatStore.messages.length === 0 && (
+                <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center' }}>
+                  Noch keine Nachrichten — beschreibe dem Agenten, was er bauen soll.
+                </Typography>
+              )}
+              {chatStore.messages.map((message) => (
+                <MessageBubble key={message.id} message={message} />
+              ))}
+            </Stack>
           </Box>
+
+          {chatStore.turnActive && (
+            <Box data-testselector="chat-turn-indicator">
+              <LinearProgress />
+            </Box>
+          )}
+
           <Box sx={{ p: 2, borderTop: 1, borderColor: 'divider' }}>
+            {chatStore.error !== null && (
+              <Alert severity="error" sx={{ mb: 1 }} data-testselector="chat-send-error">
+                {chatStore.error}
+              </Alert>
+            )}
             {project !== null && !isOwner ? (
               <Alert severity="info" data-testselector="chat-readonly-hint">
                 Nur-Lese-Modus — Projekt von {project.owner.username}
@@ -127,11 +216,37 @@ export const ChatPage = observer(function ChatPage({ projectsStore }: ChatPagePr
               <Stack direction="row" spacing={1} alignItems="center">
                 <TextField
                   placeholder="Nachricht an den Agenten …"
-                  disabled
                   size="small"
+                  fullWidth
+                  multiline
+                  maxRows={6}
+                  value={chatStore.draft}
+                  onChange={(e) => chatStore.setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      void chatStore.send();
+                    }
+                  }}
                   inputProps={{ 'data-testselector': 'chat-input' }}
                 />
-                <IconButton disabled aria-label="Senden" data-testselector="chat-send">
+                {chatStore.turnActive && (
+                  <IconButton
+                    aria-label="Turn abbrechen"
+                    color="error"
+                    onClick={() => void chatStore.stop()}
+                    data-testselector="chat-stop"
+                  >
+                    <StopIcon />
+                  </IconButton>
+                )}
+                <IconButton
+                  aria-label="Senden"
+                  color="primary"
+                  disabled={chatStore.draft.trim().length === 0}
+                  onClick={() => void chatStore.send()}
+                  data-testselector="chat-send"
+                >
                   <SendIcon />
                 </IconButton>
               </Stack>
@@ -150,7 +265,7 @@ export const ChatPage = observer(function ChatPage({ projectsStore }: ChatPagePr
           }}
         >
           <Typography variant="body1" color="text.secondary">
-            Preview folgt in Phase B
+            Preview folgt in Phase B3
           </Typography>
         </Paper>
       </Stack>

@@ -18,4 +18,21 @@ export class ChatPage {
   get sandboxStatus(): Locator {
     return this.page.getByTestId('chat-sandbox-status');
   }
+
+  get sendButton(): Locator {
+    return this.page.getByTestId('chat-send');
+  }
+
+  get stopButton(): Locator {
+    return this.page.getByTestId('chat-stop');
+  }
+
+  messagesByRole(role: 'user' | 'assistant' | 'tool' | 'system' | 'error'): Locator {
+    return this.page.locator(`[data-testselector="chat-message"][data-role="${role}"]`);
+  }
+
+  async send(text: string): Promise<void> {
+    await this.chatInput.fill(text);
+    await this.sendButton.click();
+  }
 }

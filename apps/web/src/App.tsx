@@ -2,7 +2,13 @@ import Box from '@mui/material/Box';
 import CircularProgress from '@mui/material/CircularProgress';
 import { observer } from 'mobx-react-lite';
 import { Navigate, Route, Routes } from 'react-router-dom';
-import { authStore, createProjectModel, loginModel, projectsStore } from './models/stores';
+import {
+  authStore,
+  chatStore,
+  createProjectModel,
+  loginModel,
+  projectsStore,
+} from './models/stores';
 import { ChatPage } from './pages/ChatPage';
 import { LoginPage } from './pages/LoginPage';
 import { ProjectsPage } from './pages/ProjectsPage';
@@ -49,7 +55,11 @@ export const App = observer(function App(): JSX.Element {
       <Route
         path="/projects/:id"
         element={
-          loggedIn ? <ChatPage projectsStore={projectsStore} /> : <Navigate to="/login" replace />
+          loggedIn ? (
+            <ChatPage projectsStore={projectsStore} chatStore={chatStore} />
+          ) : (
+            <Navigate to="/login" replace />
+          )
         }
       />
       <Route path="*" element={<Navigate to="/" replace />} />

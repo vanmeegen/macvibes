@@ -26,6 +26,11 @@ export interface ServerConfig {
     /** Maximal gleichzeitige Sandboxes (R9, Default 8). */
     maxSandboxes: number;
   };
+  agent: {
+    /** "claude" (Agent SDK) oder "fake" (deterministisch, für Tests/E2E). */
+    backend: 'claude' | 'fake';
+    fakeDelayMs: number;
+  };
 }
 
 const DEFAULT_TEMPLATES_DIR = resolve(
@@ -54,6 +59,10 @@ export function loadConfig(): ServerConfig {
       graceMs: Number(Bun.env.MACVIBES_GRACE_MS ?? 15 * 60 * 1000),
       idleMs: Number(Bun.env.MACVIBES_IDLE_MS ?? 30 * 60 * 1000),
       maxSandboxes: Number(Bun.env.MACVIBES_MAX_SANDBOXES ?? 8),
+    },
+    agent: {
+      backend: Bun.env.MACVIBES_AGENT === 'fake' ? 'fake' : 'claude',
+      fakeDelayMs: Number(Bun.env.MACVIBES_FAKE_DELAY_MS ?? 25),
     },
   };
 }

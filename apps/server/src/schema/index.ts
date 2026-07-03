@@ -1,7 +1,8 @@
 import { eq } from 'drizzle-orm';
 import type { TemplateEntry } from '@macvibes/shared';
 import type { Db } from '../db/client';
-import { projects, type UserRow } from '../db/schema';
+import { projects, type ChatMessageRow, type UserRow } from '../db/schema';
+import type { ChatEventPayload } from '../services/chatService';
 import { clearSessionCookie, readSessionToken, writeSessionCookie } from '../http/cookies';
 import { login, logout, register } from '../services/authService';
 import { DomainError } from '../services/errors';
@@ -55,6 +56,26 @@ ProjectRef.implement({
   }),
 });
 
+const ChatMessageRef = builder.objectRef<ChatMessageRow>('ChatMessage');
+ChatMessageRef.implement({
+  fields: (t) => ({
+    id: t.exposeID('id'),
+    projectId: t.exposeString('projectId'),
+    turnId: t.exposeString('turnId'),
+    role: t.exposeString('role'),
+    content: t.exposeString('content'),
+    createdAt: t.string({ resolve: (message) => message.createdAt.toISOString() }),
+  }),
+});
+
+const ChatEventRef = builder.objectRef<ChatEventPayload>('ChatEvent');
+ChatEventRef.implement({
+  fields: (t) => ({
+    message: t.field({ type: ChatMessageRef, resolve: (payload) => payload.message }),
+    turnActive: t.exposeBoolean('turnActive'),
+  }),
+});
+
 function requireUser(ctx: GraphQLContext): UserRow {
   if (!ctx.currentUser) {
     throw new DomainError('Nicht angemeldet');
@@ -99,6 +120,42 @@ builder.queryType({
         requireUser(ctx);
         return listProjects(ctx.db);
       },
+    }),
+    chatMessages: t.field({
+      type: [ChatMessageRef],
+      args: {
+        projectId: t.arg.id({ required: true }),
+      },
+      resolve: (_root, args, ctx) => {
+        // Lesen dürfen alle angemeldeten User (R10, Live-Mitlesen).
+        requireUser(ctx);
+        return ctx.chatService.listMessages(String(args.projectId));
+      },
+    }),
+    turnActive: t.boolean({
+      args: {
+        projectId: t.arg.id({ required: true }),
+      },
+      resolve: (_root, args, ctx) => {
+        requireUser(ctx);
+        return ctx.chatService.isTurnActive(String(args.projectId));
+      },
+    }),
+  }),
+});
+
+builder.subscriptionType({
+  fields: (t) => ({
+    chatEvents: t.field({
+      type: ChatEventRef,
+      args: {
+        projectId: t.arg.id({ required: true }),
+      },
+      subscribe: (_root, args, ctx) => {
+        requireUser(ctx);
+        return ctx.chatService.subscribe(String(args.projectId));
+      },
+      resolve: (payload: ChatEventPayload) => payload,
     }),
   }),
 });
@@ -188,6 +245,48 @@ builder.mutationType({
         const user = requireUser(ctx);
         await getProjectOwned(ctx, user, String(args.id));
         ctx.sandboxManager.leave(String(args.id));
+        return true;
+      },
+    }),
+    sendMessage: t.boolean({
+      args: {
+        projectId: t.arg.id({ required: true }),
+        text: t.arg.string({ required: true }),
+      },
+      resolve: async (_root, args, ctx) => {
+        const user = requireUser(ctx);
+        const project = await getProjectOwned(ctx, user, String(args.projectId));
+        const text = args.text.trim();
+        if (text.length === 0) {
+          throw new DomainError('Nachricht darf nicht leer sein');
+        }
+        const workspaceDir = workspaceDirFor(ctx.config.macvibesHome, project.id);
+        // Chatten setzt eine laufende Sandbox voraus (R6).
+        await ctx.sandboxManager.enter({
+          projectId: project.id,
+          branchName: project.branchName,
+          workspaceDir,
+          devCommand: project.devCommand,
+          previewPort: project.previewPort,
+        });
+        await ctx.chatService.sendMessage({
+          projectId: project.id,
+          workspaceDir,
+          resumeSessionId: project.claudeSessionId,
+          text,
+        });
+        await touchProject(ctx.db, project.id);
+        return true;
+      },
+    }),
+    stopTurn: t.boolean({
+      args: {
+        projectId: t.arg.id({ required: true }),
+      },
+      resolve: async (_root, args, ctx) => {
+        const user = requireUser(ctx);
+        await getProjectOwned(ctx, user, String(args.projectId));
+        ctx.chatService.stopTurn(String(args.projectId));
         return true;
       },
     }),

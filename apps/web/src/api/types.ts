@@ -25,3 +25,14 @@ export interface Project {
   lastActivityAt: string;
   sandboxStatus: string;
 }
+
+export type ChatRole = 'user' | 'assistant' | 'tool' | 'system' | 'error';
+
+export interface ChatMessage {
+  id: string;
+  projectId: string;
+  turnId: string;
+  role: ChatRole;
+  content: string;
+  createdAt: string;
+}
