@@ -78,6 +78,8 @@ const ProjectCard = observer(function ProjectCard({
                 label={sandboxStatusLabel(project.sandboxStatus)}
                 color={project.sandboxStatus === 'running' ? 'success' : 'default'}
                 variant="outlined"
+                data-testselector={`project-status-${project.id}`}
+                data-status={project.sandboxStatus}
               />
             </Stack>
             <Typography variant="body2" color="text.secondary">
@@ -235,6 +237,8 @@ export const ProjectsPage = observer(function ProjectsPage({
 }: ProjectsPageProps): JSX.Element {
   useEffect(() => {
     void projectsStore.load();
+    projectsStore.startPolling();
+    return () => projectsStore.stopPolling();
   }, [projectsStore]);
 
   const handleFilterChange = (

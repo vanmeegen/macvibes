@@ -13,7 +13,7 @@ export class GitError extends Error {
 /** Wird beim Kopieren eines Templates in den Initial-Commit ausgelassen. */
 const COPY_EXCLUDES = new Set(['node_modules', 'dist', '.git', 'data']);
 
-async function runGit(args: string[], cwd?: string): Promise<string> {
+export async function runGit(args: string[], cwd?: string): Promise<string> {
   const proc = Bun.spawn(['git', ...args], {
     cwd: cwd ?? process.cwd(),
     stdout: 'pipe',

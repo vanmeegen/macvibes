@@ -53,6 +53,10 @@ export class ProjectsPage {
     return card.locator('[data-testselector^="project-delete-"]');
   }
 
+  statusChipIn(card: Locator): Locator {
+    return card.locator('[data-testselector^="project-status-"]');
+  }
+
   get deleteConfirmButton(): Locator {
     return this.page.getByTestId('delete-confirm');
   }

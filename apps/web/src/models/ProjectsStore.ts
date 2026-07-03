@@ -38,6 +38,21 @@ const DELETE_PROJECT_MUTATION = /* GraphQL */ `
   }
 `;
 
+const ENTER_PROJECT_MUTATION = /* GraphQL */ `
+  mutation EnterProject($id: ID!) {
+    enterProject(id: $id) {
+      id
+      sandboxStatus
+    }
+  }
+`;
+
+const LEAVE_PROJECT_MUTATION = /* GraphQL */ `
+  mutation LeaveProject($id: ID!) {
+    leaveProject(id: $id)
+  }
+`;
+
 function toErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -96,9 +111,11 @@ export class ProjectsStore {
   loading = false;
   /** Projekt-ID, für die gerade der Lösch-Bestätigungsdialog offen ist. */
   pendingDeleteId: string | null = null;
+  /** Interval-Handle fürs Status-Polling — bewusst nicht observable. */
+  pollTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private readonly authStore: AuthStore) {
-    makeAutoObservable(this, {}, { autoBind: true });
+    makeAutoObservable(this, { pollTimer: false }, { autoBind: true });
   }
 
   get visibleProjects(): Project[] {
@@ -167,6 +184,58 @@ export class ProjectsStore {
       runInAction(() => {
         this.loading = false;
       });
+    }
+  }
+
+  /** Stilles Nachladen fürs Status-Polling — ohne Lade-Spinner, Fehler nur geloggt. */
+  async refresh(): Promise<void> {
+    try {
+      const data = await gqlRequest<{ projects: Project[]; templates: Template[] }>(
+        PROJECTS_AND_TEMPLATES_QUERY,
+      );
+      runInAction(() => {
+        this.projects = data.projects;
+        this.templates = data.templates;
+      });
+    } catch (err) {
+      console.error('ProjectsStore.refresh fehlgeschlagen', err);
+    }
+  }
+
+  startPolling(intervalMs = 2000): void {
+    if (this.pollTimer !== null) return;
+    this.pollTimer = setInterval(() => {
+      void this.refresh();
+    }, intervalMs);
+  }
+
+  stopPolling(): void {
+    if (this.pollTimer !== null) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
+  }
+
+  /** Startet die Sandbox des Projekts (nur Owner, serverseitig geprüft). */
+  async enterProject(id: string): Promise<void> {
+    try {
+      await gqlRequest<{ enterProject: { id: string } }>(ENTER_PROJECT_MUTATION, { id });
+      await this.refresh();
+    } catch (err) {
+      console.error('ProjectsStore.enterProject fehlgeschlagen', err);
+      runInAction(() => {
+        this.error = toErrorMessage(err);
+      });
+    }
+  }
+
+  /** Meldet das Verlassen der Chat-Page — die Grace-Period beginnt (R9). */
+  async leaveProject(id: string): Promise<void> {
+    try {
+      await gqlRequest<{ leaveProject: boolean }>(LEAVE_PROJECT_MUTATION, { id });
+    } catch (err) {
+      // Beim Verlassen der Seite nicht mehr anzeigbar — aber nie verschlucken.
+      console.error('ProjectsStore.leaveProject fehlgeschlagen', err);
     }
   }
 

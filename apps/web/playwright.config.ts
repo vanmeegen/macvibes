@@ -38,6 +38,9 @@ export default defineConfig({
         MACVIBES_HOME: E2E_HOME,
         DB_PATH: join(E2E_HOME, 'app.db'),
         MACVIBES_INVITE_CODE: E2E_INVITE_CODE,
+        // Kurze Grace-Period, damit der R9-Lifecycle im E2E beobachtbar ist.
+        MACVIBES_GRACE_MS: '1500',
+        MACVIBES_IDLE_MS: '600000',
       },
     },
     {

@@ -5,6 +5,8 @@ import { createDb } from './db/client';
 import { runMigrations } from './db/migrate';
 import { readSessionToken } from './http/cookies';
 import { serveWebUi } from './http/staticFiles';
+import { ProcessSandboxProvider } from './sandbox/processProvider';
+import { SandboxManager } from './sandbox/sandboxManager';
 import { schema } from './schema';
 import type { GraphQLContext } from './schema/builder';
 import { resolveSession } from './services/authService';
@@ -15,6 +17,19 @@ const db = createDb(config.dbPath);
 runMigrations(db);
 await ensureBareRepo(config.bareRepoPath);
 
+const sandboxManager = new SandboxManager({
+  provider: new ProcessSandboxProvider({
+    macvibesHome: config.macvibesHome,
+    bareRepoPath: config.bareRepoPath,
+  }),
+  graceMs: config.sandbox.graceMs,
+  idleMs: config.sandbox.idleMs,
+  maxSandboxes: config.sandbox.maxSandboxes,
+  onStatusChange: (projectId, status) => {
+    console.log(`Sandbox ${projectId}: ${status}`);
+  },
+});
+
 const yoga = createYoga<Record<string, never>, GraphQLContext>({
   schema,
   graphqlEndpoint: '/graphql',
@@ -24,7 +39,7 @@ const yoga = createYoga<Record<string, never>, GraphQLContext>({
   context: async ({ request }) => {
     const token = await readSessionToken(request);
     const currentUser = token ? await resolveSession(db, config, token) : null;
-    return { db, config, currentUser, request };
+    return { db, config, currentUser, request, sandboxManager };
   },
 });
 

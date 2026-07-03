@@ -3,6 +3,7 @@ import SendIcon from '@mui/icons-material/Send';
 import Alert from '@mui/material/Alert';
 import AppBar from '@mui/material/AppBar';
 import Box from '@mui/material/Box';
+import Chip from '@mui/material/Chip';
 import IconButton from '@mui/material/IconButton';
 import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
@@ -12,7 +13,7 @@ import Typography from '@mui/material/Typography';
 import { observer } from 'mobx-react-lite';
 import { useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import type { ProjectsStore } from '../models/ProjectsStore';
+import { sandboxStatusLabel, type ProjectsStore } from '../models/ProjectsStore';
 
 export interface ChatPageProps {
   projectsStore: ProjectsStore;
@@ -36,6 +37,22 @@ export const ChatPage = observer(function ChatPage({ projectsStore }: ChatPagePr
 
   const project = projectsStore.projects.find((p) => p.id === id) ?? null;
   const isOwner = project !== null && projectsStore.isOwn(project);
+  const projectId = project?.id ?? null;
+
+  // Status live halten — auch für Nur-Lese-Besucher.
+  useEffect(() => {
+    projectsStore.startPolling(1000);
+    return () => projectsStore.stopPolling();
+  }, [projectsStore]);
+
+  // Öffnen startet die Sandbox, Verlassen startet die Grace-Period (R9, nur Owner).
+  useEffect(() => {
+    if (projectId === null || !isOwner) return;
+    void projectsStore.enterProject(projectId);
+    return () => {
+      void projectsStore.leaveProject(projectId);
+    };
+  }, [projectsStore, projectId, isOwner]);
 
   return (
     <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -53,6 +70,17 @@ export const ChatPage = observer(function ChatPage({ projectsStore }: ChatPagePr
           <Typography variant="h5" component="h1" sx={{ flexGrow: 1 }} noWrap>
             {project?.name ?? 'Projekt'}
           </Typography>
+          {project !== null && (
+            <Chip
+              size="small"
+              label={sandboxStatusLabel(project.sandboxStatus)}
+              color={project.sandboxStatus === 'running' ? 'success' : 'default'}
+              variant="outlined"
+              sx={{ mr: 2 }}
+              data-testselector="chat-sandbox-status"
+              data-status={project.sandboxStatus}
+            />
+          )}
           {project !== null && (
             <Typography variant="body2" color="text.secondary">
               von {project.owner.username}

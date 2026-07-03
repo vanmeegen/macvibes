@@ -18,6 +18,14 @@ export interface ServerConfig {
   sessionTtlMs: number;
   /** Gebautes Web-UI (wird ausgeliefert, falls vorhanden). */
   webDistDir: string;
+  sandbox: {
+    /** Stopp-Verzögerung nach Verlassen der Chat-Page (R9, Default 15 min). */
+    graceMs: number;
+    /** Stopp nach Agent-Inaktivität (R9, Default 30 min). */
+    idleMs: number;
+    /** Maximal gleichzeitige Sandboxes (R9, Default 8). */
+    maxSandboxes: number;
+  };
 }
 
 const DEFAULT_TEMPLATES_DIR = resolve(
@@ -42,5 +50,10 @@ export function loadConfig(): ServerConfig {
     dbPath: resolveDbPath(),
     sessionTtlMs: 3 * 24 * 60 * 60 * 1000,
     webDistDir: Bun.env.MACVIBES_WEB_DIST ?? DEFAULT_WEB_DIST_DIR,
+    sandbox: {
+      graceMs: Number(Bun.env.MACVIBES_GRACE_MS ?? 15 * 60 * 1000),
+      idleMs: Number(Bun.env.MACVIBES_IDLE_MS ?? 30 * 60 * 1000),
+      maxSandboxes: Number(Bun.env.MACVIBES_MAX_SANDBOXES ?? 8),
+    },
   };
 }

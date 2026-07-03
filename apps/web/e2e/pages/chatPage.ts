@@ -14,4 +14,8 @@ export class ChatPage {
   get readonlyHint(): Locator {
     return this.page.getByTestId('chat-readonly-hint');
   }
+
+  get sandboxStatus(): Locator {
+    return this.page.getByTestId('chat-sandbox-status');
+  }
 }

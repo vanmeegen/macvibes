@@ -1,15 +1,19 @@
+import { eq } from 'drizzle-orm';
 import type { TemplateEntry } from '@macvibes/shared';
-import type { UserRow } from '../db/schema';
+import type { Db } from '../db/client';
+import { projects, type UserRow } from '../db/schema';
 import { clearSessionCookie, readSessionToken, writeSessionCookie } from '../http/cookies';
 import { login, logout, register } from '../services/authService';
 import { DomainError } from '../services/errors';
 import {
   createProject,
   deleteProject,
+  getProject,
   listProjects,
   type ProjectWithOwner,
 } from '../services/projectsService';
 import { loadTemplates } from '../services/templatesService';
+import { workspaceDirFor } from '../services/workspaceService';
 import { builder, type GraphQLContext } from './builder';
 
 const UserRef = builder.objectRef<UserRow>('User');
@@ -41,8 +45,13 @@ ProjectRef.implement({
     owner: t.field({ type: UserRef, resolve: (project) => project.owner }),
     createdAt: t.string({ resolve: (project) => project.createdAt.toISOString() }),
     lastActivityAt: t.string({ resolve: (project) => project.lastActivityAt.toISOString() }),
-    // Phase A: Sandboxen existieren noch nicht — Status ist immer "STOPPED".
-    sandboxStatus: t.string({ resolve: () => 'STOPPED' }),
+    sandboxStatus: t.string({
+      resolve: (project, _args, ctx) => ctx.sandboxManager.status(project.id),
+    }),
+    previewUrl: t.string({
+      nullable: true,
+      resolve: (project, _args, ctx) => ctx.sandboxManager.previewUrl(project.id),
+    }),
   }),
 });
 
@@ -51,6 +60,26 @@ function requireUser(ctx: GraphQLContext): UserRow {
     throw new DomainError('Nicht angemeldet');
   }
   return ctx.currentUser;
+}
+
+/** Lädt ein Projekt und stellt serverseitig die Ownership sicher (R10). */
+async function getProjectOwned(
+  ctx: GraphQLContext,
+  user: UserRow,
+  id: string,
+): Promise<ProjectWithOwner> {
+  const project = await getProject(ctx.db, id);
+  if (!project) {
+    throw new DomainError('Projekt nicht gefunden');
+  }
+  if (project.ownerId !== user.id) {
+    throw new DomainError('Nur der Eigentümer kann mit diesem Projekt arbeiten');
+  }
+  return project;
+}
+
+async function touchProject(db: Db, id: string): Promise<void> {
+  await db.update(projects).set({ lastActivityAt: new Date() }).where(eq(projects.id, id));
 }
 
 builder.queryType({
@@ -129,6 +158,36 @@ builder.mutationType({
       },
       resolve: async (_root, args, ctx) => {
         await deleteProject(ctx.db, requireUser(ctx), String(args.id));
+        return true;
+      },
+    }),
+    enterProject: t.field({
+      type: ProjectRef,
+      args: {
+        id: t.arg.id({ required: true }),
+      },
+      resolve: async (_root, args, ctx) => {
+        const user = requireUser(ctx);
+        const project = await getProjectOwned(ctx, user, String(args.id));
+        await ctx.sandboxManager.enter({
+          projectId: project.id,
+          branchName: project.branchName,
+          workspaceDir: workspaceDirFor(ctx.config.macvibesHome, project.id),
+          devCommand: project.devCommand,
+          previewPort: project.previewPort,
+        });
+        await touchProject(ctx.db, project.id);
+        return project;
+      },
+    }),
+    leaveProject: t.boolean({
+      args: {
+        id: t.arg.id({ required: true }),
+      },
+      resolve: async (_root, args, ctx) => {
+        const user = requireUser(ctx);
+        await getProjectOwned(ctx, user, String(args.id));
+        ctx.sandboxManager.leave(String(args.id));
         return true;
       },
     }),
