@@ -44,6 +44,8 @@ export default defineConfig({
         // Deterministischer Agent statt echter Claude-API (R6-Tests).
         MACVIBES_AGENT: 'fake',
         MACVIBES_FAKE_DELAY_MS: '30',
+        // Prozess-Provider: E2E testet die Plattform-Logik, nicht die VM.
+        MACVIBES_SANDBOX: 'process',
       },
     },
     {

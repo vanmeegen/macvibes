@@ -25,6 +25,12 @@ export interface ServerConfig {
     idleMs: number;
     /** Maximal gleichzeitige Sandboxes (R9, Default 8). */
     maxSandboxes: number;
+    /** "auto" nimmt microsandbox, wenn msb installiert ist, sonst Prozess. */
+    backend: 'auto' | 'process' | 'microsandbox';
+    /** OCI-Image der MicroVMs. */
+    image: string;
+    cpus: number;
+    memoryMib: number;
   };
   agent: {
     /** "claude" (Agent SDK) oder "fake" (deterministisch, für Tests/E2E). */
@@ -59,6 +65,13 @@ export function loadConfig(): ServerConfig {
       graceMs: Number(Bun.env.MACVIBES_GRACE_MS ?? 15 * 60 * 1000),
       idleMs: Number(Bun.env.MACVIBES_IDLE_MS ?? 30 * 60 * 1000),
       maxSandboxes: Number(Bun.env.MACVIBES_MAX_SANDBOXES ?? 8),
+      backend:
+        Bun.env.MACVIBES_SANDBOX === 'process' || Bun.env.MACVIBES_SANDBOX === 'microsandbox'
+          ? Bun.env.MACVIBES_SANDBOX
+          : 'auto',
+      image: Bun.env.MACVIBES_SANDBOX_IMAGE ?? 'oven/bun',
+      cpus: Number(Bun.env.MACVIBES_SANDBOX_CPUS ?? 2),
+      memoryMib: Number(Bun.env.MACVIBES_SANDBOX_MEMORY_MIB ?? 4096),
     },
     agent: {
       backend: Bun.env.MACVIBES_AGENT === 'fake' ? 'fake' : 'claude',
