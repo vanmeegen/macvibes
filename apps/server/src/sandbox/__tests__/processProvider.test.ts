@@ -51,6 +51,7 @@ describe('ProcessSandboxProvider Preview (R7)', () => {
       projectId: 'preview-projekt',
       branchName: 'marco/preview',
       workspaceDir: workspaceDirFor(home, 'preview-projekt'),
+      templateDir: 'pwa',
       devCommand: 'bun server.ts',
       previewPort: 5199,
     });

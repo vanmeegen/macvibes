@@ -6,6 +6,7 @@ export interface SandboxContext {
   branchName: string;
   workspaceDir: string;
   /** Aus templates.json übernommen — die Plattform kennt keine Template-Interna. */
+  templateDir: string;
   devCommand: string;
   previewPort: number;
 }

@@ -230,6 +230,7 @@ builder.mutationType({
           projectId: project.id,
           branchName: project.branchName,
           workspaceDir: workspaceDirFor(ctx.config.macvibesHome, project.id),
+          templateDir: project.templateDir,
           devCommand: project.devCommand,
           previewPort: project.previewPort,
         });
@@ -266,6 +267,7 @@ builder.mutationType({
           projectId: project.id,
           branchName: project.branchName,
           workspaceDir,
+          templateDir: project.templateDir,
           devCommand: project.devCommand,
           previewPort: project.previewPort,
         });

@@ -1,7 +1,10 @@
-import type { Subprocess } from 'bun';
 import { ensureWorkspace } from '../services/workspaceService';
+import { baselineExists, baselineSnapshotName } from './baselineService';
+import { runMsb } from './msb';
 import { findFreePort } from './portService';
 import type { SandboxContext, SandboxHandle, SandboxProvider } from './provider';
+
+export { MicrosandboxError, msbAvailable } from './msb';
 
 export interface MicrosandboxProviderConfig {
   macvibesHome: string;
@@ -10,41 +13,6 @@ export interface MicrosandboxProviderConfig {
   image: string;
   cpus: number;
   memoryMib: number;
-}
-
-export class MicrosandboxError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'MicrosandboxError';
-  }
-}
-
-async function runMsb(args: string[]): Promise<string> {
-  let proc: Subprocess<'ignore', 'pipe', 'pipe'>;
-  try {
-    proc = Bun.spawn(['msb', ...args], { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' });
-  } catch (error) {
-    throw new MicrosandboxError(`msb konnte nicht gestartet werden: ${String(error)}`);
-  }
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-  if (exitCode !== 0) {
-    throw new MicrosandboxError(`msb ${args[0]} schlug fehl (${exitCode}): ${stderr.trim()}`);
-  }
-  return stdout;
-}
-
-/** Ist die msb-CLI auf dem Host verfügbar? */
-export async function msbAvailable(): Promise<boolean> {
-  try {
-    const proc = Bun.spawn(['msb', '--version'], { stdout: 'ignore', stderr: 'ignore' });
-    return (await proc.exited) === 0;
-  } catch {
-    return false;
-  }
 }
 
 function sandboxNameFor(projectId: string): string {
@@ -72,7 +40,16 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
 
     const hostPort = await findFreePort(context.previewPort);
     const name = sandboxNameFor(context.projectId);
-    const bootstrap = `if [ -f package.json ] && [ ! -d node_modules ]; then bun install --silent; fi; exec ${context.devCommand}`;
+
+    // Baseline-Fork (B5b): node_modules kommt vorinstalliert aus dem Snapshot
+    // und wird in den gemounteten Workspace gelinkt — kein Install zur Laufzeit.
+    const useBaseline = await baselineExists(context.templateDir);
+    const bootstrap = useBaseline
+      ? `[ -e node_modules ] || ln -s /baseline/work/node_modules node_modules; exec ${context.devCommand}`
+      : `if [ -f package.json ] && [ ! -d node_modules ]; then bun install --silent; fi; exec ${context.devCommand}`;
+    const source = useBaseline
+      ? ['--snapshot', baselineSnapshotName(context.templateDir)]
+      : [this.config.image];
 
     await runMsb([
       'run',
@@ -95,7 +72,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       `${this.config.memoryMib}M`,
       '-e',
       `PORT=${context.previewPort}`,
-      this.config.image,
+      ...source,
       '--',
       'sh',
       '-c',

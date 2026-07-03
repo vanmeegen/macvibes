@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { lstatSync } from 'node:fs';
 import { join } from 'node:path';
+import { baselineExists, buildTemplateBaseline } from '../baselineService';
 import {
   createTempDir,
   createTemplatesFixture,
@@ -62,6 +64,7 @@ describe.skipIf(!available)('MicrosandboxSandboxProvider (R7/R9, echte MicroVM)'
         projectId: 'vm-projekt',
         branchName: 'marco/vm-projekt',
         workspaceDir: workspaceDirFor(home, 'vm-projekt'),
+        templateDir: 'pwa',
         devCommand: 'bun server.ts',
         previewPort: 5199,
       });
@@ -93,4 +96,56 @@ describe('msbAvailable', () => {
     // Auf diesem Entwicklungsrechner ist msb installiert (B5-Voraussetzung).
     expect(await msbAvailable()).toBe(true);
   });
+});
+
+describe.skipIf(!available)('Template-Baselines (B5b, Snapshot-Fork)', () => {
+  test(
+    'Projekt startet aus der Baseline: node_modules kommt als Symlink aus dem Snapshot',
+    async () => {
+      const home = await createTempDir('macvibes-home-');
+      tempDirs.push(home);
+      const templates = await createTemplatesFixture();
+      tempDirs.push(templates);
+      const bare = join(home, 'macvibes-apps.git');
+      await ensureBareRepo(bare);
+      await createProjectBranch(bare, 'marco/baseline-projekt', join(templates, 'pwa'));
+
+      // Baseline für das Fixture-Template backen (bun install in der VM).
+      await buildTemplateBaseline({
+        templatesDir: templates,
+        templateDir: 'pwa',
+        image: 'oven/bun',
+      });
+      expect(await baselineExists('pwa')).toBe(true);
+
+      const provider = new MicrosandboxSandboxProvider({
+        macvibesHome: home,
+        bareRepoPath: bare,
+        image: 'oven/bun',
+        cpus: 1,
+        memoryMib: 512,
+      });
+      const workspaceDir = workspaceDirFor(home, 'baseline-projekt');
+      const handle = await provider.start({
+        projectId: 'baseline-projekt',
+        branchName: 'marco/baseline-projekt',
+        workspaceDir,
+        templateDir: 'pwa',
+        devCommand: 'bun server.ts',
+        previewPort: 5199,
+      });
+      activeHandle = handle;
+
+      const body = await waitForHttp(`http://localhost:${handle.previewHostPort}/`);
+      expect(body).toBe('hallo-preview');
+
+      // node_modules ist ein Symlink in den Snapshot — kein Install zur Laufzeit.
+      const stat = lstatSync(join(workspaceDir, 'node_modules'), { throwIfNoEntry: false });
+      expect(stat?.isSymbolicLink()).toBe(true);
+
+      await handle.stop();
+      activeHandle = null;
+    },
+    { timeout: 180_000 },
+  );
 });

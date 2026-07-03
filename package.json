@@ -21,7 +21,8 @@
     "db:generate": "cd apps/server && bun run db:generate",
     "db:migrate": "cd apps/server && bun run db:migrate",
     "ci": "bun run lint && bun run typecheck && bun run test:ci",
-    "prepare": "husky"
+    "prepare": "husky",
+    "baselines": "cd apps/server && bun run baselines"
   },
   "devDependencies": {
     "@eslint/js": "^9.15.0",

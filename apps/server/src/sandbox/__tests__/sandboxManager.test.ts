@@ -7,6 +7,7 @@ function ctx(projectId: string): SandboxContext {
     projectId,
     branchName: `marco/${projectId}`,
     workspaceDir: `/tmp/fake/${projectId}`,
+    templateDir: 'pwa',
     devCommand: 'bun run dev',
     previewPort: 5173,
   };
