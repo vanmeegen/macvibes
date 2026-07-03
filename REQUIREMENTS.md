@@ -37,12 +37,13 @@ Dienste außer der Claude API.
 | Thema             | Entscheidung                                                                 |
 | ----------------- | ---------------------------------------------------------------------------- |
 | Stack             | Wie `behandlungsverwaltung`: Bun-Monorepo (`apps/web`, `apps/server`, `packages/shared`), TS strict, `Bun.serve` + GraphQL Yoga + Pothos, `bun:sqlite` + Drizzle, React 18 + MobX + MUI + Vite, ESLint 9 + Prettier + Husky. |
-| Sandbox           | microsandbox (MicroVMs via libkrun, macOS Apple Silicon). Vorgebackenes Basis-Image mit Bun, git, Claude Code + Agent-Runner für schnellen Boot. |
+| Sandbox           | microsandbox (MicroVMs via libkrun, macOS Apple Silicon). Basis-Image mit Bun, git, Claude Code + Agent-Runner. |
+| Template-Baselines | Pro Template wird beim Build ein **Baseline-Snapshot** gebacken (Template + `bun install` + Vite-Cache). „Projekt anlegen" **forkt** die Baseline → VM bootet, Runner switcht auf den Projekt-Branch, `devCommand` startet. Ziel: **Preview der leeren App in wenigen Sekunden**. Baselines werden bei Template-Änderungen neu gebaut. |
 | Agent-Anbindung   | **Agent-SDK-Runner** in der VM: strukturierte Events (Text, Tool-Use, Turn-Ende) per WebSocket zum Server; Browser erhält sie via GraphQL Subscriptions (SSE) — GraphQL-only bleibt gewahrt. |
 | Autonomie         | Claude Code läuft mit **bypassPermissions** (volle Autonomie); die Isolation leistet die MicroVM. |
 | Credentials       | **Proxy über Host**: die VM erhält keine Claude-Credentials. `ANTHROPIC_BASE_URL` zeigt auf den macvibes-Server, der die Auth-Header injiziert. |
-| Git-Modell        | Lokales **Bare-Repo** `macvibes-apps.git` auf dem Host als primärer Remote (in die VM gemountet). **Ein Orphan-Branch pro Projekt**, erster Commit = Template-Inhalt. |
-| GitHub            | Asynchroner Mirror-Push nach GitHub per Cron/Scheduler im Server; das GitHub-Token bleibt auf dem Host und erreicht nie die VM. |
+| Git-Modell        | Lokales **Bare-Repo** `macvibes-apps.git` auf dem Host als primärer Remote (in die VM gemountet). **Ein Orphan-Branch pro Projekt**: `<username>/<slug>` (z. B. `marco/dashboard`), erster Commit = Template-Inhalt. Projektnamen sind pro User eindeutig. |
+| GitHub            | Mirror nach GitHub ist auf **Phase C verschoben** (v1: nur lokales Bare-Repo). |
 | Persistenz        | **Volume pro Projekt** (Workspace, `~/.claude`-Sessiondaten, `node_modules`), bei jedem VM-Start gemountet → Claude-Session überlebt VM-Stopps (`--resume`). Kein Verlass auf VM-Snapshots. |
 | Preview-Routing   | **Port pro Sandbox**: Preview-Port der VM wird auf einen freien Host-Port gemappt, das iframe zeigt direkt darauf (HMR-WebSocket funktioniert nativ). |
 | Preview-Start     | `templates.json` liefert pro Template `devCommand` und `previewPort`; wird beim Anlegen ins Projekt übernommen. |
@@ -63,18 +64,21 @@ Template auswählen, fertig.
 
 - [ ] Auf der Projektübersicht gibt es einen Plus-Button „Neues Projekt".
 - [ ] Der Dialog verlangt einen Projektnamen und die Auswahl genau eines Templates.
-- [ ] Aus dem Projektnamen wird automatisch ein gültiger Git-Branch-Name
-      abgeleitet (z. B. „Mein Dashboard!" → `mein-dashboard`); Kollisionen
-      werden durch Suffix aufgelöst (`mein-dashboard-2`).
+- [ ] Aus dem Projektnamen wird ein gültiger Branch-Name mit User-Prefix
+      abgeleitet (z. B. User `marco`, „Mein Dashboard!" → `marco/mein-dashboard`);
+      Slug-Kollisionen innerhalb eines Users werden durch Suffix aufgelöst
+      (`marco/mein-dashboard-2`).
+- [ ] Projektnamen müssen nur **pro User** eindeutig sein; verschiedene User
+      dürfen gleichnamige Projekte haben.
 - [ ] Beim Anlegen wird in `macvibes-apps` ein neuer **Orphan-Branch** erzeugt;
       der erste Commit enthält den Inhalt des gewählten Templates im Repo-Root.
 - [ ] Das Projekt erscheint sofort in der Projektübersicht (Name, Template,
       Erstellungsdatum, Status).
 - [ ] Das Projekt gehört dem angemeldeten User (Owner); Anlegen ist nur
       angemeldet möglich.
-- [ ] Ungültige Eingaben (leerer Name, doppelter Name) zeigen eine
-      verständliche Fehlermeldung; es entsteht kein halb-angelegtes Projekt
-      (kein Branch, kein DB-Eintrag, kein Volume).
+- [ ] Ungültige Eingaben (leerer Name, doppelter Name innerhalb der eigenen
+      Projekte) zeigen eine verständliche Fehlermeldung; es entsteht kein
+      halb-angelegtes Projekt (kein Branch, kein DB-Eintrag, kein Volume).
 
 ### R2 — Projektübersicht & Öffnen
 
@@ -156,6 +160,13 @@ Apps, die rein im Browser laufen. Wichtigstes Template.
 - [ ] Chat-Eingaben sind nur für den Owner möglich; andere User sehen die
       Chat-Page read-only (Verlauf + Preview, Eingabefeld ersetzt durch
       Hinweis). Die Sperre wird serverseitig durchgesetzt, nicht nur im UI.
+- [ ] Eingaben sind auch während eines laufenden Turns möglich: sie werden
+      sichtbar als „wartet…" eingereiht und dem Agenten als nächste Nachricht
+      übergeben. Ein **Stop-Button** bricht den laufenden Turn ab.
+- [ ] Transiente Claude-API-Fehler (Rate-Limit, 5xx, Netz) werden automatisch
+      mit Backoff wiederholt; erst nach endgültigem Scheitern erscheint eine
+      Fehler-Nachricht im Chat mit **Retry-Button**. Eingereihte Eingaben
+      gehen dabei nicht verloren.
 - [ ] Die Chat-Historie eines Projekts wird in SQLite persistiert und beim
       erneuten Öffnen vollständig wieder angezeigt.
 - [ ] Der Agent arbeitet im Projekt-Workspace (Checkout des Projekt-Branches
@@ -196,22 +207,25 @@ Jeder Agent-Turn wird automatisch gesichert.
 - [ ] Turns ohne Dateiänderungen erzeugen keinen leeren Commit.
 - [ ] Schlägt Commit/Push fehl, wird das im Chat sichtbar gemeldet —
       niemals stillschweigend verschluckt.
-- [ ] Ein Scheduler im macvibes-Server spiegelt das Bare-Repo periodisch
-      nach GitHub (`git push --mirror` o. ä.); das GitHub-Token liegt
-      ausschließlich auf dem Host. Mirror-Fehler werden geloggt und in der
-      UI angezeigt, blockieren aber das lokale Arbeiten nicht.
+- [ ] (GitHub-Mirror: verschoben auf Phase C, siehe Out of Scope.)
 
 ### R9 — Sandbox-Lebenszyklus
 
 **Akzeptanzkriterien**
 
 - [ ] Verlässt der Nutzer die Chat-Page/das Projekt, bleibt die Sandbox
-      **15 Minuten** aktiv (Grace-Period).
-- [ ] Nach 15 Minuten ohne erneutes Öffnen wird die MicroVM automatisch
-      gestoppt; zuvor wird ein eventuell offener Stand committet/gepusht.
+      **15 Minuten** aktiv (Grace-Period). Ein **laufender Turn wird dabei
+      nicht abgebrochen** — der Agent arbeitet zu Ende, Auto-Commit inklusive;
+      die Grace-Period beginnt erst nach Turn-Ende.
+- [ ] Nach Ablauf der Grace-Period ohne erneutes Öffnen wird die MicroVM
+      automatisch gestoppt; zuvor wird ein eventuell offener Stand
+      committet/gepusht.
 - [ ] Auch bei geöffneter Chat-Page: nach **30 Minuten ohne Agent-Aktivität**
       (kein laufender/neuer Turn) wird die VM gestoppt (vorher Auto-Commit);
       die Chat-Page zeigt „Sandbox pausiert" mit Ein-Klick-Neustart.
+- [ ] Der **erste** Start eines neuen Projekts forkt den Baseline-Snapshot
+      des Templates und initialisiert daraus das Projekt-Volume; die Preview
+      der (noch leeren) App ist wenige Sekunden nach dem Anlegen sichtbar.
 - [ ] Erneutes Öffnen des Projekts startet die Sandbox automatisch neu:
       Projekt-Volume wird gemountet, Agent-Runner setzt die Claude-Session
       fort (`--resume` auf Basis der persistierten Sessiondaten), Preview-
@@ -248,7 +262,8 @@ Einfacher lokaler Login; Projekte sind Usern zugeordnet.
       Projekt verändern (löschen, Chat-Eingabe, später Lifecycle-Aktionen),
       prüfen serverseitig die Ownership.
 - [ ] Fremde Projekte sind lesend zugänglich: Projektliste, Chat-Verlauf und
-      Preview dürfen betrachtet werden.
+      Preview dürfen betrachtet werden — **live**: Zuschauer sehen laufende
+      Agent-Turns und Preview-Updates in Echtzeit über dieselbe Subscription.
 
 ## 5. Nicht-funktionale Anforderungen
 
@@ -263,9 +278,10 @@ Einfacher lokaler Login; Projekte sind Usern zugeordnet.
   Host-Dateisystemzugriff, keine Credentials in der VM.
 - **Ressourcen:** 4 GB RAM / 2 vCPUs pro Sandbox, max 8 parallel
   (Host: M5 Pro, 18 Kerne, 48 GB) — alle Werte konfigurierbar.
-- **Schneller Einstieg:** Öffnen eines bestehenden Projekts bis zur
-  interaktionsbereiten Chat-Page in wenigen Sekunden (vorgebackenes
-  Basis-Image + persistentes Volume, kein erneutes `bun install`).
+- **Schneller Einstieg:** Neues Projekt → sichtbare Preview der leeren
+  Template-App in **wenigen Sekunden** (Baseline-Snapshot-Fork, kein
+  `bun install` zur Laufzeit). Öffnen eines bestehenden Projekts ebenso
+  schnell (persistentes Volume, Claude-Session-Resume).
 - **Mehrbenutzer, lokal:** mehrere lokale Benutzerkonten (Username + Passwort),
   keine externen Identity-Dienste. Kein Anspruch auf Härtung gegen böswillige
   Nutzer im selben Netz (kein HTTPS in v1).
@@ -275,16 +291,15 @@ Einfacher lokaler Login; Projekte sind Usern zugeordnet.
 
 ## 6. Offene Punkte
 
-- [ ] GitHub-Mirror: Ziel-Repo und Push-Intervall festlegen (Default-Vorschlag:
-      alle 10 Minuten, nur bei neuen Commits).
-- [ ] Basis-Image: exakter Inhalt und Build-Prozess (Bun-Version, Claude-Code-
-      Version, Update-Strategie).
-- [ ] Verhalten bei Claude-API-Ausfall/Rate-Limit im Chat (Anzeige, Retry).
+- [ ] Basis-Image & Template-Baselines: exakter Inhalt und Build-Prozess
+      (Bun-Version, Claude-Code-Version, Update-/Rebuild-Strategie).
 
 ## 7. Out of Scope (v1)
 
 - Deployment/Hosting der gebauten Apps.
 - Passwort-Reset, Profilverwaltung, Rollen/Admin, Ownership-Übertragung, HTTPS.
+- **GitHub-Mirror des Bare-Repos (→ Phase C).**
+- Echtes Mid-Turn-Steering (Unterbrechen mit neuer Anweisung statt Queue/Stop).
 - Diff-/Review-UI (Git-Historie reicht in v1).
 - Andere Agents als Claude Code; andere Sandbox-Backends als microsandbox.
 - Mobile UI der Plattform selbst.
