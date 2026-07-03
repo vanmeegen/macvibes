@@ -1,0 +1,116 @@
+:root {
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --primary-ink: #0b0b0b;
+  --secondary-ink: #52514e;
+  --gridline: #e1e0d9;
+  --border: rgba(11, 11, 11, 0.1);
+  --accent: #2a78d6;
+  --error: #d03b3b;
+  --error-bg: #fbeaea;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --primary-ink: #ffffff;
+    --secondary-ink: #c3c2b7;
+    --gridline: #2c2c2a;
+    --border: rgba(255, 255, 255, 0.1);
+    --accent: #3987e5;
+    --error: #e66767;
+    --error-bg: #3a1d1d;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
+  background: var(--page);
+  color: var(--primary-ink);
+  line-height: 1.5;
+}
+
+.app {
+  max-width: 36rem;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+.app h1 {
+  font-size: 1.5rem;
+  margin: 0 0 1rem;
+}
+
+.app__form {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.app__form input {
+  flex: 1;
+  font: inherit;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  color: var(--primary-ink);
+}
+
+.app__form button {
+  font: inherit;
+  font-weight: 600;
+  color: #ffffff;
+  background: var(--accent);
+  border: none;
+  border-radius: 0.5rem;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+}
+
+.app__form button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.app__error {
+  background: var(--error-bg);
+  color: var(--error);
+  border: 1px solid var(--error);
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+}
+
+.app__hint {
+  color: var(--secondary-ink);
+}
+
+.app__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.app__list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--gridline);
+}
+
+.app__list time {
+  color: var(--secondary-ink);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}

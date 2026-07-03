@@ -1,0 +1,189 @@
+import { runInAction } from 'mobx';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { gqlRequest } from '../../api/graphqlClient';
+import type { Project, Template } from '../../api/types';
+import { AuthStore } from '../AuthStore';
+import { PROJECT_FILTER_STORAGE_KEY, ProjectsStore } from '../ProjectsStore';
+
+vi.mock('../../api/graphqlClient', () => ({
+  gqlRequest: vi.fn(),
+}));
+
+const mockGql = vi.mocked(gqlRequest);
+
+function makeProject(overrides: Partial<Project> & { id: string }): Project {
+  return {
+    name: `Projekt ${overrides.id}`,
+    branchName: `vibe/${overrides.id}`,
+    templateDir: 'react-starter',
+    owner: { id: 'u1', username: 'alice' },
+    createdAt: '2026-07-01T10:00:00.000Z',
+    lastActivityAt: '2026-07-02T12:00:00.000Z',
+    sandboxStatus: 'stopped',
+    ...overrides,
+  };
+}
+
+const templates: Template[] = [
+  {
+    name: 'React Starter',
+    description: 'Vite + React Grundgerüst',
+    dir: 'react-starter',
+    devCommand: 'bun run dev',
+    previewPort: 3100,
+  },
+];
+
+function makeAuthStore(username: string | null): AuthStore {
+  const authStore = new AuthStore();
+  runInAction(() => {
+    authStore.currentUser = username === null ? null : { id: 'u1', username };
+    authStore.initialized = true;
+  });
+  return authStore;
+}
+
+describe('ProjectsStore', () => {
+  beforeEach(() => {
+    mockGql.mockReset();
+    window.localStorage.clear();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+
+  describe('Filter-Persistenz', () => {
+    it('verwendet "mine" als Default, wenn localStorage leer ist', () => {
+      const store = new ProjectsStore(makeAuthStore('alice'));
+      expect(store.filter).toBe('mine');
+    });
+
+    it('liest einen gespeicherten Filter aus localStorage', () => {
+      window.localStorage.setItem(PROJECT_FILTER_STORAGE_KEY, 'all');
+      const store = new ProjectsStore(makeAuthStore('alice'));
+      expect(store.filter).toBe('all');
+    });
+
+    it('ignoriert ungültige Werte in localStorage', () => {
+      window.localStorage.setItem(PROJECT_FILTER_STORAGE_KEY, 'quatsch');
+      const store = new ProjectsStore(makeAuthStore('alice'));
+      expect(store.filter).toBe('mine');
+    });
+
+    it('persistiert setFilter in localStorage', () => {
+      const store = new ProjectsStore(makeAuthStore('alice'));
+      store.setFilter('all');
+      expect(store.filter).toBe('all');
+      expect(window.localStorage.getItem(PROJECT_FILTER_STORAGE_KEY)).toBe('all');
+    });
+  });
+
+  describe('visibleProjects', () => {
+    it('zeigt bei Filter "mine" nur eigene Projekte', () => {
+      const store = new ProjectsStore(makeAuthStore('alice'));
+      runInAction(() => {
+        store.projects = [
+          makeProject({ id: 'p1', owner: { id: 'u1', username: 'alice' } }),
+          makeProject({ id: 'p2', owner: { id: 'u2', username: 'bob' } }),
+        ];
+      });
+
+      store.setFilter('mine');
+      expect(store.visibleProjects.map((p) => p.id)).toEqual(['p1']);
+    });
+
+    it('zeigt bei Filter "all" alle Projekte', () => {
+      const store = new ProjectsStore(makeAuthStore('alice'));
+      runInAction(() => {
+        store.projects = [
+          makeProject({ id: 'p1', owner: { id: 'u1', username: 'alice' } }),
+          makeProject({ id: 'p2', owner: { id: 'u2', username: 'bob' } }),
+        ];
+      });
+
+      store.setFilter('all');
+      expect(store.visibleProjects.map((p) => p.id)).toEqual(['p1', 'p2']);
+    });
+
+    it('zeigt bei Filter "mine" ohne angemeldeten Benutzer keine Projekte', () => {
+      const store = new ProjectsStore(makeAuthStore(null));
+      runInAction(() => {
+        store.projects = [makeProject({ id: 'p1' })];
+      });
+
+      store.setFilter('mine');
+      expect(store.visibleProjects).toEqual([]);
+    });
+  });
+
+  describe('load', () => {
+    it('lädt Projekte und Templates', async () => {
+      const projects = [makeProject({ id: 'p1' })];
+      mockGql.mockResolvedValueOnce({ projects, templates });
+      const store = new ProjectsStore(makeAuthStore('alice'));
+
+      await store.load();
+
+      expect(store.projects).toEqual(projects);
+      expect(store.templates).toEqual(templates);
+      expect(store.loading).toBe(false);
+      expect(store.error).toBeNull();
+    });
+
+    it('speichert die Fehlermeldung bei Misserfolg', async () => {
+      mockGql.mockRejectedValueOnce(new Error('Nicht angemeldet'));
+      const store = new ProjectsStore(makeAuthStore('alice'));
+
+      await store.load();
+
+      expect(store.projects).toEqual([]);
+      expect(store.error).toBe('Nicht angemeldet');
+      expect(store.loading).toBe(false);
+    });
+  });
+
+  describe('deleteProject', () => {
+    it('entfernt das Projekt aus der Liste bei Erfolg', async () => {
+      const store = new ProjectsStore(makeAuthStore('alice'));
+      runInAction(() => {
+        store.projects = [makeProject({ id: 'p1' }), makeProject({ id: 'p2' })];
+      });
+      mockGql.mockResolvedValueOnce({ deleteProject: true });
+
+      const ok = await store.deleteProject('p1');
+
+      expect(ok).toBe(true);
+      expect(store.projects.map((p) => p.id)).toEqual(['p2']);
+      expect(mockGql).toHaveBeenCalledWith(expect.stringContaining('deleteProject'), { id: 'p1' });
+    });
+
+    it('speichert die Fehlermeldung und behält die Liste bei Misserfolg', async () => {
+      const store = new ProjectsStore(makeAuthStore('alice'));
+      runInAction(() => {
+        store.projects = [makeProject({ id: 'p1' })];
+      });
+      mockGql.mockRejectedValueOnce(new Error('Nur der Besitzer darf löschen'));
+
+      const ok = await store.deleteProject('p1');
+
+      expect(ok).toBe(false);
+      expect(store.projects.map((p) => p.id)).toEqual(['p1']);
+      expect(store.error).toBe('Nur der Besitzer darf löschen');
+    });
+
+    it('confirmDelete löscht das per requestDelete vorgemerkte Projekt', async () => {
+      const store = new ProjectsStore(makeAuthStore('alice'));
+      runInAction(() => {
+        store.projects = [makeProject({ id: 'p1' })];
+      });
+      mockGql.mockResolvedValueOnce({ deleteProject: true });
+
+      store.requestDelete('p1');
+      expect(store.pendingDeleteProject?.id).toBe('p1');
+
+      const ok = await store.confirmDelete();
+
+      expect(ok).toBe(true);
+      expect(store.pendingDeleteId).toBeNull();
+      expect(store.projects).toEqual([]);
+    });
+  });
+});

@@ -1,0 +1,3 @@
+# Hoisted node_modules für Kompatibilität mit Vite/ESLint-Toolchain
+[install]
+linker = "hoisted"

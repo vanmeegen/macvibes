@@ -1,0 +1,8 @@
+node_modules
+dist
+coverage
+bun.lock
+apps/server/drizzle
+apps/server/data
+templates/*/node_modules
+templates/*/dist

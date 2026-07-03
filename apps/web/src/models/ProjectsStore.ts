@@ -1,0 +1,189 @@
+import { makeAutoObservable, runInAction } from 'mobx';
+import { gqlRequest } from '../api/graphqlClient';
+import type { Project, Template } from '../api/types';
+import type { AuthStore } from './AuthStore';
+
+export type ProjectFilter = 'mine' | 'all';
+
+export const PROJECT_FILTER_STORAGE_KEY = 'macvibes.projectFilter';
+
+const PROJECTS_AND_TEMPLATES_QUERY = /* GraphQL */ `
+  query ProjectsAndTemplates {
+    projects {
+      id
+      name
+      branchName
+      templateDir
+      owner {
+        id
+        username
+      }
+      createdAt
+      lastActivityAt
+      sandboxStatus
+    }
+    templates {
+      name
+      description
+      dir
+      devCommand
+      previewPort
+    }
+  }
+`;
+
+const DELETE_PROJECT_MUTATION = /* GraphQL */ `
+  mutation DeleteProject($id: ID!) {
+    deleteProject(id: $id)
+  }
+`;
+
+function toErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function readFilterFromStorage(): ProjectFilter {
+  try {
+    const stored = window.localStorage.getItem(PROJECT_FILTER_STORAGE_KEY);
+    if (stored === 'mine' || stored === 'all') {
+      return stored;
+    }
+  } catch (err) {
+    // localStorage kann z. B. im Private-Modus fehlen — Default verwenden.
+    console.error('Projektfilter konnte nicht aus localStorage gelesen werden', err);
+  }
+  return 'mine';
+}
+
+/** Formatiert einen Server-Zeitstempel (ISO-String oder Epoch-Millis) deutsch. */
+export function formatTimestamp(value: string): string {
+  const millis = /^\d+$/.test(value) ? Number(value) : Date.parse(value);
+  if (Number.isNaN(millis)) {
+    return value;
+  }
+  return new Date(millis).toLocaleString('de-DE', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+/** Deutsche Anzeige des Sandbox-Status. */
+export function sandboxStatusLabel(status: string): string {
+  switch (status) {
+    case 'running':
+      return 'läuft';
+    case 'starting':
+      return 'startet';
+    case 'stopped':
+      return 'gestoppt';
+    default:
+      return status;
+  }
+}
+
+/**
+ * Store für Projekte und Templates inkl. Sichtbarkeitsfilter
+ * ("Nur meine" / "Alle", persistiert in localStorage).
+ */
+export class ProjectsStore {
+  projects: Project[] = [];
+  templates: Template[] = [];
+  filter: ProjectFilter = readFilterFromStorage();
+  error: string | null = null;
+  loading = false;
+  /** Projekt-ID, für die gerade der Lösch-Bestätigungsdialog offen ist. */
+  pendingDeleteId: string | null = null;
+
+  constructor(private readonly authStore: AuthStore) {
+    makeAutoObservable(this, {}, { autoBind: true });
+  }
+
+  get visibleProjects(): Project[] {
+    if (this.filter === 'all') {
+      return this.projects;
+    }
+    const username = this.authStore.currentUser?.username;
+    return this.projects.filter((p) => p.owner.username === username);
+  }
+
+  get pendingDeleteProject(): Project | null {
+    if (this.pendingDeleteId === null) {
+      return null;
+    }
+    return this.projects.find((p) => p.id === this.pendingDeleteId) ?? null;
+  }
+
+  isOwn(project: Project): boolean {
+    return project.owner.username === this.authStore.currentUser?.username;
+  }
+
+  setFilter(filter: ProjectFilter): void {
+    this.filter = filter;
+    try {
+      window.localStorage.setItem(PROJECT_FILTER_STORAGE_KEY, filter);
+    } catch (err) {
+      console.error('Projektfilter konnte nicht in localStorage gespeichert werden', err);
+    }
+  }
+
+  requestDelete(id: string): void {
+    this.pendingDeleteId = id;
+  }
+
+  cancelDelete(): void {
+    this.pendingDeleteId = null;
+  }
+
+  async confirmDelete(): Promise<boolean> {
+    const id = this.pendingDeleteId;
+    this.pendingDeleteId = null;
+    if (id === null) {
+      return false;
+    }
+    return this.deleteProject(id);
+  }
+
+  /** Lädt Projekte und Templates in einem Request. */
+  async load(): Promise<void> {
+    this.loading = true;
+    this.error = null;
+    try {
+      const data = await gqlRequest<{ projects: Project[]; templates: Template[] }>(
+        PROJECTS_AND_TEMPLATES_QUERY,
+      );
+      runInAction(() => {
+        this.projects = data.projects;
+        this.templates = data.templates;
+      });
+    } catch (err) {
+      console.error('ProjectsStore.load fehlgeschlagen', err);
+      runInAction(() => {
+        this.error = toErrorMessage(err);
+      });
+    } finally {
+      runInAction(() => {
+        this.loading = false;
+      });
+    }
+  }
+
+  async deleteProject(id: string): Promise<boolean> {
+    this.error = null;
+    try {
+      await gqlRequest<{ deleteProject: boolean }>(DELETE_PROJECT_MUTATION, { id });
+      runInAction(() => {
+        this.projects = this.projects.filter((p) => p.id !== id);
+      });
+      return true;
+    } catch (err) {
+      console.error('ProjectsStore.deleteProject fehlgeschlagen', err);
+      runInAction(() => {
+        this.error = toErrorMessage(err);
+      });
+      return false;
+    }
+  }
+}

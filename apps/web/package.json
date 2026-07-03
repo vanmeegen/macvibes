@@ -1,0 +1,38 @@
+{
+  "name": "@macvibes/web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "typecheck": "tsc -b",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:ci": "vitest run"
+  },
+  "dependencies": {
+    "@macvibes/shared": "workspace:*",
+    "@emotion/react": "^11.13.5",
+    "@emotion/styled": "^11.13.5",
+    "@fontsource/open-sans": "^5.2.7",
+    "@mui/icons-material": "^5.16.7",
+    "@mui/material": "^5.16.7",
+    "mobx": "^6.13.5",
+    "mobx-react-lite": "^4.0.7",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^7.14.1"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.0.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "jsdom": "^25.0.1",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.6"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "templates": [
+    {
+      "name": "Client-PWA (React + MobX)",
+      "description": "Schlanke Progressive Web App ohne Server: React, MobX, Vite. Mit Excel-Upload per Drag & Drop (SheetJS) und Recharts für Dashboards — ideal für interaktive Auswertungen, die komplett im Browser laufen.",
+      "dir": "pwa",
+      "devCommand": "bun run dev",
+      "previewPort": 5173
+    },
+    {
+      "name": "Fullstack (Bun + GraphQL + React)",
+      "description": "Full-Stack-Anwendung im macvibes-Stack: Bun.serve mit GraphQL Yoga + Pothos, Drizzle ORM auf bun:sqlite, React + MobX Frontend mit Vite.",
+      "dir": "fullstack",
+      "devCommand": "bun run dev",
+      "previewPort": 5173
+    }
+  ]
+}
