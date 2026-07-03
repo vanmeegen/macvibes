@@ -8,3 +8,5 @@ apps/server/data/
 *.db
 *.db-wal
 *.db-shm
+apps/web/test-results/
+apps/web/playwright-report/
