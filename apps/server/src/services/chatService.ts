@@ -77,6 +77,15 @@ export class ChatService {
     void this.pump(input.projectId);
   }
 
+  /** Systemseitige Nachricht in Historie + Stream (z. B. Auto-Commit-Fehler, R8). */
+  async postMessage(
+    projectId: string,
+    role: ChatMessageRow['role'],
+    content: string,
+  ): Promise<void> {
+    await this.insertMessage(projectId, crypto.randomUUID(), role, content);
+  }
+
   /** Bricht den laufenden Turn ab und leert die Warteschlange (Stop-Button, R6). */
   stopTurn(projectId: string): void {
     const state = this.state(projectId);

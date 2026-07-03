@@ -22,6 +22,13 @@ export class FakeAgentRunner implements AgentRunner {
 
       yield { type: 'tool-use', name: 'FakeTool', detail: `arbeitet in ${options.workspaceDir}` };
 
+      // "SCHREIBE" → Datei im Workspace ändern (für Auto-Commit-Tests, R8).
+      if (options.prompt.includes('SCHREIBE')) {
+        const file = Bun.file(`${options.workspaceDir}/notizen.txt`);
+        const existing = (await file.exists()) ? await file.text() : '';
+        await Bun.write(file, `${existing}Notiz: ${options.prompt}\n`);
+      }
+
       for (const word of `Echo: ${options.prompt}`.split(' ')) {
         if (aborted) {
           yield { type: 'turn-aborted' };

@@ -5,20 +5,27 @@ import { createDb } from './db/client';
 import { runMigrations } from './db/migrate';
 import { readSessionToken } from './http/cookies';
 import { serveWebUi } from './http/staticFiles';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { ClaudeAgentRunner } from './agent/claudeRunner';
 import { FakeAgentRunner } from './agent/fakeRunner';
 import { ProcessSandboxProvider } from './sandbox/processProvider';
 import { SandboxManager } from './sandbox/sandboxManager';
 import { schema } from './schema';
 import type { GraphQLContext } from './schema/builder';
+import { autoCommit, createTurnEndAutoCommit } from './services/autoCommitService';
 import { resolveSession } from './services/authService';
 import { ChatService } from './services/chatService';
 import { ensureBareRepo } from './services/gitService';
+import { workspaceDirFor } from './services/workspaceService';
 
 const config = loadConfig();
 const db = createDb(config.dbPath);
 runMigrations(db);
 await ensureBareRepo(config.bareRepoPath);
+
+// chatService entsteht erst nach dem Manager — Hooks greifen über diese Referenz.
+let chatServiceRef: ChatService | null = null;
 
 const sandboxManager = new SandboxManager({
   provider: new ProcessSandboxProvider({
@@ -30,6 +37,21 @@ const sandboxManager = new SandboxManager({
   maxSandboxes: config.sandbox.maxSandboxes,
   onStatusChange: (projectId, status) => {
     console.log(`Sandbox ${projectId}: ${status}`);
+  },
+  // Offenen Stand vor jedem Stopp sichern (R9).
+  onBeforeStop: async (projectId) => {
+    const workspaceDir = workspaceDirFor(config.macvibesHome, projectId);
+    if (!existsSync(join(workspaceDir, '.git'))) return;
+    try {
+      await autoCommit(workspaceDir, 'Auto-Commit vor Sandbox-Stopp');
+    } catch (error) {
+      console.error(`Auto-Commit vor Stopp von ${projectId} fehlgeschlagen:`, error);
+      await chatServiceRef?.postMessage(
+        projectId,
+        'error',
+        `Auto-Commit vor Sandbox-Stopp fehlgeschlagen: ${String(error)}`,
+      );
+    }
   },
 });
 
@@ -43,8 +65,16 @@ if (config.agent.backend === 'fake') {
 
 const chatService = new ChatService(db, agentRunner, {
   onAgentActivity: (projectId) => sandboxManager.noteAgentActivity(projectId),
-  // onTurnEnd: Auto-Commit folgt in B4 (R8).
+  // Auto-Commit nach jedem abgeschlossenen Turn (R8).
+  onTurnEnd: (projectId, userPrompt) => {
+    if (chatServiceRef === null) return Promise.resolve();
+    return createTurnEndAutoCommit({
+      macvibesHome: config.macvibesHome,
+      chatService: chatServiceRef,
+    })(projectId, userPrompt);
+  },
 });
+chatServiceRef = chatService;
 
 const yoga = createYoga<Record<string, never>, GraphQLContext>({
   schema,
