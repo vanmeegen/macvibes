@@ -4,7 +4,9 @@ import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig({
   server: {
-    port: 5173,
+    // macvibes-Kontrakt: die Plattform setzt PORT für die Preview (Fallback 5173).
+    port: Number(process.env.PORT ?? 5173),
+    strictPort: true,
     host: true,
   },
   plugins: [

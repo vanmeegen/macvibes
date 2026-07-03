@@ -7,6 +7,7 @@ import {
   chatStore,
   createProjectModel,
   loginModel,
+  previewModel,
   projectsStore,
 } from './models/stores';
 import { ChatPage } from './pages/ChatPage';
@@ -56,7 +57,11 @@ export const App = observer(function App(): JSX.Element {
         path="/projects/:id"
         element={
           loggedIn ? (
-            <ChatPage projectsStore={projectsStore} chatStore={chatStore} />
+            <ChatPage
+              projectsStore={projectsStore}
+              chatStore={chatStore}
+              previewModel={previewModel}
+            />
           ) : (
             <Navigate to="/login" replace />
           )

@@ -25,6 +25,7 @@ const projects: Project[] = [
     createdAt: '2026-07-01T10:00:00.000Z',
     lastActivityAt: '2026-07-02T12:00:00.000Z',
     sandboxStatus: 'stopped',
+    previewHostPort: null,
   },
   {
     id: 'p2',
@@ -35,6 +36,7 @@ const projects: Project[] = [
     createdAt: '2026-07-01T10:00:00.000Z',
     lastActivityAt: '2026-07-02T12:00:00.000Z',
     sandboxStatus: 'stopped',
+    previewHostPort: null,
   },
 ];
 

@@ -80,10 +80,10 @@ export class SandboxManager {
     return this.entries.get(projectId)?.status ?? 'stopped';
   }
 
-  previewUrl(projectId: string): string | null {
+  previewHostPort(projectId: string): number | null {
     const entry = this.entries.get(projectId);
     if (!entry || entry.status !== 'running') return null;
-    return entry.handle?.previewUrl ?? null;
+    return entry.handle?.previewHostPort ?? null;
   }
 
   async stop(projectId: string): Promise<void> {

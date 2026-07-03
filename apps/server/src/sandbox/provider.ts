@@ -11,8 +11,11 @@ export interface SandboxContext {
 }
 
 export interface SandboxHandle {
-  /** URL, unter der die Preview vom Host aus erreichbar ist (null: keine Preview). */
-  previewUrl: string | null;
+  /**
+   * Host-Port, auf dem die Preview erreichbar ist (null: keine Preview).
+   * Die URL baut der Client mit seinem eigenen Hostnamen (LAN, R7).
+   */
+  previewHostPort: number | null;
   stop(): Promise<void>;
 }
 

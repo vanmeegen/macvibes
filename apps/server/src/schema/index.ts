@@ -49,9 +49,9 @@ ProjectRef.implement({
     sandboxStatus: t.string({
       resolve: (project, _args, ctx) => ctx.sandboxManager.status(project.id),
     }),
-    previewUrl: t.string({
+    previewHostPort: t.int({
       nullable: true,
-      resolve: (project, _args, ctx) => ctx.sandboxManager.previewUrl(project.id),
+      resolve: (project, _args, ctx) => ctx.sandboxManager.previewHostPort(project.id),
     }),
   }),
 });

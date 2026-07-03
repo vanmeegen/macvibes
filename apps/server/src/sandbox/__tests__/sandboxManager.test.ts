@@ -19,7 +19,7 @@ class FakeProvider implements SandboxProvider {
   async start(context: SandboxContext): Promise<SandboxHandle> {
     this.startCalls.push(context.projectId);
     return {
-      previewUrl: `http://localhost:9999/${context.projectId}`,
+      previewHostPort: 9999,
       stop: async () => {
         this.stopCalls.push(context.projectId);
       },
@@ -76,11 +76,11 @@ describe('enter', () => {
     expect(manager.status('unbekannt')).toBe('stopped');
   });
 
-  test('liefert die previewUrl der laufenden Sandbox', async () => {
+  test('liefert den Preview-Host-Port der laufenden Sandbox', async () => {
     const { manager } = setup();
     await manager.enter(ctx('p1'));
-    expect(manager.previewUrl('p1')).toBe('http://localhost:9999/p1');
-    expect(manager.previewUrl('anderes')).toBeNull();
+    expect(manager.previewHostPort('p1')).toBe(9999);
+    expect(manager.previewHostPort('anderes')).toBeNull();
   });
 });
 

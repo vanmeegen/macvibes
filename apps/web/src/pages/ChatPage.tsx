@@ -17,11 +17,13 @@ import { useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import type { ChatMessage } from '../api/types';
 import type { ChatStore } from '../models/ChatStore';
+import type { PreviewModel } from '../models/PreviewModel';
 import { sandboxStatusLabel, type ProjectsStore } from '../models/ProjectsStore';
 
 export interface ChatPageProps {
   projectsStore: ProjectsStore;
   chatStore: ChatStore;
+  previewModel: PreviewModel;
 }
 
 const MessageBubble = observer(function MessageBubble({
@@ -85,6 +87,7 @@ const MessageBubble = observer(function MessageBubble({
 export const ChatPage = observer(function ChatPage({
   projectsStore,
   chatStore,
+  previewModel,
 }: ChatPageProps): JSX.Element {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -121,6 +124,17 @@ export const ChatPage = observer(function ChatPage({
     void chatStore.connect(projectId);
     return () => chatStore.disconnect();
   }, [chatStore, projectId]);
+
+  // Live-Preview: sobald die Sandbox läuft und ein Port gemappt ist (R7).
+  const previewHostPort = project?.sandboxStatus === 'running' ? project.previewHostPort : null;
+  useEffect(() => {
+    if (previewHostPort !== null && previewHostPort !== undefined) {
+      previewModel.start(window.location.hostname, previewHostPort);
+    } else {
+      previewModel.reset();
+    }
+    return () => previewModel.reset();
+  }, [previewModel, previewHostPort]);
 
   // Immer ans Ende scrollen, wenn neue Events eintreffen.
   const messageCount = chatStore.messages.length;
@@ -259,14 +273,41 @@ export const ChatPage = observer(function ChatPage({
           sx={{
             flex: 1,
             display: { xs: 'none', md: 'flex' },
-            alignItems: 'center',
-            justifyContent: 'center',
+            flexDirection: 'column',
             minWidth: 0,
+            overflow: 'hidden',
           }}
         >
-          <Typography variant="body1" color="text.secondary">
-            Preview folgt in Phase B3
-          </Typography>
+          {previewModel.status === 'ready' && previewModel.url !== null ? (
+            <Box
+              component="iframe"
+              src={previewModel.url}
+              title="Live-Preview"
+              data-testselector="chat-preview"
+              sx={{ border: 0, width: '100%', height: '100%' }}
+            />
+          ) : (
+            <Box
+              sx={{
+                flexGrow: 1,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                p: 3,
+              }}
+              data-testselector="chat-preview-unavailable"
+              data-status={previewModel.status}
+            >
+              <Stack spacing={2} alignItems="center">
+                {previewModel.status === 'waiting' && <LinearProgress sx={{ width: 160 }} />}
+                <Typography variant="body1" color="text.secondary">
+                  {previewModel.status === 'waiting'
+                    ? 'Preview startet …'
+                    : 'Preview nicht verfügbar — Sandbox gestoppt'}
+                </Typography>
+              </Stack>
+            </Box>
+          )}
         </Paper>
       </Stack>
     </Box>

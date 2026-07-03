@@ -31,6 +31,11 @@ export async function createTemplatesFixture(): Promise<string> {
   await mkdir(join(dir, 'pwa'));
   await writeFile(join(dir, 'pwa', 'index.html'), '<!doctype html><title>PWA</title>');
   await writeFile(join(dir, 'pwa', 'package.json'), JSON.stringify({ name: 'app' }));
+  // Mini-Dev-Server für Preview-Tests: respektiert die PORT-Env (Template-Kontrakt).
+  await writeFile(
+    join(dir, 'pwa', 'server.ts'),
+    "Bun.serve({ port: Number(process.env.PORT ?? 5199), fetch: () => new Response('hallo-preview') });\n",
+  );
   await writeFile(
     join(dir, 'templates.json'),
     JSON.stringify({
