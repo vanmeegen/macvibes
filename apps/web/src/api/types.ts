@@ -25,6 +25,7 @@ export interface Project {
   lastActivityAt: string;
   sandboxStatus: string;
   previewHostPort: number | null;
+  previewStatus: string;
 }
 
 export type ChatRole = 'user' | 'assistant' | 'tool' | 'system' | 'error';

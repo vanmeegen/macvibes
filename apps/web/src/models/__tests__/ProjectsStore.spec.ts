@@ -21,6 +21,7 @@ function makeProject(overrides: Partial<Project> & { id: string }): Project {
     lastActivityAt: '2026-07-02T12:00:00.000Z',
     sandboxStatus: 'stopped',
     previewHostPort: null,
+    previewStatus: 'stopped',
     ...overrides,
   };
 }

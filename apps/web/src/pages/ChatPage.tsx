@@ -17,13 +17,12 @@ import { useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import type { ChatMessage } from '../api/types';
 import type { ChatStore } from '../models/ChatStore';
-import type { PreviewModel } from '../models/PreviewModel';
+import { derivePreviewView } from '../models/PreviewModel';
 import { sandboxStatusLabel, type ProjectsStore } from '../models/ProjectsStore';
 
 export interface ChatPageProps {
   projectsStore: ProjectsStore;
   chatStore: ChatStore;
-  previewModel: PreviewModel;
 }
 
 const MessageBubble = observer(function MessageBubble({
@@ -87,7 +86,6 @@ const MessageBubble = observer(function MessageBubble({
 export const ChatPage = observer(function ChatPage({
   projectsStore,
   chatStore,
-  previewModel,
 }: ChatPageProps): JSX.Element {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -125,16 +123,14 @@ export const ChatPage = observer(function ChatPage({
     return () => chatStore.disconnect();
   }, [chatStore, projectId]);
 
-  // Live-Preview: sobald die Sandbox läuft und ein Port gemappt ist (R7).
+  // Live-Preview: aus dem autoritativen Watchdog-Status des Backends abgeleitet
+  // (starting/ready/restarting/failed) — kein eigenes Polling mehr (R7).
   const previewHostPort = project?.sandboxStatus === 'running' ? project.previewHostPort : null;
-  useEffect(() => {
-    if (previewHostPort !== null && previewHostPort !== undefined) {
-      previewModel.start(window.location.hostname, previewHostPort);
-    } else {
-      previewModel.reset();
-    }
-    return () => previewModel.reset();
-  }, [previewModel, previewHostPort]);
+  const preview = derivePreviewView(
+    project?.previewStatus ?? 'stopped',
+    typeof window !== 'undefined' ? window.location.hostname : 'localhost',
+    previewHostPort ?? null,
+  );
 
   // Immer ans Ende scrollen, wenn neue Events eintreffen.
   const messageCount = chatStore.messages.length;
@@ -278,10 +274,10 @@ export const ChatPage = observer(function ChatPage({
             overflow: 'hidden',
           }}
         >
-          {previewModel.status === 'ready' && previewModel.url !== null ? (
+          {preview.showIframe && preview.url !== null ? (
             <Box
               component="iframe"
-              src={previewModel.url}
+              src={preview.url}
               title="Live-Preview"
               data-testselector="chat-preview"
               sx={{ border: 0, width: '100%', height: '100%' }}
@@ -296,14 +292,12 @@ export const ChatPage = observer(function ChatPage({
                 p: 3,
               }}
               data-testselector="chat-preview-unavailable"
-              data-status={previewModel.status}
+              data-status={project?.previewStatus ?? 'stopped'}
             >
               <Stack spacing={2} alignItems="center">
-                {previewModel.status === 'waiting' && <LinearProgress sx={{ width: 160 }} />}
+                {preview.spinner && <LinearProgress sx={{ width: 160 }} />}
                 <Typography variant="body1" color="text.secondary">
-                  {previewModel.status === 'waiting'
-                    ? 'Preview startet …'
-                    : 'Preview nicht verfügbar — Sandbox gestoppt'}
+                  {preview.message}
                 </Typography>
               </Stack>
             </Box>

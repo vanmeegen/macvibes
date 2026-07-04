@@ -1,8 +1,10 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { ensureWorkspace } from '../services/workspaceService';
+import { httpProbe } from './httpProbe';
+import { PreviewSupervisor, type SupervisedProcess } from './previewSupervisor';
 import { findFreePort } from './portService';
-import type { SandboxContext, SandboxHandle, SandboxProvider } from './provider';
+import type { PreviewStatus, SandboxContext, SandboxHandle, SandboxProvider } from './provider';
 
 export interface ProcessProviderConfig {
   macvibesHome: string;
@@ -16,8 +18,8 @@ export interface ProcessProviderConfig {
  *
  * Preview-Kontrakt (R7, template-agnostisch): das devCommand aus
  * templates.json wird mit gesetzter PORT-Env gestartet; die Plattform kennt
- * keinerlei Template-Interna. Fehlen die Dependencies im Volume, läuft
- * vorher `bun install` (in der MicroVM übernimmt das der Baseline-Snapshot).
+ * keinerlei Template-Interna. Der PreviewSupervisor startet den Dev-Server
+ * bei Absturz neu — gleiches Verhalten wie in der MicroVM.
  */
 export class ProcessSandboxProvider implements SandboxProvider {
   constructor(private readonly config: ProcessProviderConfig) {}
@@ -34,31 +36,37 @@ export class ProcessSandboxProvider implements SandboxProvider {
     const needsInstall =
       existsSync(join(workspaceDir, 'package.json')) &&
       !existsSync(join(workspaceDir, 'node_modules'));
-    const command = needsInstall
-      ? `bun install --silent && exec ${context.devCommand}`
-      : `exec ${context.devCommand}`;
+    // Install einmalig vor dem ersten Start (die MicroVM übernimmt das via Baseline).
+    if (needsInstall) {
+      await Bun.spawn(['bun', 'install', '--silent'], { cwd: workspaceDir }).exited;
+    }
 
-    const proc = Bun.spawn(['sh', '-c', command], {
-      cwd: workspaceDir,
-      env: {
-        ...process.env,
-        PORT: String(port),
-      },
-      stdout: 'ignore',
-      stderr: 'inherit',
+    const spawn = (): SupervisedProcess => {
+      const proc = Bun.spawn(['sh', '-c', `exec ${context.devCommand}`], {
+        cwd: workspaceDir,
+        env: { ...process.env, PORT: String(port) },
+        stdout: 'ignore',
+        stderr: 'inherit',
+      });
+      return {
+        kill: () => {
+          if (proc.exitCode === null) proc.kill('SIGTERM');
+        },
+        exited: proc.exited.then((code) => code ?? 0),
+      };
+    };
+
+    const supervisor = new PreviewSupervisor({
+      spawn,
+      probe: () => httpProbe(`http://localhost:${port}/`),
     });
+    supervisor.start();
 
     return {
       previewHostPort: port,
+      previewStatus: (): PreviewStatus => supervisor.getStatus(),
       stop: async () => {
-        if (proc.exitCode === null) {
-          proc.kill('SIGTERM');
-          const exited = await Promise.race([proc.exited, Bun.sleep(3000).then(() => null)]);
-          if (exited === null) {
-            proc.kill('SIGKILL');
-            await proc.exited;
-          }
-        }
+        await supervisor.stop();
       },
     };
   }

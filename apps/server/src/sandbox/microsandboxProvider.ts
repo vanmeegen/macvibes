@@ -1,8 +1,10 @@
 import { ensureWorkspace } from '../services/workspaceService';
 import { baselineExists, baselineSnapshotName } from './baselineService';
-import { runMsb } from './msb';
+import { httpProbe } from './httpProbe';
+import { msbExec, runMsb } from './msb';
+import { PreviewSupervisor } from './previewSupervisor';
 import { findFreePort } from './portService';
-import type { SandboxContext, SandboxHandle, SandboxProvider } from './provider';
+import type { PreviewStatus, SandboxContext, SandboxHandle, SandboxProvider } from './provider';
 
 export { MicrosandboxError, msbAvailable } from './msb';
 
@@ -20,13 +22,20 @@ export function microsandboxSandboxName(projectId: string): string {
   return `macvibes-${projectId}`;
 }
 
+/** Arbeitsverzeichnis in der VM — Mountpunkt des Projekt-Workspace. */
+const GUEST_WORKDIR = '/work';
+
 /**
- * Echter Sandbox-Provider auf microsandbox-MicroVMs (libkrun):
- * Projekt-Volume wird in die VM gemountet, das devCommand läuft mit
- * PORT-Env in der VM, der Preview-Port wird auf einen freien Host-Port
- * gemappt (LAN-tauglich, R7). Isolation: kein Host-Zugriff außer dem
- * gemounteten Workspace (R9/NFR). Fehlende node_modules installiert die
- * VM vor dem Start selbst (entfällt mit den Baseline-Snapshots, B5b).
+ * Echter Sandbox-Provider auf microsandbox-MicroVMs (libkrun).
+ *
+ * Architektur (Watchdog-fähig): Die VM läuft als **stabiler Halter**
+ * (`sleep infinity` als PID 1) und überlebt so einen Dev-Server-Crash — der
+ * Agent (Claude Code, per `msb exec`) verliert seine Umgebung nicht. Der
+ * Preview-/Dev-Server wird von einem **host-seitigen `PreviewSupervisor`**
+ * per `msb exec` gestartet, überwacht und bei Ausfall neu gestartet.
+ *
+ * Schnittstelle zum Template (template-agnostisch): ausschließlich
+ * `devCommand` + `previewPort` + PORT-Env aus templates.json.
  */
 export class MicrosandboxSandboxProvider implements SandboxProvider {
   constructor(private readonly config: MicrosandboxProviderConfig) {}
@@ -46,12 +55,13 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     // und wird in den gemounteten Workspace gelinkt — kein Install zur Laufzeit.
     const useBaseline = await baselineExists(context.templateDir);
     const bootstrap = useBaseline
-      ? `[ -e node_modules ] || ln -s /baseline/work/node_modules node_modules; exec ${context.devCommand}`
-      : `if [ -f package.json ] && [ ! -d node_modules ]; then bun install --silent; fi; exec ${context.devCommand}`;
+      ? `[ -e node_modules ] || ln -s /baseline/work/node_modules node_modules`
+      : `if [ -f package.json ] && [ ! -d node_modules ]; then bun install --silent; fi`;
     const source = useBaseline
       ? ['--snapshot', baselineSnapshotName(context.templateDir)]
       : [this.config.image];
 
+    // VM als stabiler Halter starten (Dev-Server läuft NICHT als PID 1).
     await runMsb([
       'run',
       '-d',
@@ -61,9 +71,9 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       '--name',
       name,
       '-v',
-      `${workspaceDir}:/work`,
+      `${workspaceDir}:${GUEST_WORKDIR}`,
       '-w',
-      '/work',
+      GUEST_WORKDIR,
       // 0.0.0.0: Preview ist im LAN erreichbar (R7/NFR).
       '-p',
       `0.0.0.0:${hostPort}:${context.previewPort}`,
@@ -76,22 +86,35 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       String(this.config.cpus),
       '-m',
       `${this.config.memoryMib}M`,
-      '-e',
-      `PORT=${context.previewPort}`,
       ...source,
       '--',
       'sh',
       '-c',
-      bootstrap,
+      `${bootstrap}; exec sleep infinity`,
     ]);
+
+    // Watchdog: Dev-Server per `msb exec` starten + überwachen (host-seitig).
+    const supervisor = new PreviewSupervisor({
+      spawn: () =>
+        msbExec(
+          name,
+          ['sh', '-c', context.devCommand],
+          { PORT: String(context.previewPort) },
+          GUEST_WORKDIR,
+        ),
+      probe: () => httpProbe(`http://localhost:${hostPort}/`),
+      onStatusChange: (status) => console.log(`Preview ${context.projectId}: ${status}`),
+    });
+    supervisor.start();
 
     return {
       previewHostPort: hostPort,
+      previewStatus: (): PreviewStatus => supervisor.getStatus(),
       stop: async () => {
+        await supervisor.stop();
         try {
           await runMsb(['stop', name]);
         } catch (error) {
-          // Bereits gestoppt ist in Ordnung — alles andere weiterreichen.
           console.error(`msb stop ${name}:`, error);
         }
         try {

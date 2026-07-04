@@ -22,6 +22,7 @@ const PROJECTS_AND_TEMPLATES_QUERY = /* GraphQL */ `
       lastActivityAt
       sandboxStatus
       previewHostPort
+      previewStatus
     }
     templates {
       name

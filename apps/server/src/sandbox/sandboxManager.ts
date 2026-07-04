@@ -1,4 +1,10 @@
-import type { SandboxContext, SandboxHandle, SandboxProvider, SandboxStatus } from './provider';
+import type {
+  PreviewStatus,
+  SandboxContext,
+  SandboxHandle,
+  SandboxProvider,
+  SandboxStatus,
+} from './provider';
 
 export interface SandboxManagerOptions {
   provider: SandboxProvider;
@@ -84,6 +90,13 @@ export class SandboxManager {
     const entry = this.entries.get(projectId);
     if (!entry || entry.status !== 'running') return null;
     return entry.handle?.previewHostPort ?? null;
+  }
+
+  /** Zustand des Dev-Servers laut Watchdog (für das UI-Overlay, R7). */
+  previewStatus(projectId: string): PreviewStatus {
+    const entry = this.entries.get(projectId);
+    if (!entry || entry.status !== 'running' || !entry.handle) return 'stopped';
+    return entry.handle.previewStatus();
   }
 
   async stop(projectId: string): Promise<void> {

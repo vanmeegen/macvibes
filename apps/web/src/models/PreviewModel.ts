@@ -1,61 +1,52 @@
-import { makeAutoObservable } from 'mobx';
+/** Zustände, die der Watchdog (PreviewSupervisor) im Backend meldet. */
+export type PreviewStatus = 'starting' | 'ready' | 'restarting' | 'failed' | 'stopped';
 
-export type PreviewStatus = 'unavailable' | 'waiting' | 'ready';
+export interface PreviewView {
+  /** iframe anzeigen? Nur wenn der Dev-Server läuft und ein Port da ist. */
+  showIframe: boolean;
+  url: string | null;
+  /** Fortschrittsbalken im Overlay (Start-/Neustartphase). */
+  spinner: boolean;
+  /** Nutzertext im Overlay. */
+  message: string;
+}
 
 /**
- * Zustand der Live-Preview (R7): pollt den Dev-Server der Sandbox, bis er
- * erreichbar ist, und stellt erst dann die iframe-URL bereit — statt eines
- * Browser-Fehlerbildes gibt es einen klaren „startet…"-Zustand.
+ * Reine Ableitung der Preview-Darstellung aus dem autoritativen Backend-Status
+ * (R7). Kein eigenes Polling mehr — der host-seitige Watchdog ist die Wahrheit;
+ * das UI zeigt „Startet…"/„Wird neu gestartet…"/Fehler entsprechend an.
  */
-export class PreviewModel {
-  status: PreviewStatus = 'unavailable';
-  url: string | null = null;
-  /** Poll-Handle — bewusst nicht observable. */
-  pollTimer: ReturnType<typeof setInterval> | null = null;
-
-  constructor(private readonly pollIntervalMs: number = 1000) {
-    makeAutoObservable(this, { pollTimer: false }, { autoBind: true });
+export function derivePreviewView(
+  status: PreviewStatus | string,
+  host: string,
+  hostPort: number | null,
+): PreviewView {
+  if (status === 'ready' && hostPort !== null) {
+    return { showIframe: true, url: `http://${host}:${hostPort}/`, spinner: false, message: '' };
   }
-
-  start(host: string, port: number): void {
-    const url = `http://${host}:${port}/`;
-    if (this.url === url && this.status !== 'unavailable') return;
-
-    this.stopPolling();
-    this.url = url;
-    this.status = 'waiting';
-    void this.check(url);
-    this.pollTimer = setInterval(() => {
-      void this.check(url);
-    }, this.pollIntervalMs);
-  }
-
-  reset(): void {
-    this.stopPolling();
-    this.status = 'unavailable';
-    this.url = null;
-  }
-
-  private async check(url: string): Promise<void> {
-    try {
-      // no-cors: es zählt nur die Erreichbarkeit, nicht die Antwort.
-      await fetch(url, { mode: 'no-cors' });
-      if (this.url !== url) return;
-      this.setReady();
-    } catch {
-      // Dev-Server (noch) nicht erreichbar — weiter pollen.
-    }
-  }
-
-  private setReady(): void {
-    this.status = 'ready';
-    this.stopPolling();
-  }
-
-  private stopPolling(): void {
-    if (this.pollTimer !== null) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = null;
-    }
+  switch (status) {
+    case 'starting':
+      return { showIframe: false, url: null, spinner: true, message: 'Preview startet …' };
+    case 'restarting':
+      return {
+        showIframe: false,
+        url: null,
+        spinner: true,
+        message: 'Preview wird neu gestartet …',
+      };
+    case 'failed':
+      return {
+        showIframe: false,
+        url: null,
+        spinner: false,
+        message: 'Preview konnte nicht gestartet werden — bitte das Projekt neu öffnen.',
+      };
+    default:
+      return {
+        showIframe: false,
+        url: null,
+        spinner: false,
+        message: 'Preview nicht verfügbar — Sandbox gestoppt.',
+      };
   }
 }

@@ -25,6 +25,31 @@ export async function runMsb(args: string[]): Promise<string> {
   return stdout;
 }
 
+export interface ExecHandle {
+  kill(): void;
+  readonly exited: Promise<number>;
+}
+
+/**
+ * Startet einen Befehl per `msb exec` in einer laufenden Sandbox (detached).
+ * Für langlebige Prozesse wie den Dev-Server; stdout/stderr landen im
+ * Server-Log. Rückgabe reicht für den PreviewSupervisor (kill + exited).
+ */
+export function msbExec(
+  sandboxName: string,
+  args: string[],
+  env: Record<string, string>,
+  cwd: string,
+): ExecHandle {
+  const envArgs = Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
+  const proc = Bun.spawn(['msb', 'exec', '-w', cwd, ...envArgs, sandboxName, '--', ...args], {
+    stdin: 'ignore',
+    stdout: 'ignore',
+    stderr: 'inherit',
+  });
+  return { kill: () => proc.kill(), exited: proc.exited };
+}
+
 /** Ist die msb-CLI auf dem Host verfügbar? */
 export async function msbAvailable(): Promise<boolean> {
   try {

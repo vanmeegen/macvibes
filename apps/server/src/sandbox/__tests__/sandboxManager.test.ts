@@ -21,6 +21,7 @@ class FakeProvider implements SandboxProvider {
     this.startCalls.push(context.projectId);
     return {
       previewHostPort: 9999,
+      previewStatus: () => 'ready' as const,
       stop: async () => {
         this.stopCalls.push(context.projectId);
       },

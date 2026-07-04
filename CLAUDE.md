@@ -15,7 +15,21 @@ Bun-Workspaces-Monorepo:
   - `sandbox/` — `SandboxManager` (Lifecycle: Grace/Idle/LRU), `SandboxProvider`
     (Interface) mit `ProcessSandboxProvider` (Host, für Dev/Tests) und
     `MicrosandboxSandboxProvider` (echte MicroVMs). `baselineService` friert
-    Template-Snapshots ein, `portService` mappt Preview-Ports.
+    Template-Snapshots ein, `portService` mappt Preview-Ports,
+    `previewSupervisor` ist der host-seitige Watchdog für den Dev-Server.
+
+  **Sandbox-/Preview-Schnittstelle (sauber gekapselt):** Die MicroVM läuft als
+  **stabiler Halter** (`sleep infinity` als PID 1) und überlebt einen
+  Dev-Server-Crash — der Agent (per `msb exec`) verliert seine Umgebung nicht.
+  Der Preview-/Dev-Server wird vom host-seitigen `PreviewSupervisor` per
+  `msb exec` gestartet und überwacht: geduldige **Startphase** (Status
+  `starting`, kein voreiliger Neustart, während der Server hochfährt),
+  **Laufphase** mit Health-Check und Crash-Recovery (Neustart mit Backoff),
+  **Crash-Loop-Schutz** (nach `maxRestarts` → `failed`). Der einzige Vertrag
+  zum Template ist `devCommand` + `previewPort` + PORT-Env aus `templates.json`
+  — kein template-spezifischer Code in der Plattform. Der Preview-Status
+  (`starting`/`ready`/`restarting`/`failed`/`stopped`) fließt über GraphQL
+  (`Project.previewStatus`) ins UI-Overlay.
   - `agent/` — `AgentRunner`-Interface: `ClaudeAgentRunner` (Host),
     `VmAgentRunner` (`msb exec` in der VM), `FakeAgentRunner` (Tests).
     `claudeStreamJson` parst die CLI-Ausgabe.
@@ -23,6 +37,7 @@ Bun-Workspaces-Monorepo:
     `projectsService`, `gitService` (Orphan-Branch pro Projekt im Bare-Repo),
     `workspaceService`, `authService`, `autoCommitService`, `mirrorService`.
   - `http/anthropicProxy` — Credential-Proxy: die VM sieht nie einen Token.
+
 - **`apps/web`** — React 18 + MobX + MUI, Vite. Presentation-Model-Pattern.
 - **`packages/shared`** — Zod-Schemas, Branch-Slugify (Zod v4).
 - **`templates/`** — Projekt-Vorlagen (NICHT Teil der Workspaces), dynamisch
