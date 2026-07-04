@@ -28,7 +28,7 @@ export interface Project {
   previewStatus: string;
 }
 
-export type ChatRole = 'user' | 'assistant' | 'tool' | 'system' | 'error';
+export type ChatRole = 'user' | 'assistant' | 'thinking' | 'tool' | 'system' | 'error';
 
 export interface ChatMessage {
   id: string;

@@ -15,7 +15,9 @@ export const chatMessages = sqliteTable(
       .references(() => projects.id, { onDelete: 'cascade' }),
     /** Gruppiert alle Nachrichten eines Agent-Turns. */
     turnId: text('turn_id').notNull(),
-    role: text('role', { enum: ['user', 'assistant', 'tool', 'system', 'error'] }).notNull(),
+    role: text('role', {
+      enum: ['user', 'assistant', 'thinking', 'tool', 'system', 'error'],
+    }).notNull(),
     content: text('content').notNull(),
     createdAt: integer('created_at', { mode: 'timestamp_ms' })
       .notNull()

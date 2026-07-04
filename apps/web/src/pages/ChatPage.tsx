@@ -57,6 +57,20 @@ const MessageBubble = observer(function MessageBubble({
     );
   }
 
+  if (message.role === 'thinking') {
+    return (
+      <Typography
+        variant="body2"
+        color="text.secondary"
+        sx={{ fontStyle: 'italic', px: 1, whiteSpace: 'pre-wrap', opacity: 0.8 }}
+        data-testselector="chat-message"
+        data-role="thinking"
+      >
+        💭 {message.content}
+      </Typography>
+    );
+  }
+
   const isUser = message.role === 'user';
   return (
     <Box
@@ -205,7 +219,9 @@ export const ChatPage = observer(function ChatPage({
                 <MessageBubble key={message.id} message={message} />
               ))}
               {chatStore.turnActive &&
-                chatStore.messages[chatStore.messages.length - 1]?.role !== 'assistant' && (
+                !['assistant', 'thinking'].includes(
+                  chatStore.messages[chatStore.messages.length - 1]?.role ?? '',
+                ) && (
                   <Box
                     sx={{ display: 'flex', justifyContent: 'flex-start' }}
                     data-testselector="chat-working"

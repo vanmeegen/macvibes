@@ -40,8 +40,10 @@ export function parseStreamJsonLine(line: string): AgentEvent[] {
       return [];
     case 'stream_event':
       return parseStreamEvent(msg['event']);
+    // 'assistant' liefert den fertigen Block — Tools kamen bereits live per
+    // content_block_start, Text per text_delta. Nicht nochmal ausgeben (Duplikat).
     case 'assistant':
-      return parseAssistant(msg['message']);
+      return [];
     case 'result':
       return parseResult(msg);
     default:
@@ -52,34 +54,42 @@ export function parseStreamJsonLine(line: string): AgentEvent[] {
 function parseStreamEvent(event: unknown): AgentEvent[] {
   if (typeof event !== 'object' || event === null) return [];
   const ev = event as Record<string, unknown>;
-  if (ev['type'] !== 'content_block_delta') return [];
-  const delta = ev['delta'];
-  if (typeof delta !== 'object' || delta === null) return [];
-  const d = delta as Record<string, unknown>;
-  if (d['type'] === 'text_delta' && typeof d['text'] === 'string' && d['text'].length > 0) {
-    return [{ type: 'text-delta', text: d['text'] }];
-  }
-  return [];
-}
 
-function parseAssistant(message: unknown): AgentEvent[] {
-  if (typeof message !== 'object' || message === null) return [];
-  const content = (message as Record<string, unknown>)['content'];
-  if (!Array.isArray(content)) return [];
-  const events: AgentEvent[] = [];
-  for (const block of content) {
+  // Blockende — die nächste Text-/Denk-Sequenz beginnt eine neue Bubble
+  // (sonst kleben Text vor und nach einem Tool-Call zusammen).
+  if (ev['type'] === 'content_block_stop') {
+    return [{ type: 'block-stop' }];
+  }
+
+  // Ein Tool-Call beginnt — sofort anzeigen, nicht erst wenn der Block fertig ist.
+  if (ev['type'] === 'content_block_start') {
+    const block = ev['content_block'];
     if (typeof block === 'object' && block !== null) {
       const b = block as Record<string, unknown>;
       if (b['type'] === 'tool_use' && typeof b['name'] === 'string') {
-        events.push({
-          type: 'tool-use',
-          name: b['name'],
-          detail: JSON.stringify(b['input']).slice(0, 300),
-        });
+        return [{ type: 'tool-use', name: b['name'], detail: '' }];
       }
     }
+    return [];
   }
-  return events;
+
+  if (ev['type'] === 'content_block_delta') {
+    const delta = ev['delta'];
+    if (typeof delta !== 'object' || delta === null) return [];
+    const d = delta as Record<string, unknown>;
+    if (d['type'] === 'text_delta' && typeof d['text'] === 'string' && d['text'].length > 0) {
+      return [{ type: 'text-delta', text: d['text'] }];
+    }
+    // Denken live streamen — sofern die API es im Klartext liefert (oft leer/verschlüsselt).
+    if (
+      d['type'] === 'thinking_delta' &&
+      typeof d['thinking'] === 'string' &&
+      d['thinking'].length > 0
+    ) {
+      return [{ type: 'thinking-delta', text: d['thinking'] }];
+    }
+  }
+  return [];
 }
 
 function parseResult(msg: Record<string, unknown>): AgentEvent[] {

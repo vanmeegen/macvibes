@@ -28,14 +28,46 @@ describe('parseStreamJsonLine', () => {
     expect(parseStreamJsonLine(empty)).toEqual([]);
   });
 
-  test('tool_use im assistant-Block wird zu tool-use', () => {
+  test('Tool-Call erscheint SOFORT beim content_block_start (nicht erst am Blockende)', () => {
+    const line = JSON.stringify({
+      type: 'stream_event',
+      event: {
+        type: 'content_block_start',
+        index: 1,
+        content_block: { type: 'tool_use', id: 'tu_1', name: 'Read', input: {} },
+      },
+    });
+    const events = parseStreamJsonLine(line);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'tool-use', name: 'Read' });
+  });
+
+  test('der komplette assistant-Block dupliziert den Tool-Call NICHT', () => {
+    // Er kam schon per content_block_start — sonst stünde jedes Tool doppelt im Chat.
     const line = JSON.stringify({
       type: 'assistant',
       message: { content: [{ type: 'tool_use', name: 'Write', input: { path: 'a.ts' } }] },
     });
-    const events = parseStreamJsonLine(line);
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ type: 'tool-use', name: 'Write' });
+    expect(parseStreamJsonLine(line)).toEqual([]);
+  });
+
+  test('content_block_stop signalisiert eine Blockgrenze (trennt Text vor/nach einem Tool)', () => {
+    const line = JSON.stringify({
+      type: 'stream_event',
+      event: { type: 'content_block_stop', index: 0 },
+    });
+    expect(parseStreamJsonLine(line)).toEqual([{ type: 'block-stop' }]);
+  });
+
+  test('thinking_delta wird als Denk-Stream durchgereicht (falls die API es liefert)', () => {
+    const line = JSON.stringify({
+      type: 'stream_event',
+      event: {
+        type: 'content_block_delta',
+        delta: { type: 'thinking_delta', thinking: 'Ich überlege…' },
+      },
+    });
+    expect(parseStreamJsonLine(line)).toEqual([{ type: 'thinking-delta', text: 'Ich überlege…' }]);
   });
 
   test('result/success liefert turn-completed mit Session-ID', () => {

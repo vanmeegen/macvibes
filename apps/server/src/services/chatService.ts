@@ -195,38 +195,53 @@ export class ChatService {
     state.currentHandle = handle;
 
     let assistantRow: ChatMessageRow | null = null;
+    let thinkingRow: ChatMessageRow | null = null;
     let completed = false;
+
+    // Streamt ein Delta in die laufende Zeile der jeweiligen Rolle (assistant/thinking).
+    const appendDelta = async (
+      current: ChatMessageRow | null,
+      role: ChatMessageRow['role'],
+      text: string,
+    ): Promise<ChatMessageRow> => {
+      if (current === null) {
+        return this.insertMessage(projectId, turn.turnId, role, text);
+      }
+      const updated: ChatMessageRow = { ...current, content: current.content + text };
+      await this.db
+        .update(chatMessages)
+        .set({ content: updated.content })
+        .where(eq(chatMessages.id, updated.id));
+      this.publish(projectId, updated, true);
+      return updated;
+    };
 
     try {
       for await (const event of handle.events) {
         this.hooks.onAgentActivity?.(projectId);
         switch (event.type) {
-          case 'text-delta': {
-            if (assistantRow === null) {
-              assistantRow = await this.insertMessage(
-                projectId,
-                turn.turnId,
-                'assistant',
-                event.text,
-              );
-            } else {
-              const previous: ChatMessageRow = assistantRow;
-              assistantRow = { ...previous, content: previous.content + event.text };
-              await this.db
-                .update(chatMessages)
-                .set({ content: assistantRow.content })
-                .where(eq(chatMessages.id, assistantRow.id));
-              this.publish(projectId, assistantRow, true);
-            }
+          case 'text-delta':
+            assistantRow = await appendDelta(assistantRow, 'assistant', event.text);
             break;
-          }
+          case 'thinking-delta':
+            // Denken live in eine eigene Zeile streamen (falls die API es liefert).
+            thinkingRow = await appendDelta(thinkingRow, 'thinking', event.text);
+            break;
           case 'tool-use':
+            // Neuer Tool-Call beginnt: die laufende Text-/Denk-Bubble ist zu Ende.
+            assistantRow = null;
+            thinkingRow = null;
             await this.insertMessage(
               projectId,
               turn.turnId,
               'tool',
-              `${event.name}: ${event.detail}`,
+              event.detail ? `${event.name}: ${event.detail}` : event.name,
             );
+            break;
+          case 'block-stop':
+            // Blockgrenze: die nächste Text-/Denk-Sequenz startet eine neue Bubble.
+            assistantRow = null;
+            thinkingRow = null;
             break;
           case 'session':
             // Session-ID früh sichern — überlebt auch einen abgebrochenen Turn (R9).
