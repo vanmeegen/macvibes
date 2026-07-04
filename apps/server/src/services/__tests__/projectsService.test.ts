@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DomainError } from '../errors';
 import { ensureBareRepo, listBranches } from '../gitService';
 import { createProject, deleteProject, getProject, listProjects } from '../projectsService';
+import { projectVolumeDir } from '../workspaceService';
 import {
   createTempDir,
   createTemplatesFixture,
@@ -29,7 +31,7 @@ async function setup() {
   const config = { bareRepoPath: join(home, 'macvibes-apps.git'), templatesDir };
   await ensureBareRepo(config.bareRepoPath);
   const marco = await createUser(db, 'marco');
-  return { db, config, marco };
+  return { db, config, marco, home };
 }
 
 describe('createProject', () => {
@@ -95,26 +97,49 @@ describe('createProject', () => {
 });
 
 describe('deleteProject', () => {
-  test('löscht nur den DB-Eintrag, der Branch bleibt', async () => {
-    const { db, config, marco } = await setup();
+  test('entfernt DB-Eintrag und Projekt-Volumes, der Branch bleibt (R2)', async () => {
+    const { db, config, marco, home } = await setup();
     const project = await createProject(db, config, marco, {
       name: 'Dashboard',
       templateDir: 'pwa',
     });
-    await deleteProject(db, marco, project.id);
+    // Volumes simulieren (entstehen sonst erst beim Sandbox-Start).
+    const volumeDir = projectVolumeDir(home, project.id);
+    mkdirSync(join(volumeDir, 'workspace'), { recursive: true });
+    mkdirSync(join(volumeDir, 'agent-config'), { recursive: true });
+    expect(existsSync(volumeDir)).toBe(true);
+
+    await deleteProject(db, marco, project.id, home);
+
     expect(await listProjects(db)).toHaveLength(0);
-    expect(await listBranches(config.bareRepoPath)).toEqual(['marco/dashboard']);
     expect(await getProject(db, project.id)).toBeNull();
+    // Volumes weg …
+    expect(existsSync(volumeDir)).toBe(false);
+    // … aber der Git-Branch bleibt (kein Code-Verlust).
+    expect(await listBranches(config.bareRepoPath)).toEqual(['marco/dashboard']);
   });
 
-  test('verweigert Löschen für fremde Projekte', async () => {
-    const { db, config, marco } = await setup();
+  test('funktioniert auch, wenn (noch) keine Volumes existieren', async () => {
+    const { db, config, marco, home } = await setup();
+    const project = await createProject(db, config, marco, {
+      name: 'Ohne Volume',
+      templateDir: 'pwa',
+    });
+    await deleteProject(db, marco, project.id, home);
+    expect(await listProjects(db)).toHaveLength(0);
+  });
+
+  test('verweigert Löschen für fremde Projekte (Volumes bleiben)', async () => {
+    const { db, config, marco, home } = await setup();
     const gast = await createUser(db, 'gast');
     const project = await createProject(db, config, marco, {
       name: 'Dashboard',
       templateDir: 'pwa',
     });
-    await expect(deleteProject(db, gast, project.id)).rejects.toThrow('Nur der Eigentümer');
+    const volumeDir = projectVolumeDir(home, project.id);
+    mkdirSync(volumeDir, { recursive: true });
+    await expect(deleteProject(db, gast, project.id, home)).rejects.toThrow('Nur der Eigentümer');
     expect(await listProjects(db)).toHaveLength(1);
+    expect(existsSync(volumeDir)).toBe(true);
   });
 });

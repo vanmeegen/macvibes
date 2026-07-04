@@ -217,7 +217,10 @@ builder.mutationType({
         id: t.arg.id({ required: true }),
       },
       resolve: async (_root, args, ctx) => {
-        await deleteProject(ctx.db, requireUser(ctx), String(args.id));
+        const user = requireUser(ctx);
+        // Sandbox stoppen, bevor die Volumes entfernt werden (R2).
+        await ctx.sandboxManager.stop(String(args.id));
+        await deleteProject(ctx.db, user, String(args.id), ctx.config.macvibesHome);
         return true;
       },
     }),

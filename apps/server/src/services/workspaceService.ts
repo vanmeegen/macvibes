@@ -9,9 +9,14 @@ export interface WorkspaceParams {
   branchName: string;
 }
 
+/** Verzeichnis aller Volumes eines Projekts (Workspace + Agent-Config). */
+export function projectVolumeDir(macvibesHome: string, projectId: string): string {
+  return join(macvibesHome, 'volumes', projectId);
+}
+
 /** Persistentes Projekt-Volume: ~/macvibes/volumes/<projectId>/workspace (R9). */
 export function workspaceDirFor(macvibesHome: string, projectId: string): string {
-  return join(macvibesHome, 'volumes', projectId, 'workspace');
+  return join(projectVolumeDir(macvibesHome, projectId), 'workspace');
 }
 
 /**
@@ -20,7 +25,7 @@ export function workspaceDirFor(macvibesHome: string, projectId: string): string
  * Wird in die VM gemountet, damit `--resume` einen VM-Neustart übersteht (R9).
  */
 export function agentConfigDirFor(macvibesHome: string, projectId: string): string {
-  return join(macvibesHome, 'volumes', projectId, 'agent-config');
+  return join(projectVolumeDir(macvibesHome, projectId), 'agent-config');
 }
 
 /**

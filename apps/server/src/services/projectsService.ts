@@ -1,4 +1,5 @@
 import { desc, eq } from 'drizzle-orm';
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   buildBranchName,
@@ -11,6 +12,7 @@ import { projects, users, type ProjectRow, type UserRow } from '../db/schema';
 import { DomainError } from './errors';
 import { createProjectBranch, deleteBranch, ensureBareRepo, listBranches } from './gitService';
 import { loadTemplates } from './templatesService';
+import { projectVolumeDir } from './workspaceService';
 
 export interface ProjectsConfig {
   bareRepoPath: string;
@@ -110,7 +112,12 @@ export async function createProject(
   }
 }
 
-export async function deleteProject(db: Db, currentUser: UserRow, id: string): Promise<void> {
+export async function deleteProject(
+  db: Db,
+  currentUser: UserRow,
+  id: string,
+  macvibesHome: string,
+): Promise<void> {
   const project = await getProject(db, id);
   if (!project) {
     throw new DomainError('Projekt nicht gefunden');
@@ -118,6 +125,8 @@ export async function deleteProject(db: Db, currentUser: UserRow, id: string): P
   if (project.ownerId !== currentUser.id) {
     throw new DomainError('Nur der Eigentümer kann ein Projekt löschen');
   }
-  // Der Git-Branch bleibt bewusst erhalten (R2) — nur der DB-Eintrag fällt weg.
   await db.delete(projects).where(eq(projects.id, id));
+  // Volumes (Workspace + Agent-Config) entfernen; der Git-Branch bleibt
+  // bewusst erhalten (R2) — kein Code-Verlust, nur der lokale Stand geht weg.
+  rmSync(projectVolumeDir(macvibesHome, id), { recursive: true, force: true });
 }
