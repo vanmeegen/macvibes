@@ -202,6 +202,44 @@ describe('stopTurn (R6 Stop-Button)', () => {
 });
 
 describe('Fehlerbehandlung (R6)', () => {
+  test('api-retry wird als eine Statuszeile sichtbar — ohne Spam bei Folge-Retries', async () => {
+    const retryRunner: AgentRunner = {
+      startTurn(): TurnHandle {
+        const events = (async function* () {
+          yield {
+            type: 'api-retry',
+            attempt: 1,
+            maxRetries: 10,
+            message: 'overloaded (Status 529)',
+          } as const;
+          yield {
+            type: 'api-retry',
+            attempt: 2,
+            maxRetries: 10,
+            message: 'overloaded (Status 529)',
+          } as const;
+          yield { type: 'text-delta', text: 'Doch noch da' } as const;
+          yield { type: 'turn-completed', sessionId: 'sess-r' } as const;
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { service, projectId } = await setup(retryRunner);
+    await service.sendMessage(sendInput(projectId, 'Hallo'));
+    await waitFor(() => !service.isTurnActive(projectId));
+
+    const messages = await service.listMessages(projectId);
+    const retryLines = messages.filter(
+      (m) => m.role === 'system' && m.content.includes('Wiederholung'),
+    );
+    expect(retryLines).toHaveLength(1);
+    expect(retryLines[0]?.content).toContain('overloaded');
+    // Der Turn lief danach normal weiter.
+    expect(messages.some((m) => m.role === 'assistant' && m.content.includes('Doch noch da'))).toBe(
+      true,
+    );
+  });
+
   test('error-Events landen als error-Zeile in der Historie', async () => {
     const { service, projectId } = await setup();
     await service.sendMessage(sendInput(projectId, 'FEHLER provozieren'));

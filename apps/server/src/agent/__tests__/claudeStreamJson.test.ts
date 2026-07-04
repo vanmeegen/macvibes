@@ -49,4 +49,23 @@ describe('parseStreamJsonLine', () => {
     expect(events[0]?.type).toBe('error');
     expect(events[1]).toEqual({ type: 'turn-aborted' });
   });
+
+  test('api_retry wird sichtbar gemacht statt verschluckt (Live-Bug 2026-07-04)', () => {
+    const line = JSON.stringify({
+      type: 'system',
+      subtype: 'api_retry',
+      attempt: 3,
+      max_retries: 10,
+      error_status: 401,
+      error: 'authentication_failed',
+    });
+    const events = parseStreamJsonLine(line);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({
+      type: 'api-retry',
+      attempt: 3,
+      maxRetries: 10,
+      message: 'authentication_failed (Status 401)',
+    });
+  });
 });

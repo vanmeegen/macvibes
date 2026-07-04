@@ -10,10 +10,11 @@ export const msbExecSpawner: ExecSpawner = ({ sandboxName, args, env, cwd }): Ex
   const proc = Bun.spawn(['msb', 'exec', '-w', cwd, ...envArgs, sandboxName, '--', ...args], {
     stdin: 'ignore',
     stdout: 'pipe',
-    stderr: 'inherit',
+    stderr: 'pipe',
   });
   return {
     stdout: proc.stdout,
+    stderr: proc.stderr,
     kill: () => proc.kill(),
     exited: proc.exited,
   };

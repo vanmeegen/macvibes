@@ -21,9 +21,23 @@ export function parseStreamJsonLine(line: string): AgentEvent[] {
 
   switch (msg['type']) {
     case 'system':
-      return msg['subtype'] === 'init' && typeof msg['session_id'] === 'string'
-        ? [{ type: 'session', sessionId: msg['session_id'] }]
-        : [];
+      if (msg['subtype'] === 'init' && typeof msg['session_id'] === 'string') {
+        return [{ type: 'session', sessionId: msg['session_id'] }];
+      }
+      if (msg['subtype'] === 'api_retry') {
+        // Nie verschlucken — sonst sieht ein API-Problem wie ein Hänger aus.
+        const errorName = typeof msg['error'] === 'string' ? msg['error'] : 'unbekannt';
+        const status = msg['error_status'];
+        return [
+          {
+            type: 'api-retry',
+            attempt: typeof msg['attempt'] === 'number' ? msg['attempt'] : 0,
+            maxRetries: typeof msg['max_retries'] === 'number' ? msg['max_retries'] : 0,
+            message: typeof status === 'number' ? `${errorName} (Status ${status})` : errorName,
+          },
+        ];
+      }
+      return [];
     case 'stream_event':
       return parseStreamEvent(msg['event']);
     case 'assistant':

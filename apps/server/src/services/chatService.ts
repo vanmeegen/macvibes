@@ -235,6 +235,17 @@ export class ChatService {
               .set({ claudeSessionId: event.sessionId })
               .where(eq(projects.id, projectId));
             break;
+          case 'api-retry':
+            // Sichtbar machen (R6) — aber nur einmal pro Turn, kein Retry-Spam.
+            if (event.attempt === 1) {
+              await this.insertMessage(
+                projectId,
+                turn.turnId,
+                'system',
+                `Claude-API-Störung: ${event.message} — automatische Wiederholung läuft (max. ${event.maxRetries} Versuche)`,
+              );
+            }
+            break;
           case 'error':
             await this.insertMessage(projectId, turn.turnId, 'error', event.message);
             break;

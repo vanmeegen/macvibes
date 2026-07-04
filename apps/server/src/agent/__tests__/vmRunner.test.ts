@@ -117,6 +117,27 @@ describe('VmAgentRunner (B5c)', () => {
     expect(fake.captured?.env['ANTHROPIC_BASE_URL']).toContain('host.microsandbox.internal');
   });
 
+  test('bei Crash landet der stderr-Auszug im error-Event (Diagnose statt Blindflug)', async () => {
+    const spawn: ExecSpawner = () => ({
+      stdout: streamOf([]),
+      stderr: streamOf(['--dangerously-skip-permissions cannot be used with root']),
+      kill: () => {},
+      exited: Promise.resolve(1),
+    });
+    const runner = makeRunner(spawn);
+    const events = await collect(
+      runner.startTurn({
+        projectId: 'projekt-1',
+        prompt: 'x',
+        workspaceDir: '/w',
+        resumeSessionId: null,
+      }).events,
+    );
+    const error = events.find((e) => e.type === 'error');
+    expect(error && 'message' in error ? error.message : '').toContain('cannot be used with root');
+    expect(events.at(-1)).toEqual({ type: 'turn-aborted' });
+  });
+
   test('ohne result-Zeile: Exit 0 → turn-completed, Exit ≠ 0 → turn-aborted', async () => {
     const ok = makeRunner(
       fakeSpawner([JSON.stringify({ type: 'system', subtype: 'init', session_id: 's' })], 0).spawn,

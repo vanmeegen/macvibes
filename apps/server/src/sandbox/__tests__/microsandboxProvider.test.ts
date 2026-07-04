@@ -74,6 +74,33 @@ describe.skipIf(!available)('MicrosandboxSandboxProvider (R7/R9, echte MicroVM)'
       const body = await waitForHttp(`http://localhost:${handle.previewHostPort}/`);
       expect(body).toBe('hallo-preview');
 
+      // Host-Gateway (Credential-Proxy-Pfad, B5c): die VM erreicht den Host
+      // über host.microsandbox.internal — die net-rule des Providers muss das erlauben.
+      const hostServer = Bun.serve({
+        port: 0,
+        hostname: '0.0.0.0',
+        fetch: () => new Response('host-erreicht'),
+      });
+      try {
+        const gatewayProbe = Bun.spawn(
+          [
+            'msb',
+            'exec',
+            'macvibes-vm-projekt',
+            '--',
+            'bun',
+            '-e',
+            `const r = await fetch('http://host.microsandbox.internal:${hostServer.port}/', { signal: AbortSignal.timeout(5000) }); console.log(await r.text());`,
+          ],
+          { stdout: 'pipe', stderr: 'ignore' },
+        );
+        const gatewayOut = await new Response(gatewayProbe.stdout).text();
+        expect(await gatewayProbe.exited).toBe(0);
+        expect(gatewayOut).toContain('host-erreicht');
+      } finally {
+        hostServer.stop(true);
+      }
+
       await handle.stop();
       activeHandle = null;
       await Bun.sleep(500);

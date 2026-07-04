@@ -34,7 +34,8 @@ runMigrations(db);
 await ensureBareRepo(config.bareRepoPath);
 
 // Shared Secret VM → Credential-Proxy, pro Serverstart neu (B5c).
-const proxyToken = crypto.randomUUID();
+// Zufällig pro Start; für kontrollierte Diagnose per Env überschreibbar.
+const proxyToken = Bun.env.MACVIBES_PROXY_TOKEN ?? crypto.randomUUID();
 const anthropicProxy = createAnthropicProxy({
   upstreamUrl: config.anthropic.upstreamUrl,
   proxyToken,

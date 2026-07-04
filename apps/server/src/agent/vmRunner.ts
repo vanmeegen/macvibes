@@ -5,8 +5,32 @@ import type { AgentRunner, TurnHandle, TurnOptions } from './runner';
 /** Ein gestarteter Prozess, reduziert auf das, was der Runner braucht (Test-Naht). */
 export interface ExecProcess {
   stdout: ReadableStream<Uint8Array>;
+  /** Optional: stderr für Diagnose bei Abstürzen (landet im Chat statt im Nirwana). */
+  stderr?: ReadableStream<Uint8Array>;
   kill(): void;
   readonly exited: Promise<number>;
+}
+
+async function collectTail(
+  stream: ReadableStream<Uint8Array> | undefined,
+  maxChars = 2000,
+): Promise<string> {
+  if (!stream) return '';
+  const decoder = new TextDecoder();
+  const reader = stream.getReader();
+  let tail = '';
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      tail = (tail + decoder.decode(value, { stream: true })).slice(-maxChars);
+    }
+  } catch {
+    // stderr-Lesen darf den Turn nie stören.
+  } finally {
+    reader.releaseLock();
+  }
+  return tail.trim();
 }
 
 /**
@@ -63,6 +87,8 @@ export class VmAgentRunner implements AgentRunner {
     });
 
     const events = (async function* (): AsyncGenerator<AgentEvent> {
+      // stderr parallel sammeln — bei einem Crash ist das die einzige Diagnose.
+      const stderrTail = collectTail(proc.stderr);
       const reader = proc.stdout.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
@@ -94,11 +120,16 @@ export class VmAgentRunner implements AgentRunner {
       }
 
       const exitCode = await proc.exited;
-      // Bricht der Prozess ohne result-Zeile ab (Crash, Kill), sauber melden.
+      // Bricht der Prozess ohne result-Zeile ab (Crash, Kill), sauber melden —
+      // mit stderr-Auszug, damit die Ursache im Chat steht (nie Blindflug).
       if (!sawResult) {
         if (exitCode === 0) {
           yield { type: 'turn-completed', sessionId: null };
         } else {
+          const stderr = await stderrTail;
+          if (stderr.length > 0) {
+            yield { type: 'error', message: `Agent-Prozess (Exit ${exitCode}): ${stderr}` };
+          }
           yield { type: 'turn-aborted' };
         }
       }

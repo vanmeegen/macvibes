@@ -3,6 +3,7 @@ export type AgentEvent =
   | { type: 'text-delta'; text: string }
   | { type: 'tool-use'; name: string; detail: string }
   | { type: 'session'; sessionId: string }
+  | { type: 'api-retry'; attempt: number; maxRetries: number; message: string }
   | { type: 'turn-completed'; sessionId: string | null }
   | { type: 'turn-aborted' }
   | { type: 'error'; message: string };
