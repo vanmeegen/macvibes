@@ -253,6 +253,7 @@ builder.mutationType({
       args: {
         projectId: t.arg.id({ required: true }),
         text: t.arg.string({ required: true }),
+        interrupt: t.arg.boolean({ required: false }),
       },
       resolve: async (_root, args, ctx) => {
         const user = requireUser(ctx);
@@ -276,6 +277,7 @@ builder.mutationType({
           workspaceDir,
           resumeSessionId: project.claudeSessionId,
           text,
+          interrupt: args.interrupt === true,
         });
         await touchProject(ctx.db, project.id);
         return true;

@@ -78,6 +78,26 @@ test('Stop-Button bricht einen laufenden Turn ab', async ({ page }) => {
   await expect(chatPage.stopButton).not.toBeVisible();
 });
 
+test('Mid-Turn-Steering: neue Nachricht während eines Turns unterbricht ihn', async ({ page }) => {
+  await registerNewUser(page);
+  const projectsPage = new ProjectsPage(page);
+  const chatPage = new ChatPage(page);
+  const name = uniqueProjectName('Steering');
+
+  await projectsPage.createProject(name, 'pwa');
+  await projectsPage.openProject(name);
+
+  await chatPage.send('LANGSAM alte Aufgabe');
+  await expect(chatPage.stopButton).toBeVisible({ timeout: 15_000 });
+  // Mitten im laufenden Turn nachsteuern.
+  await chatPage.send('Neue Aufgabe');
+
+  await expect(chatPage.messagesByRole('system').last()).toBeVisible({ timeout: 15_000 });
+  await expect(chatPage.messagesByRole('assistant').last()).toContainText('Echo: Neue Aufgabe', {
+    timeout: 15_000,
+  });
+});
+
 test('Nur-Lese-Besucher sieht den Chat-Verlauf', async ({ page }) => {
   const projectsPage = new ProjectsPage(page);
   const chatPage = new ChatPage(page);

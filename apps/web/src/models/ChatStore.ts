@@ -22,8 +22,8 @@ const CHAT_STATE_QUERY = /* GraphQL */ `
 `;
 
 const SEND_MESSAGE_MUTATION = /* GraphQL */ `
-  mutation SendMessage($projectId: ID!, $text: String!) {
-    sendMessage(projectId: $projectId, text: $text)
+  mutation SendMessage($projectId: ID!, $text: String!, $interrupt: Boolean) {
+    sendMessage(projectId: $projectId, text: $text, interrupt: $interrupt)
   }
 `;
 
@@ -141,10 +141,16 @@ export class ChatStore {
     const text = this.draft.trim();
     if (projectId === null || text.length === 0) return;
 
+    // Läuft schon ein Turn, unterbricht die neue Anweisung ihn (Mid-Turn-Steering).
+    const interrupt = this.turnActive;
     this.draft = '';
     this.error = null;
     try {
-      await gqlRequest<{ sendMessage: boolean }>(SEND_MESSAGE_MUTATION, { projectId, text });
+      await gqlRequest<{ sendMessage: boolean }>(SEND_MESSAGE_MUTATION, {
+        projectId,
+        text,
+        interrupt,
+      });
     } catch (err) {
       console.error('ChatStore.send fehlgeschlagen', err);
       runInAction(() => {

@@ -21,6 +21,8 @@ export interface SendMessageInput {
   workspaceDir: string;
   resumeSessionId: string | null;
   text: string;
+  /** Mid-Turn-Steering (Phase C): laufenden Turn abbrechen und neu ansetzen. */
+  interrupt?: boolean;
 }
 
 interface QueuedTurn {
@@ -74,6 +76,11 @@ export class ChatService {
     const turnId = crypto.randomUUID();
     state.queue.push({ turnId, prompt: input.text, workspaceDir: input.workspaceDir });
     await this.insertMessage(input.projectId, turnId, 'user', input.text);
+    // Mid-Turn-Steering (Phase C): laufenden Turn abbrechen, damit die Pump
+    // sofort zur neuen Nachricht springt. Die Queue bleibt erhalten.
+    if (input.interrupt === true) {
+      state.currentHandle?.abort();
+    }
     void this.pump(input.projectId);
   }
 

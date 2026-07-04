@@ -139,6 +139,51 @@ describe('sendMessage (R6)', () => {
   });
 });
 
+describe('Mid-Turn-Steering (Phase C, interrupt)', () => {
+  test('interrupt bricht den laufenden Turn ab und lässt die neue Nachricht laufen', async () => {
+    const { service, projectId } = await setup();
+    await service.sendMessage(sendInput(projectId, 'LANGSAM alte Aufgabe'));
+    await waitFor(() => service.isTurnActive(projectId));
+    await Bun.sleep(20);
+
+    // Neue Anweisung mitten im Turn — mit interrupt.
+    await service.sendMessage({ ...sendInput(projectId, 'Neue Aufgabe'), interrupt: true });
+
+    await waitFor(async () => {
+      const msgs = await service.listMessages(projectId);
+      return (
+        msgs.some((m) => m.role === 'assistant' && m.content.includes('Neue Aufgabe')) &&
+        !service.isTurnActive(projectId)
+      );
+    });
+
+    const messages = await service.listMessages(projectId);
+    // Der alte Turn wurde abgebrochen, der neue kam durch.
+    expect(messages.some((m) => m.role === 'system' && m.content.includes('abgebrochen'))).toBe(
+      true,
+    );
+    expect(
+      messages.some((m) => m.role === 'assistant' && m.content.includes('Echo: Neue Aufgabe')),
+    ).toBe(true);
+  });
+
+  test('ohne interrupt bleibt es beim Queue-Verhalten (kein Abbruch)', async () => {
+    const { service, projectId } = await setup();
+    await service.sendMessage(sendInput(projectId, 'Eins'));
+    await service.sendMessage(sendInput(projectId, 'Zwei'));
+    await waitFor(async () => {
+      const msgs = await service.listMessages(projectId);
+      return (
+        msgs.filter((m) => m.role === 'assistant').length === 2 && !service.isTurnActive(projectId)
+      );
+    });
+    const messages = await service.listMessages(projectId);
+    expect(messages.some((m) => m.role === 'system' && m.content.includes('abgebrochen'))).toBe(
+      false,
+    );
+  });
+});
+
 describe('stopTurn (R6 Stop-Button)', () => {
   test('bricht den laufenden Turn ab und hinterlässt eine Abbruch-Zeile', async () => {
     const { service, projectId, turnEnds } = await setup();

@@ -55,9 +55,22 @@ describe('ChatStore', () => {
 
       expect(gqlRequestMock).toHaveBeenCalledTimes(1);
       const [, variables] = gqlRequestMock.mock.calls[0] ?? [];
-      expect(variables).toEqual({ projectId: 'p1', text: 'Hallo Agent' });
+      expect(variables).toEqual({ projectId: 'p1', text: 'Hallo Agent', interrupt: false });
       expect(store.draft).toBe('');
       expect(store.error).toBeNull();
+    });
+
+    it('setzt interrupt=true, wenn schon ein Turn läuft (Mid-Turn-Steering)', async () => {
+      gqlRequestMock.mockResolvedValue({ sendMessage: true });
+      const store = new ChatStore();
+      store.projectId = 'p1';
+      store.turnActive = true;
+      store.setDraft('Neue Anweisung');
+
+      await store.send();
+
+      const [, variables] = gqlRequestMock.mock.calls[0] ?? [];
+      expect(variables).toMatchObject({ interrupt: true });
     });
 
     it('ignoriert leere Entwürfe', async () => {
