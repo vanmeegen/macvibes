@@ -1,6 +1,7 @@
 import type { AgentEvent } from './events';
 
 export interface TurnOptions {
+  projectId: string;
   prompt: string;
   workspaceDir: string;
   /** Claude-Session zum Fortsetzen (`--resume`) — null für die erste Nachricht. */

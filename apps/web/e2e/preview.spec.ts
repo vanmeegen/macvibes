@@ -22,7 +22,9 @@ test('Preview: Dev-Server der Sandbox wird im iframe erreichbar', async ({ page,
   expect(src).toMatch(/^http:\/\/localhost:\d+\/$/);
 
   // Der Dev-Server antwortet wirklich (Template-agnostisch: nur Status zählt).
-  const response = await request.get(src ?? '');
+  // 127.0.0.1 statt localhost: der Dev-Server bindet IPv4, node-fetch würde
+  // localhost sonst zu ::1 auflösen.
+  const response = await request.get((src ?? '').replace('localhost', '127.0.0.1'));
   expect(response.ok()).toBeTruthy();
 });
 

@@ -180,6 +180,7 @@ export class ChatService {
     )[0];
 
     const handle = this.runner.startTurn({
+      projectId,
       prompt: turn.prompt,
       workspaceDir: turn.workspaceDir,
       resumeSessionId: projectRow?.claudeSessionId ?? null,
@@ -219,6 +220,13 @@ export class ChatService {
               'tool',
               `${event.name}: ${event.detail}`,
             );
+            break;
+          case 'session':
+            // Session-ID früh sichern — überlebt auch einen abgebrochenen Turn (R9).
+            await this.db
+              .update(projects)
+              .set({ claudeSessionId: event.sessionId })
+              .where(eq(projects.id, projectId));
             break;
           case 'error':
             await this.insertMessage(projectId, turn.turnId, 'error', event.message);

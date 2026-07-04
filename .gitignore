@@ -10,3 +10,7 @@ apps/server/data/
 *.db-shm
 apps/web/test-results/
 apps/web/playwright-report/
+
+# Server-Secrets (Claude-Token) — nie committen
+.env
+apps/server/.env

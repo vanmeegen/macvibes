@@ -59,7 +59,10 @@ export async function buildTemplateBaseline(options: BuildBaselineOptions): Prom
       'sh',
       '-c',
       // node_modules vom Host ausschließen — die VM installiert selbst (Linux-Artefakte).
-      'mkdir -p /baseline/work && cp -r /src/. /baseline/work && rm -rf /baseline/work/node_modules && cd /baseline/work && bun install --silent && mkdir -p node_modules',
+      // Claude Code global installieren (Agent läuft in der VM, B5c).
+      'bun add -g @anthropic-ai/claude-code >/dev/null 2>&1 && ' +
+        'mkdir -p /baseline/work && cp -r /src/. /baseline/work && rm -rf /baseline/work/node_modules && ' +
+        'cd /baseline/work && bun install --silent && mkdir -p node_modules',
     ]);
     await runMsb(['stop', BUILDER_SANDBOX]);
     await runMsb(['snapshot', 'create', '--force', '-q', '--from', BUILDER_SANDBOX, snapshotName]);

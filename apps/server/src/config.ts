@@ -37,6 +37,13 @@ export interface ServerConfig {
     backend: 'claude' | 'fake';
     fakeDelayMs: number;
   };
+  anthropic: {
+    upstreamUrl: string;
+    /** Abo-Token (claude setup-token) — bevorzugt. */
+    oauthToken: string | null;
+    /** Alternativ: klassischer API-Key. */
+    apiKey: string | null;
+  };
 }
 
 const DEFAULT_TEMPLATES_DIR = resolve(
@@ -76,6 +83,11 @@ export function loadConfig(): ServerConfig {
     agent: {
       backend: Bun.env.MACVIBES_AGENT === 'fake' ? 'fake' : 'claude',
       fakeDelayMs: Number(Bun.env.MACVIBES_FAKE_DELAY_MS ?? 25),
+    },
+    anthropic: {
+      upstreamUrl: Bun.env.ANTHROPIC_UPSTREAM_URL ?? 'https://api.anthropic.com',
+      oauthToken: Bun.env.CLAUDE_CODE_OAUTH_TOKEN ?? null,
+      apiKey: Bun.env.ANTHROPIC_API_KEY ?? null,
     },
   };
 }

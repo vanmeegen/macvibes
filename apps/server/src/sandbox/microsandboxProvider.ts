@@ -15,7 +15,8 @@ export interface MicrosandboxProviderConfig {
   memoryMib: number;
 }
 
-function sandboxNameFor(projectId: string): string {
+/** Sandbox-Name eines Projekts — vom Provider und vom VM-Runner genutzt. */
+export function microsandboxSandboxName(projectId: string): string {
   return `macvibes-${projectId}`;
 }
 
@@ -39,7 +40,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     });
 
     const hostPort = await findFreePort(context.previewPort);
-    const name = sandboxNameFor(context.projectId);
+    const name = microsandboxSandboxName(context.projectId);
 
     // Baseline-Fork (B5b): node_modules kommt vorinstalliert aus dem Snapshot
     // und wird in den gemounteten Workspace gelinkt — kein Install zur Laufzeit.
@@ -66,6 +67,11 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       // 0.0.0.0: Preview ist im LAN erreichbar (R7/NFR).
       '-p',
       `0.0.0.0:${hostPort}:${context.previewPort}`,
+      // Egress: öffentliches Internet (bun/npm) + Host-Gateway für den
+      // Credential-Proxy (host.microsandbox.internal, B5c). Private Netze
+      // sonst gesperrt — der Agent kommt nicht ins LAN.
+      '--net-rule',
+      'allow@public,allow@172.16.0.0/12',
       '-c',
       String(this.config.cpus),
       '-m',
