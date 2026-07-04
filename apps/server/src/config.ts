@@ -44,6 +44,11 @@ export interface ServerConfig {
     /** Alternativ: klassischer API-Key. */
     apiKey: string | null;
   };
+  mirror: {
+    /** GitHub-Remote für macvibes-apps (mit Token). Null = Mirror aus. */
+    remoteUrl: string | null;
+    intervalMs: number;
+  };
 }
 
 const DEFAULT_TEMPLATES_DIR = resolve(
@@ -88,6 +93,10 @@ export function loadConfig(): ServerConfig {
       upstreamUrl: Bun.env.ANTHROPIC_UPSTREAM_URL ?? 'https://api.anthropic.com',
       oauthToken: Bun.env.CLAUDE_CODE_OAUTH_TOKEN ?? null,
       apiKey: Bun.env.ANTHROPIC_API_KEY ?? null,
+    },
+    mirror: {
+      remoteUrl: Bun.env.MACVIBES_GITHUB_REMOTE ?? null,
+      intervalMs: Number(Bun.env.MACVIBES_MIRROR_INTERVAL_MS ?? 10 * 60 * 1000),
     },
   };
 }

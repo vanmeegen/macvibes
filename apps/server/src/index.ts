@@ -25,6 +25,7 @@ import { autoCommit, createTurnEndAutoCommit } from './services/autoCommitServic
 import { resolveSession } from './services/authService';
 import { ChatService } from './services/chatService';
 import { ensureBareRepo } from './services/gitService';
+import { startMirrorScheduler } from './services/mirrorService';
 import { workspaceDirFor } from './services/workspaceService';
 
 const config = loadConfig();
@@ -178,12 +179,22 @@ console.log(`macvibes-Server läuft auf http://${server.hostname}:${server.port}
 console.log(`GraphQL: http://${server.hostname}:${server.port}/graphql`);
 console.log(`Bare-Repo: ${config.bareRepoPath}`);
 
+// GitHub-Mirror (Phase C): periodisch spiegeln, falls konfiguriert.
+const mirror = startMirrorScheduler(
+  { bareRepoPath: config.bareRepoPath, remoteUrl: config.mirror.remoteUrl },
+  config.mirror.intervalMs,
+);
+if (config.mirror.remoteUrl !== null) {
+  console.log(`GitHub-Mirror aktiv (alle ${Math.round(config.mirror.intervalMs / 60000)} min)`);
+}
+
 // MicroVMs laufen detached — beim Herunterfahren sauber stoppen (inkl. Auto-Commit).
 let shuttingDown = false;
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`${signal} empfangen — stoppe alle Sandboxes…`);
+  mirror.stop();
   try {
     await sandboxManager.stopAll();
   } catch (error) {
