@@ -44,6 +44,61 @@ describe('ChatStore', () => {
     });
   });
 
+  describe('send — sofortiges Feedback (Chat-UX)', () => {
+    it('zeigt die eigene Nachricht SOFORT als Bubble, ohne auf den Server zu warten', async () => {
+      // Mutation hängt (Server langsam) — die Bubble muss trotzdem sofort da sein.
+      let resolveSend: (v: unknown) => void = () => {};
+      gqlRequestMock.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveSend = resolve;
+          }),
+      );
+      const store = new ChatStore();
+      store.projectId = 'p1';
+      store.setDraft('Bau mir was');
+
+      const sending = store.send();
+      // Noch KEIN Server-Roundtrip abgeschlossen:
+      expect(store.messages).toHaveLength(1);
+      expect(store.messages[0]?.role).toBe('user');
+      expect(store.messages[0]?.content).toBe('Bau mir was');
+      // Und der Turn gilt sofort als aktiv („Agent arbeitet"-Feedback).
+      expect(store.turnActive).toBe(true);
+
+      resolveSend({ sendMessage: true });
+      await sending;
+    });
+
+    it('ersetzt die optimistische Bubble durch das Server-Event ohne Duplikat', async () => {
+      gqlRequestMock.mockResolvedValue({ sendMessage: true });
+      const store = new ChatStore();
+      store.projectId = 'p1';
+      store.setDraft('Hallo Agent');
+      await store.send();
+      expect(store.messages).toHaveLength(1);
+
+      // Server broadcastet die persistierte User-Nachricht (echte ID).
+      store.applyEvent({ message: message('srv-1', 'user', 'Hallo Agent'), turnActive: true });
+
+      const userMessages = store.messages.filter((m) => m.role === 'user');
+      expect(userMessages).toHaveLength(1);
+      expect(userMessages[0]?.id).toBe('srv-1');
+    });
+
+    it('entfernt die optimistische Bubble und stellt den Entwurf wieder her, wenn das Senden scheitert', async () => {
+      gqlRequestMock.mockRejectedValue(new Error('Netz weg'));
+      const store = new ChatStore();
+      store.projectId = 'p1';
+      store.setDraft('Wichtig');
+      await store.send();
+
+      expect(store.messages.filter((m) => m.role === 'user')).toHaveLength(0);
+      expect(store.draft).toBe('Wichtig');
+      expect(store.turnActive).toBe(false);
+    });
+  });
+
   describe('send', () => {
     it('sendet den Entwurf als Mutation und leert das Eingabefeld', async () => {
       gqlRequestMock.mockResolvedValue({ sendMessage: true });

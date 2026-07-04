@@ -6,6 +6,7 @@ import AppBar from '@mui/material/AppBar';
 import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
 import IconButton from '@mui/material/IconButton';
+import CircularProgress from '@mui/material/CircularProgress';
 import LinearProgress from '@mui/material/LinearProgress';
 import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
@@ -203,6 +204,22 @@ export const ChatPage = observer(function ChatPage({
               {chatStore.messages.map((message) => (
                 <MessageBubble key={message.id} message={message} />
               ))}
+              {chatStore.turnActive &&
+                chatStore.messages[chatStore.messages.length - 1]?.role !== 'assistant' && (
+                  <Box
+                    sx={{ display: 'flex', justifyContent: 'flex-start' }}
+                    data-testselector="chat-working"
+                  >
+                    <Paper variant="outlined" sx={{ px: 2, py: 1 }}>
+                      <Stack direction="row" spacing={1.5} alignItems="center">
+                        <CircularProgress size={14} />
+                        <Typography variant="body2" color="text.secondary">
+                          Agent arbeitet …
+                        </Typography>
+                      </Stack>
+                    </Paper>
+                  </Box>
+                )}
             </Stack>
           </Box>
 

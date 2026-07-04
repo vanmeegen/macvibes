@@ -57,12 +57,17 @@ function toErrorMessage(err: unknown): string {
  * Presentation Model der Chat-Page: Verlauf, Streaming-Events (SSE via
  * GraphQL-Subscription), Eingabe-Entwurf, Turn-Status und Stop (R6).
  */
+/** Präfix der optimistischen (noch nicht serverbestätigten) User-Bubbles. */
+const OPTIMISTIC_PREFIX = 'optimistic-';
+
 export class ChatStore {
   messages: ChatMessage[] = [];
   turnActive = false;
   error: string | null = null;
   draft = '';
   projectId: string | null = null;
+  /** Zähler für eindeutige optimistische IDs. */
+  optimisticCounter = 0;
   /** SSE-Verbindung — bewusst nicht observable. */
   eventSource: EventSource | null = null;
 
@@ -76,6 +81,16 @@ export class ChatStore {
 
   /** Upsert per Message-ID — Streaming-Deltas ersetzen die bestehende Zeile. */
   applyEvent(payload: ChatEventPayload): void {
+    // Ist es die serverseitige Fassung unserer optimistischen User-Bubble,
+    // die eigene Bubble durch das echte Event ersetzen (kein Duplikat).
+    if (payload.message.role === 'user') {
+      const optimistic = this.messages.findIndex(
+        (m) => m.id.startsWith(OPTIMISTIC_PREFIX) && m.content === payload.message.content,
+      );
+      if (optimistic >= 0) {
+        this.messages.splice(optimistic, 1);
+      }
+    }
     const index = this.messages.findIndex((m) => m.id === payload.message.id);
     if (index >= 0) {
       this.messages[index] = payload.message;
@@ -145,6 +160,20 @@ export class ChatStore {
     const interrupt = this.turnActive;
     this.draft = '';
     this.error = null;
+
+    // Optimistisch: die eigene Bubble SOFORT anzeigen und den Turn als aktiv
+    // markieren („Agent arbeitet…") — kein Warten auf den Server-Roundtrip.
+    const optimisticId = `${OPTIMISTIC_PREFIX}${this.optimisticCounter++}`;
+    this.messages.push({
+      id: optimisticId,
+      projectId,
+      turnId: optimisticId,
+      role: 'user',
+      content: text,
+      createdAt: new Date().toISOString(),
+    });
+    this.turnActive = true;
+
     try {
       await gqlRequest<{ sendMessage: boolean }>(SEND_MESSAGE_MUTATION, {
         projectId,
@@ -155,7 +184,11 @@ export class ChatStore {
       console.error('ChatStore.send fehlgeschlagen', err);
       runInAction(() => {
         this.error = toErrorMessage(err);
-        // Entwurf wiederherstellen, damit nichts verloren geht (R6).
+        // Optimistische Bubble zurücknehmen und Entwurf wiederherstellen (R6).
+        this.messages = this.messages.filter((m) => m.id !== optimisticId);
+        if (!this.messages.some((m) => m.id.startsWith(OPTIMISTIC_PREFIX))) {
+          this.turnActive = false;
+        }
         this.draft = text;
       });
     }

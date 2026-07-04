@@ -77,18 +77,16 @@ test.describe('Template "pwa" — Client-PWA rendert die Startseite', () => {
     await stopDevServer(server);
   });
 
-  test('zeigt Dashboard, Excel-Drop und einen gerenderten Recharts-Chart', async ({ page }) => {
+  test('startet als LEERE App: "erstellt mit macvibes", kein Demo-Dashboard', async ({ page }) => {
     test.setTimeout(120_000);
     await page.goto('http://127.0.0.1:5191/');
 
-    // React ist gemountet und die App-Startseite rendert echten Inhalt.
-    await expect(page.getByRole('heading', { name: /Dashboard/i })).toBeVisible({
-      timeout: 30_000,
-    });
-    // Excel-Upload-Zone (immer sichtbar, mit Beispieldaten-Hinweis).
-    await expect(page.getByText(/Excel-Datei hierher ziehen/i)).toBeVisible();
-    // Recharts rendert aus den eingebauten Beispieldaten einen Chart.
-    await expect(page.locator('.recharts-wrapper').first()).toBeVisible({ timeout: 30_000 });
+    // React ist gemountet und zeigt die leere Scaffold-Startseite.
+    await expect(page.getByText(/erstellt mit macvibes/i)).toBeVisible({ timeout: 30_000 });
+    // KEIN vorgebautes Demo mehr auf der Startseite — das baut der Agent auf Zuruf.
+    await expect(page.getByRole('heading', { name: /Dashboard/i })).not.toBeVisible();
+    await expect(page.locator('.recharts-wrapper')).toHaveCount(0);
+    await expect(page.getByText(/Excel-Datei hierher ziehen/i)).not.toBeVisible();
   });
 });
 
