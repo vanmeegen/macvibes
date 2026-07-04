@@ -49,9 +49,21 @@ export interface BuildBaselineOptions {
   snapshotName?: string;
 }
 
+/**
+ * Ziel-Snapshotname für einen Baseline-Bau: der explizite Override, sonst der
+ * Produktionsname. Reine Funktion — der Override ist der Mechanismus, mit dem
+ * Tests die Produktions-Baselines isoliert halten (Regression 2026-07-04).
+ */
+export function resolveBaselineSnapshotName(options: {
+  templateDir: string;
+  snapshotName?: string;
+}): string {
+  return options.snapshotName ?? baselineSnapshotName(options.templateDir);
+}
+
 /** Baut/erneuert den Baseline-Snapshot eines Templates (bun install in der VM). */
 export async function buildTemplateBaseline(options: BuildBaselineOptions): Promise<void> {
-  const snapshotName = options.snapshotName ?? baselineSnapshotName(options.templateDir);
+  const snapshotName = resolveBaselineSnapshotName(options);
   const templatePath = `${options.templatesDir}/${options.templateDir}`;
 
   // Builder-VM: Template read-only mounten, VM-lokal kopieren und installieren.
