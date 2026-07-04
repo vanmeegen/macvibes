@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { lstatSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { baselineExists, buildTemplateBaseline } from '../baselineService';
 import {
@@ -10,6 +10,7 @@ import {
 import { createProjectBranch, ensureBareRepo } from '../../services/gitService';
 import { workspaceDirFor } from '../../services/workspaceService';
 import { MicrosandboxSandboxProvider, msbAvailable } from '../microsandboxProvider';
+import { runMsb } from '../msb';
 import type { SandboxHandle } from '../provider';
 
 const available = await msbAvailable();
@@ -113,6 +114,81 @@ describe.skipIf(!available)('MicrosandboxSandboxProvider (R7/R9, echte MicroVM)'
         reachable = false;
       }
       expect(reachable).toBe(false);
+    },
+    { timeout: 120_000 },
+  );
+});
+
+describe.skipIf(!available)('Watchdog in echter VM (R7, Crash-Recovery)', () => {
+  test(
+    'stirbt der Dev-Server in der VM, startet der Watchdog ihn neu — VM überlebt',
+    async () => {
+      const home = await createTempDir('macvibes-home-');
+      tempDirs.push(home);
+      const templates = await createTemplatesFixture();
+      tempDirs.push(templates);
+      const bare = join(home, 'macvibes-apps.git');
+      await ensureBareRepo(bare);
+      await createProjectBranch(bare, 'marco/wd', join(templates, 'pwa'));
+
+      const provider = new MicrosandboxSandboxProvider({
+        macvibesHome: home,
+        bareRepoPath: bare,
+        image: 'oven/bun',
+        cpus: 1,
+        memoryMib: 512,
+      });
+      const handle = await provider.start({
+        projectId: 'wd',
+        branchName: 'marco/wd',
+        workspaceDir: workspaceDirFor(home, 'wd'),
+        templateDir: 'pwa',
+        devCommand: 'bun server.ts',
+        previewPort: 5199,
+      });
+      activeHandle = handle;
+      const url = `http://localhost:${handle.previewHostPort}/`;
+      const startsFile = join(workspaceDirFor(home, 'wd'), '.starts');
+      const startCount = () =>
+        existsSync(startsFile) ? readFileSync(startsFile, 'utf8').trim().split('\n').length : 0;
+
+      // Erstmal läuft die Preview (genau ein Start).
+      expect(await waitForHttp(url)).toBe('hallo-preview');
+      const before = startCount();
+      expect(before).toBe(1);
+
+      // Dev-Server in der VM hart killen (die VM selbst bleibt: sleep infinity).
+      // oven/bun hat kein pkill — portabel über /proc den server.ts-Prozess finden.
+      // Eigene PID ausschließen — das Script selbst hat "server.ts" im cmdline.
+      const killScript =
+        'self=$$; for p in /proc/[0-9]*; do pid=${p#/proc/}; ' +
+        '[ "$pid" = "$self" ] && continue; ' +
+        'tr "\\0" " " < "$p/cmdline" 2>/dev/null | grep -q server.ts && kill "$pid"; ' +
+        'done; true';
+      await runMsb(['exec', 'macvibes-wd', '--', 'sh', '-c', killScript]);
+
+      // Der Watchdog muss ihn neu starten → Preview wieder erreichbar UND eine
+      // zusätzliche Startzeile (= echte neue Instanz, nicht bloß weitergelaufen).
+      const start = Date.now();
+      while (Date.now() - start < 40_000) {
+        if (
+          startCount() > before &&
+          (await fetch(url)
+            .then((r) => r.ok)
+            .catch(() => false))
+        )
+          break;
+        await Bun.sleep(300);
+      }
+      expect(startCount()).toBeGreaterThan(before);
+      expect(await waitForHttp(url, 10_000)).toBe('hallo-preview');
+
+      // Und die VM lebt weiter (msb exec funktioniert = Agent-Umgebung intakt).
+      const alive = await runMsb(['exec', 'macvibes-wd', '--', 'echo', 'vm-lebt']);
+      expect(alive).toContain('vm-lebt');
+
+      await handle.stop();
+      activeHandle = null;
     },
     { timeout: 120_000 },
   );

@@ -32,9 +32,13 @@ export async function createTemplatesFixture(): Promise<string> {
   await writeFile(join(dir, 'pwa', 'index.html'), '<!doctype html><title>PWA</title>');
   await writeFile(join(dir, 'pwa', 'package.json'), JSON.stringify({ name: 'app' }));
   // Mini-Dev-Server für Preview-Tests: respektiert die PORT-Env (Template-Kontrakt).
+  // Zählt bei jedem Start eine Zeile in .starts hoch — so lässt sich ein echter
+  // Watchdog-Neustart (neue Instanz) vom bloßen Weiterlaufen unterscheiden.
   await writeFile(
     join(dir, 'pwa', 'server.ts'),
-    "Bun.serve({ port: Number(process.env.PORT ?? 5199), fetch: () => new Response('hallo-preview') });\n",
+    "import { appendFileSync } from 'node:fs';\n" +
+      "appendFileSync('.starts', 'x\\n');\n" +
+      "Bun.serve({ port: Number(process.env.PORT ?? 5199), fetch: () => new Response('hallo-preview') });\n",
   );
   await writeFile(
     join(dir, 'templates.json'),
