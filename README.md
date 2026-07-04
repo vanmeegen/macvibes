@@ -19,14 +19,14 @@ alles TypeScript auf Bun.
 
 | Bereich   | Technologie                                                   |
 | --------- | ------------------------------------------------------------- |
-| Runtime   | Bun (Workspaces-Monorepo, `bun test`)                          |
-| Sprache   | TypeScript, strict (ES2022, `noUncheckedIndexedAccess` & Co.)  |
-| Backend   | `Bun.serve` + GraphQL Yoga + Pothos                            |
-| Datenbank | `bun:sqlite` + Drizzle ORM (Migrationen: drizzle-kit)          |
-| Frontend  | React 18 + MobX + MUI v5, gebaut mit Vite                      |
-| Tests     | `bun test` (Server/Shared), Vitest (Web), Playwright (E2E)     |
-| Qualität  | ESLint 9 (flat config), Prettier, Husky + lint-staged          |
-| Sandbox   | microsandbox (self-hosted MicroVMs)                            |
+| Runtime   | Bun (Workspaces-Monorepo, `bun test`)                         |
+| Sprache   | TypeScript, strict (ES2022, `noUncheckedIndexedAccess` & Co.) |
+| Backend   | `Bun.serve` + GraphQL Yoga + Pothos                           |
+| Datenbank | `bun:sqlite` + Drizzle ORM (Migrationen: drizzle-kit)         |
+| Frontend  | React 18 + MobX + MUI v5, gebaut mit Vite                     |
+| Tests     | `bun test` (Server/Shared), Vitest (Web), Playwright (E2E)    |
+| Qualität  | ESLint 9 (flat config), Prettier, Husky + lint-staged         |
+| Sandbox   | microsandbox (self-hosted MicroVMs)                           |
 
 ## Struktur (geplant)
 
@@ -45,16 +45,36 @@ packages/
 - Strikte Typen, keine verschluckten Exceptions, TDD.
 - Vor jedem Commit: `bun run ci`.
 
+## Schnellstart
+
+Voraussetzungen: [Bun](https://bun.sh), git und — für echte VM-Isolation —
+[microsandbox](https://microsandbox.dev)
+(`brew install superradcompany/tap/microsandbox`, Apple Silicon). Ohne `msb`
+läuft alles trotzdem, dann aber ohne VM-Isolat (Prozess-Provider).
+
+```bash
+bun install
+
+# Claude-Credentials für den Host-Proxy (verlassen den Host nie):
+cp apps/server/.env.example apps/server/.env
+#   → CLAUDE_CODE_OAUTH_TOKEN=... (via `claude setup-token`) oder ANTHROPIC_API_KEY
+
+bun run baselines          # Template-Baseline-Snapshots bauen (nur mit msb)
+bun run dev                # http://localhost:5173
+```
+
+Registrieren mit dem Invite-Code (Default `macvibes`, setzbar über
+`MACVIBES_INVITE_CODE`), Projekt aus einem Template anlegen, in den Chat
+schreiben — Claude Code baut in einer eigenen MicroVM, die Preview läuft
+daneben, jeder Turn wird automatisch committet.
+
+Für den LAN-Betrieb (andere greifen über `http://<mac>.local:4000` zu):
+`bun run start` (baut das Web-UI und lässt es vom Server ausliefern).
+
 ## Requirements
 
 Die detaillierten Anforderungen mit Akzeptanzkriterien stehen in
-[REQUIREMENTS.md](REQUIREMENTS.md). Kernkonzepte: **Projekte** (ein Branch
-pro Projekt im Repo `macvibes-apps`), Templates aus `templates/`
-(u. a. `pwa` und `fullstack`), Chat-Page mit Live-Preview (Lovable-artig),
-Auto-Commit nach jedem Agent-Turn, Sandbox-Stopp nach 15 min Inaktivität.
-
-## Nächste Schritte
-
-1. ~~Requirements-Dokument (`REQUIREMENTS.md`) erarbeiten.~~ ✅
-2. Monorepo-Gerüst nach obigem Stack aufsetzen.
-3. Vertikaler Durchstich: Projekt anlegen, Sandbox starten, Chat + Preview sehen.
+[REQUIREMENTS.md](REQUIREMENTS.md), Architektur & Konventionen in
+[CLAUDE.md](CLAUDE.md). Status: **Phase A + B + C umgesetzt** — Login,
+Projekte, isolierte MicroVMs, Chat mit Claude Code (Credential-Proxy),
+Live-Preview, Auto-Commit, Lifecycle, GitHub-Mirror, Mid-Turn-Steering.

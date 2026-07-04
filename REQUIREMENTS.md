@@ -4,7 +4,7 @@ Lokale Vibe-Coding-Plattform für den Mac: Projekte werden in isolierten
 microsandbox-MicroVMs entwickelt — mit Chat-Interface zu Claude Code und
 Live-Preview der entstehenden App, ähnlich Lovable, aber komplett lokal.
 
-Status: gegrillt & abgestimmt, Stand 2026-07-03
+Status: umgesetzt (Phase A + B + C), Stand 2026-07-04
 
 ---
 
@@ -22,36 +22,36 @@ Dienste außer der Claude API.
 
 ## 2. Begriffe
 
-| Begriff       | Bedeutung                                                                 |
-| ------------- | ------------------------------------------------------------------------- |
-| **Projekt**   | Zentrale Einheit (kein „Session"-Begriff im UI). Hat Namen, Template, Branch, Historie. |
-| **Sandbox**   | microsandbox-MicroVM, in der Claude Code und der Preview-Server eines Projekts laufen. |
-| **Chat-Page** | Seite eines Projekts: Chat-Interface + Live-Preview nebeneinander.        |
-| **Template**  | Vorlagen-Projekt unter `templates/`, Ausgangspunkt für neue Projekte.     |
-| **macvibes-apps** | Das eine Git-Repo, in dem alle Projekte leben — **ein Orphan-Branch pro Projekt**. |
-| **Agent-Runner** | Kleiner Bun-Prozess in der VM: treibt Claude Code über das Agent SDK und streamt Events zum Server. |
-| **User / Owner** | Lokales Benutzerkonto (Username + Passwort). Jedes Projekt gehört genau einem Owner. |
+| Begriff           | Bedeutung                                                                                           |
+| ----------------- | --------------------------------------------------------------------------------------------------- |
+| **Projekt**       | Zentrale Einheit (kein „Session"-Begriff im UI). Hat Namen, Template, Branch, Historie.             |
+| **Sandbox**       | microsandbox-MicroVM, in der Claude Code und der Preview-Server eines Projekts laufen.              |
+| **Chat-Page**     | Seite eines Projekts: Chat-Interface + Live-Preview nebeneinander.                                  |
+| **Template**      | Vorlagen-Projekt unter `templates/`, Ausgangspunkt für neue Projekte.                               |
+| **macvibes-apps** | Das eine Git-Repo, in dem alle Projekte leben — **ein Orphan-Branch pro Projekt**.                  |
+| **Agent-Runner**  | Kleiner Bun-Prozess in der VM: treibt Claude Code über das Agent SDK und streamt Events zum Server. |
+| **User / Owner**  | Lokales Benutzerkonto (Username + Passwort). Jedes Projekt gehört genau einem Owner.                |
 
 ## 3. Architektur-Entscheidungen (gegrillt am 2026-07-03)
 
-| Thema             | Entscheidung                                                                 |
-| ----------------- | ---------------------------------------------------------------------------- |
-| Stack             | Wie `behandlungsverwaltung`: Bun-Monorepo (`apps/web`, `apps/server`, `packages/shared`), TS strict, `Bun.serve` + GraphQL Yoga + Pothos, `bun:sqlite` + Drizzle, React 18 + MobX + MUI + Vite, ESLint 9 + Prettier + Husky. |
-| Sandbox           | microsandbox (MicroVMs via libkrun, macOS Apple Silicon). Basis-Image mit Bun, git, Claude Code + Agent-Runner. |
+| Thema              | Entscheidung                                                                                                                                                                                                                                                                                                                           |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stack              | Wie `behandlungsverwaltung`: Bun-Monorepo (`apps/web`, `apps/server`, `packages/shared`), TS strict, `Bun.serve` + GraphQL Yoga + Pothos, `bun:sqlite` + Drizzle, React 18 + MobX + MUI + Vite, ESLint 9 + Prettier + Husky.                                                                                                           |
+| Sandbox            | microsandbox (MicroVMs via libkrun, macOS Apple Silicon). Basis-Image mit Bun, git, Claude Code + Agent-Runner.                                                                                                                                                                                                                        |
 | Template-Baselines | Pro Template wird beim Build ein **Baseline-Snapshot** gebacken (Template + `bun install` + Vite-Cache). „Projekt anlegen" **forkt** die Baseline → VM bootet, Runner switcht auf den Projekt-Branch, `devCommand` startet. Ziel: **Preview der leeren App in wenigen Sekunden**. Baselines werden bei Template-Änderungen neu gebaut. |
-| Agent-Anbindung   | **Agent-SDK-Runner** in der VM: strukturierte Events (Text, Tool-Use, Turn-Ende) per WebSocket zum Server; Browser erhält sie via GraphQL Subscriptions (SSE) — GraphQL-only bleibt gewahrt. |
-| Autonomie         | Claude Code läuft mit **bypassPermissions** (volle Autonomie); die Isolation leistet die MicroVM. |
-| Credentials       | **Proxy über Host**: die VM erhält keine Claude-Credentials. `ANTHROPIC_BASE_URL` zeigt auf den macvibes-Server, der die Auth-Header injiziert. |
-| Git-Modell        | Lokales **Bare-Repo** `macvibes-apps.git` auf dem Host als primärer Remote (in die VM gemountet). **Ein Orphan-Branch pro Projekt**: `<username>/<slug>` (z. B. `marco/dashboard`), erster Commit = Template-Inhalt. Projektnamen sind pro User eindeutig. |
-| GitHub            | Mirror nach GitHub ist auf **Phase C verschoben** (v1: nur lokales Bare-Repo). |
-| Persistenz        | **Volume pro Projekt** (Workspace, `~/.claude`-Sessiondaten, `node_modules`), bei jedem VM-Start gemountet → Claude-Session überlebt VM-Stopps (`--resume`). Kein Verlass auf VM-Snapshots. |
-| Preview-Routing   | **Port pro Sandbox**: Preview-Port der VM wird auf einen freien Host-Port gemappt, das iframe zeigt direkt darauf (HMR-WebSocket funktioniert nativ). |
-| Preview-Start     | `templates.json` liefert pro Template `devCommand` und `previewPort`; wird beim Anlegen ins Projekt übernommen. |
-| Ressourcen        | Max **8 parallele Sandboxes**, je **4 GB RAM / 2 vCPUs**, konfigurierbar. Beim Überschreiten wird die am längsten inaktive Sandbox vorzeitig gestoppt (LRU). (Host: M5 Pro, 18 Kerne, 48 GB.) |
-| PWA-Libraries     | Excel: **SheetJS (`xlsx`)**; Charts: **Recharts**. |
-| Auth              | Lokale Accounts: Username + Passwort, Hash via `Bun.password` (argon2id) in SQLite, httpOnly-Session-Cookie (**3 Tage, rollierend**). Registrierung auf der Login-Seite, geschützt durch **Invite-Code** aus der Server-Config. Keine externen Identity-Dienste. |
-| Rechte            | Fremde Projekte: **lesend** (Liste, Historie, Preview). Anlegen, Löschen und Chat nur für den Owner. |
-| Zugriff           | **LAN**: Server bindet `0.0.0.0` und liefert das gebaute Web-UI selbst aus (`http://<mac>.local:4000`); Preview-iframes verwenden den Hostnamen des Aufrufers. |
+| Agent-Anbindung    | **Agent-SDK-Runner** in der VM: strukturierte Events (Text, Tool-Use, Turn-Ende) per WebSocket zum Server; Browser erhält sie via GraphQL Subscriptions (SSE) — GraphQL-only bleibt gewahrt.                                                                                                                                           |
+| Autonomie          | Claude Code läuft mit **bypassPermissions** (volle Autonomie); die Isolation leistet die MicroVM.                                                                                                                                                                                                                                      |
+| Credentials        | **Proxy über Host**: die VM erhält keine Claude-Credentials. `ANTHROPIC_BASE_URL` zeigt auf den macvibes-Server, der die Auth-Header injiziert.                                                                                                                                                                                        |
+| Git-Modell         | Lokales **Bare-Repo** `macvibes-apps.git` auf dem Host als primärer Remote (in die VM gemountet). **Ein Orphan-Branch pro Projekt**: `<username>/<slug>` (z. B. `marco/dashboard`), erster Commit = Template-Inhalt. Projektnamen sind pro User eindeutig.                                                                             |
+| GitHub             | Mirror nach GitHub ist auf **Phase C verschoben** (v1: nur lokales Bare-Repo).                                                                                                                                                                                                                                                         |
+| Persistenz         | **Volume pro Projekt** (Workspace, `~/.claude`-Sessiondaten, `node_modules`), bei jedem VM-Start gemountet → Claude-Session überlebt VM-Stopps (`--resume`). Kein Verlass auf VM-Snapshots.                                                                                                                                            |
+| Preview-Routing    | **Port pro Sandbox**: Preview-Port der VM wird auf einen freien Host-Port gemappt, das iframe zeigt direkt darauf (HMR-WebSocket funktioniert nativ).                                                                                                                                                                                  |
+| Preview-Start      | `templates.json` liefert pro Template `devCommand` und `previewPort`; wird beim Anlegen ins Projekt übernommen.                                                                                                                                                                                                                        |
+| Ressourcen         | Max **8 parallele Sandboxes**, je **4 GB RAM / 2 vCPUs**, konfigurierbar. Beim Überschreiten wird die am längsten inaktive Sandbox vorzeitig gestoppt (LRU). (Host: M5 Pro, 18 Kerne, 48 GB.)                                                                                                                                          |
+| PWA-Libraries      | Excel: **SheetJS (`xlsx`)**; Charts: **Recharts**.                                                                                                                                                                                                                                                                                     |
+| Auth               | Lokale Accounts: Username + Passwort, Hash via `Bun.password` (argon2id) in SQLite, httpOnly-Session-Cookie (**3 Tage, rollierend**). Registrierung auf der Login-Seite, geschützt durch **Invite-Code** aus der Server-Config. Keine externen Identity-Dienste.                                                                       |
+| Rechte             | Fremde Projekte: **lesend** (Liste, Historie, Preview). Anlegen, Löschen und Chat nur für den Owner.                                                                                                                                                                                                                                   |
+| Zugriff            | **LAN**: Server bindet `0.0.0.0` und liefert das gebaute Web-UI selbst aus (`http://<mac>.local:4000`); Preview-iframes verwenden den Hostnamen des Aufrufers.                                                                                                                                                                         |
 
 ## 4. Funktionale Anforderungen
 
@@ -298,8 +298,12 @@ Einfacher lokaler Login; Projekte sind Usern zugeordnet.
 
 ## 6. Offene Punkte
 
-- [ ] Basis-Image & Template-Baselines: exakter Inhalt und Build-Prozess
-      (Bun-Version, Claude-Code-Version, Update-/Rebuild-Strategie).
+- [x] Basis-Image & Template-Baselines: Image `oven/bun` (enthält Bun);
+      `bun run baselines` provisioniert pro Template eine Builder-VM
+      (`bun install` + Claude Code via `bun add -g @anthropic-ai/claude-code`)
+      und friert sie als `macvibes-tpl-<dir>`-Snapshot ein. **Rebuild-Strategie:
+      nach jeder Template-Änderung `bun run baselines` erneut ausführen** — der
+      Provider forkt sonst einen veralteten Snapshot. Details in `CLAUDE.md`.
 
 ## 7. Out of Scope (v1)
 
