@@ -3,7 +3,7 @@ import { useCookies } from '@whatwg-node/server-plugin-cookies';
 import { loadConfig } from './config';
 import { createDb } from './db/client';
 import { runMigrations } from './db/migrate';
-import { createAnthropicProxy, PROXY_TOKEN_HEADER } from './http/anthropicProxy';
+import { createAnthropicProxy } from './http/anthropicProxy';
 import { readSessionToken } from './http/cookies';
 import { serveWebUi } from './http/staticFiles';
 import { existsSync } from 'node:fs';
@@ -12,8 +12,8 @@ import { ClaudeAgentRunner } from './agent/claudeRunner';
 import { FakeAgentRunner } from './agent/fakeRunner';
 import { msbExecSpawner } from './agent/msbExecSpawner';
 import { VmAgentRunner } from './agent/vmRunner';
+import { buildVmAgentEnv } from './agent/vmAgentEnv';
 import {
-  AGENT_CONFIG_GUEST_DIR,
   MicrosandboxSandboxProvider,
   microsandboxSandboxName,
   msbAvailable,
@@ -107,18 +107,7 @@ function selectAgentRunner() {
     console.log('Agent-Backend: claude in VM (msb exec, Credential-Proxy)');
     return new VmAgentRunner({
       sandboxNameFor: microsandboxSandboxName,
-      agentEnv: () => ({
-        // host.microsandbox.internal löst in der VM auf den Host auf (allow@172.16.0.0/12).
-        ANTHROPIC_BASE_URL: `http://host.microsandbox.internal:${config.port}/anthropic`,
-        // Proxy-Secret als Custom-Header — der Host-Proxy prüft es und ersetzt die Auth.
-        ANTHROPIC_CUSTOM_HEADERS: `${PROXY_TOKEN_HEADER}: ${proxyToken}`,
-        // Claude Code erwartet einen Token — der echte wird im Proxy ersetzt.
-        ANTHROPIC_API_KEY: 'macvibes-proxy',
-        // Erlaubt bypassPermissions als root in der VM (wir sind ja isoliert).
-        IS_SANDBOX: '1',
-        // Sessiondaten auf das persistente Volume — überlebt VM-Neustart (R9, --resume).
-        CLAUDE_CONFIG_DIR: AGENT_CONFIG_GUEST_DIR,
-      }),
+      agentEnv: () => buildVmAgentEnv({ serverPort: config.port, proxyToken }),
       spawn: msbExecSpawner,
       guestWorkdir: '/work',
     });
