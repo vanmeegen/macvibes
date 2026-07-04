@@ -15,6 +15,15 @@ export function workspaceDirFor(macvibesHome: string, projectId: string): string
 }
 
 /**
+ * Persistente Agent-Config (Claude-Code-Sessiondaten) pro Projekt, getrennt
+ * vom git-Workspace — sonst würde der Auto-Commit die Sessiondateien einchecken.
+ * Wird in die VM gemountet, damit `--resume` einen VM-Neustart übersteht (R9).
+ */
+export function agentConfigDirFor(macvibesHome: string, projectId: string): string {
+  return join(macvibesHome, 'volumes', projectId, 'agent-config');
+}
+
+/**
  * Klont den Projekt-Branch beim ersten Start in das Projekt-Volume;
  * ein bestehendes Volume wird unverändert wiederverwendet (R9).
  */

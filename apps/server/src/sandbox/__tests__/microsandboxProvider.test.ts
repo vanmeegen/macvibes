@@ -14,7 +14,11 @@ import {
 } from '../../services/__tests__/testUtils';
 import { createProjectBranch, ensureBareRepo } from '../../services/gitService';
 import { workspaceDirFor } from '../../services/workspaceService';
-import { MicrosandboxSandboxProvider, msbAvailable } from '../microsandboxProvider';
+import {
+  AGENT_CONFIG_GUEST_DIR,
+  MicrosandboxSandboxProvider,
+  msbAvailable,
+} from '../microsandboxProvider';
 import { runMsb } from '../msb';
 import type { SandboxHandle } from '../provider';
 
@@ -121,6 +125,68 @@ describe.skipIf(!available)('MicrosandboxSandboxProvider (R7/R9, echte MicroVM)'
       expect(reachable).toBe(false);
     },
     { timeout: 120_000 },
+  );
+});
+
+describe.skipIf(!available)('Agent-Config-Persistenz (R9, --resume über VM-Neustart)', () => {
+  test(
+    'CLAUDE_CONFIG_DIR liegt auf einem Volume, das einen VM-Neustart übersteht',
+    async () => {
+      const home = await createTempDir('macvibes-home-');
+      tempDirs.push(home);
+      const templates = await createTemplatesFixture();
+      tempDirs.push(templates);
+      const bare = join(home, 'macvibes-apps.git');
+      await ensureBareRepo(bare);
+      await createProjectBranch(bare, 'marco/cfg', join(templates, 'pwa'));
+
+      const provider = new MicrosandboxSandboxProvider({
+        macvibesHome: home,
+        bareRepoPath: bare,
+        image: 'oven/bun',
+        cpus: 1,
+        memoryMib: 512,
+      });
+      const ctx = {
+        projectId: 'cfg',
+        branchName: 'marco/cfg',
+        workspaceDir: workspaceDirFor(home, 'cfg'),
+        templateDir: 'pwa',
+        devCommand: 'bun server.ts',
+        previewPort: 5199,
+      };
+
+      // 1. Start: Marker in die Agent-Config schreiben (simuliert eine Session-Datei).
+      const h1 = await provider.start(ctx);
+      activeHandle = h1;
+      await runMsb([
+        'exec',
+        'macvibes-cfg',
+        '--',
+        'sh',
+        '-c',
+        `echo sess-123 > ${AGENT_CONFIG_GUEST_DIR}/session-marker`,
+      ]);
+      await h1.stop();
+      activeHandle = null;
+
+      // 2. Neustart: frische VM (Fork aus Baseline) — der Marker muss noch da sein.
+      const h2 = await provider.start(ctx);
+      activeHandle = h2;
+      const marker = await runMsb([
+        'exec',
+        'macvibes-cfg',
+        '--',
+        'sh',
+        '-c',
+        `cat ${AGENT_CONFIG_GUEST_DIR}/session-marker 2>/dev/null || echo FEHLT`,
+      ]);
+      expect(marker.trim()).toBe('sess-123');
+
+      await h2.stop();
+      activeHandle = null;
+    },
+    { timeout: 180_000 },
   );
 });
 

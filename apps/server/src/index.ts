@@ -13,6 +13,7 @@ import { FakeAgentRunner } from './agent/fakeRunner';
 import { msbExecSpawner } from './agent/msbExecSpawner';
 import { VmAgentRunner } from './agent/vmRunner';
 import {
+  AGENT_CONFIG_GUEST_DIR,
   MicrosandboxSandboxProvider,
   microsandboxSandboxName,
   msbAvailable,
@@ -115,6 +116,8 @@ function selectAgentRunner() {
         ANTHROPIC_API_KEY: 'macvibes-proxy',
         // Erlaubt bypassPermissions als root in der VM (wir sind ja isoliert).
         IS_SANDBOX: '1',
+        // Sessiondaten auf das persistente Volume — überlebt VM-Neustart (R9, --resume).
+        CLAUDE_CONFIG_DIR: AGENT_CONFIG_GUEST_DIR,
       }),
       spawn: msbExecSpawner,
       guestWorkdir: '/work',

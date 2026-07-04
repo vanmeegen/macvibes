@@ -1,4 +1,5 @@
-import { ensureWorkspace } from '../services/workspaceService';
+import { mkdirSync } from 'node:fs';
+import { agentConfigDirFor, ensureWorkspace } from '../services/workspaceService';
 import { baselineExists, baselineSnapshotName } from './baselineService';
 import { httpProbe } from './httpProbe';
 import { msbExec, runMsb } from './msb';
@@ -26,6 +27,12 @@ export function microsandboxSandboxName(projectId: string): string {
 const GUEST_WORKDIR = '/work';
 
 /**
+ * Mountpunkt der persistenten Agent-Config in der VM. Claude Code schreibt
+ * dorthin (CLAUDE_CONFIG_DIR), damit die Session einen VM-Neustart übersteht (R9).
+ */
+export const AGENT_CONFIG_GUEST_DIR = '/agent-config';
+
+/**
  * Echter Sandbox-Provider auf microsandbox-MicroVMs (libkrun).
  *
  * Architektur (Watchdog-fähig): Die VM läuft als **stabiler Halter**
@@ -47,6 +54,9 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       projectId: context.projectId,
       branchName: context.branchName,
     });
+    // Persistente Agent-Config (Claude-Sessiondaten) — überlebt VM-Neustarts (R9).
+    const agentConfigDir = agentConfigDirFor(this.config.macvibesHome, context.projectId);
+    mkdirSync(agentConfigDir, { recursive: true });
 
     const hostPort = await findFreePort(context.previewPort);
     const name = microsandboxSandboxName(context.projectId);
@@ -72,6 +82,8 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       name,
       '-v',
       `${workspaceDir}:${GUEST_WORKDIR}`,
+      '-v',
+      `${agentConfigDir}:${AGENT_CONFIG_GUEST_DIR}`,
       '-w',
       GUEST_WORKDIR,
       // 0.0.0.0: Preview ist im LAN erreichbar (R7/NFR).
