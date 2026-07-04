@@ -25,17 +25,21 @@ export async function removeDir(path: string): Promise<void> {
   await rm(path, { recursive: true, force: true });
 }
 
-/** Legt einen Templates-Ordner mit gültiger templates.json und einem pwa-Template an. */
-export async function createTemplatesFixture(): Promise<string> {
+/**
+ * Legt einen Templates-Ordner mit gültiger templates.json und einem Template an.
+ * `templateDir` ist konfigurierbar, damit Baseline-Tests einen isolierten Namen
+ * nutzen können und NIE die Produktions-Snapshots (macvibes-tpl-pwa) überschreiben.
+ */
+export async function createTemplatesFixture(templateDir = 'pwa'): Promise<string> {
   const dir = await createTempDir('macvibes-templates-');
-  await mkdir(join(dir, 'pwa'));
-  await writeFile(join(dir, 'pwa', 'index.html'), '<!doctype html><title>PWA</title>');
-  await writeFile(join(dir, 'pwa', 'package.json'), JSON.stringify({ name: 'app' }));
+  await mkdir(join(dir, templateDir));
+  await writeFile(join(dir, templateDir, 'index.html'), '<!doctype html><title>PWA</title>');
+  await writeFile(join(dir, templateDir, 'package.json'), JSON.stringify({ name: 'app' }));
   // Mini-Dev-Server für Preview-Tests: respektiert die PORT-Env (Template-Kontrakt).
   // Zählt bei jedem Start eine Zeile in .starts hoch — so lässt sich ein echter
   // Watchdog-Neustart (neue Instanz) vom bloßen Weiterlaufen unterscheiden.
   await writeFile(
-    join(dir, 'pwa', 'server.ts'),
+    join(dir, templateDir, 'server.ts'),
     "import { appendFileSync } from 'node:fs';\n" +
       "appendFileSync('.starts', 'x\\n');\n" +
       "Bun.serve({ port: Number(process.env.PORT ?? 5199), fetch: () => new Response('hallo-preview') });\n",
@@ -47,7 +51,7 @@ export async function createTemplatesFixture(): Promise<string> {
         {
           name: 'Client-PWA',
           description: 'PWA ohne Server',
-          dir: 'pwa',
+          dir: templateDir,
           devCommand: 'bun run dev',
           previewPort: 5173,
         },

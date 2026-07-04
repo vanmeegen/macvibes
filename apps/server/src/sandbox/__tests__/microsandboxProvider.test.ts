@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { baselineExists, buildTemplateBaseline } from '../baselineService';
+import {
+  baselineExists,
+  baselineSnapshotName,
+  buildTemplateBaseline,
+  removeSnapshot,
+} from '../baselineService';
 import {
   createTempDir,
   createTemplatesFixture,
@@ -205,49 +210,54 @@ describe.skipIf(!available)('Template-Baselines (B5b, Snapshot-Fork)', () => {
   test(
     'Projekt startet aus der Baseline: node_modules kommt als Symlink aus dem Snapshot',
     async () => {
+      // ISOLIERTER Template-Name — NIE 'pwa'/'fullstack', sonst würde der Test
+      // die Produktions-Baseline macvibes-tpl-pwa überschreiben (leeres node_modules).
+      const templateDir = `bltest-${crypto.randomUUID().slice(0, 8)}`;
+      const snapshotName = baselineSnapshotName(templateDir);
+
       const home = await createTempDir('macvibes-home-');
       tempDirs.push(home);
-      const templates = await createTemplatesFixture();
+      const templates = await createTemplatesFixture(templateDir);
       tempDirs.push(templates);
       const bare = join(home, 'macvibes-apps.git');
       await ensureBareRepo(bare);
-      await createProjectBranch(bare, 'marco/baseline-projekt', join(templates, 'pwa'));
+      await createProjectBranch(bare, 'marco/baseline-projekt', join(templates, templateDir));
 
-      // Baseline für das Fixture-Template backen (bun install in der VM).
-      await buildTemplateBaseline({
-        templatesDir: templates,
-        templateDir: 'pwa',
-        image: 'oven/bun',
-      });
-      expect(await baselineExists('pwa')).toBe(true);
+      try {
+        // Baseline für das isolierte Fixture-Template backen (bun install in der VM).
+        await buildTemplateBaseline({ templatesDir: templates, templateDir, image: 'oven/bun' });
+        expect(await baselineExists(templateDir)).toBe(true);
 
-      const provider = new MicrosandboxSandboxProvider({
-        macvibesHome: home,
-        bareRepoPath: bare,
-        image: 'oven/bun',
-        cpus: 1,
-        memoryMib: 512,
-      });
-      const workspaceDir = workspaceDirFor(home, 'baseline-projekt');
-      const handle = await provider.start({
-        projectId: 'baseline-projekt',
-        branchName: 'marco/baseline-projekt',
-        workspaceDir,
-        templateDir: 'pwa',
-        devCommand: 'bun server.ts',
-        previewPort: 5199,
-      });
-      activeHandle = handle;
+        const provider = new MicrosandboxSandboxProvider({
+          macvibesHome: home,
+          bareRepoPath: bare,
+          image: 'oven/bun',
+          cpus: 1,
+          memoryMib: 512,
+        });
+        const workspaceDir = workspaceDirFor(home, 'baseline-projekt');
+        const handle = await provider.start({
+          projectId: 'baseline-projekt',
+          branchName: 'marco/baseline-projekt',
+          workspaceDir,
+          templateDir,
+          devCommand: 'bun server.ts',
+          previewPort: 5199,
+        });
+        activeHandle = handle;
 
-      const body = await waitForHttp(`http://localhost:${handle.previewHostPort}/`);
-      expect(body).toBe('hallo-preview');
+        const body = await waitForHttp(`http://localhost:${handle.previewHostPort}/`);
+        expect(body).toBe('hallo-preview');
 
-      // node_modules ist ein Symlink in den Snapshot — kein Install zur Laufzeit.
-      const stat = lstatSync(join(workspaceDir, 'node_modules'), { throwIfNoEntry: false });
-      expect(stat?.isSymbolicLink()).toBe(true);
+        // node_modules ist ein Symlink in den Snapshot — kein Install zur Laufzeit.
+        const stat = lstatSync(join(workspaceDir, 'node_modules'), { throwIfNoEntry: false });
+        expect(stat?.isSymbolicLink()).toBe(true);
 
-      await handle.stop();
-      activeHandle = null;
+        await handle.stop();
+        activeHandle = null;
+      } finally {
+        await removeSnapshot(snapshotName);
+      }
     },
     { timeout: 180_000 },
   );

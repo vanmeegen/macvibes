@@ -13,9 +13,10 @@ export function baselineSnapshotName(templateDir: string): string {
   return `macvibes-tpl-${templateDir}`;
 }
 
-export async function baselineExists(templateDir: string): Promise<boolean> {
+/** Existiert ein Snapshot mit diesem Namen? */
+export async function snapshotExists(name: string): Promise<boolean> {
   try {
-    await runMsb(['snapshot', 'inspect', baselineSnapshotName(templateDir)]);
+    await runMsb(['snapshot', 'inspect', name]);
     return true;
   } catch (error) {
     if (error instanceof MicrosandboxError) return false;
@@ -23,15 +24,34 @@ export async function baselineExists(templateDir: string): Promise<boolean> {
   }
 }
 
+export async function baselineExists(templateDir: string): Promise<boolean> {
+  return snapshotExists(baselineSnapshotName(templateDir));
+}
+
+/** Entfernt einen Snapshot (für Tests — Produktions-Baselines nicht anfassen). */
+export async function removeSnapshot(name: string): Promise<void> {
+  try {
+    await runMsb(['snapshot', 'remove', name]);
+  } catch (error) {
+    if (!(error instanceof MicrosandboxError)) throw error;
+  }
+}
+
 export interface BuildBaselineOptions {
   templatesDir: string;
   templateDir: string;
   image: string;
+  /**
+   * Zielname des Snapshots. Default: `macvibes-tpl-<templateDir>`.
+   * Tests MÜSSEN einen isolierten Namen setzen, sonst überschreiben sie die
+   * echte Produktions-Baseline (die dann leere node_modules hätte).
+   */
+  snapshotName?: string;
 }
 
 /** Baut/erneuert den Baseline-Snapshot eines Templates (bun install in der VM). */
 export async function buildTemplateBaseline(options: BuildBaselineOptions): Promise<void> {
-  const snapshotName = baselineSnapshotName(options.templateDir);
+  const snapshotName = options.snapshotName ?? baselineSnapshotName(options.templateDir);
   const templatePath = `${options.templatesDir}/${options.templateDir}`;
 
   // Builder-VM: Template read-only mounten, VM-lokal kopieren und installieren.
