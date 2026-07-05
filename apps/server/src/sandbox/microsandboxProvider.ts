@@ -157,12 +157,18 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       probe: () => httpProbe(`http://localhost:${hostPort}/`),
       onStatusChange: (status) => console.log(`Preview ${context.projectId}: ${status}`),
     });
-    supervisor.start();
+    // GESTAFFELT starten: werden die Dev-Server-exec-Session und der erste
+    // claude-exec (Prompt direkt nach dem Öffnen) GLEICHZEITIG etabliert,
+    // verliert claudes Session in microsandbox deterministisch ihren Output
+    // (Session-Etablierungs-Race; erster Turn wirkt "stumm"). 1,5s Versatz
+    // lässt claudes Session zuerst stehen; die Preview braucht ohnehin Sekunden.
+    const supervisorDelay = setTimeout(() => supervisor.start(), 1_500);
 
     return {
       previewHostPort: hostPort,
       previewStatus: (): PreviewStatus => supervisor.getStatus(),
       stop: async () => {
+        clearTimeout(supervisorDelay);
         await supervisor.stop();
         try {
           await runMsb(['stop', name]);
