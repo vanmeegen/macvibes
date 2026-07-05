@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { AGENT_MODEL } from '../../agent/agentModel';
 import { FakeAgentRunner } from '../../agent/fakeRunner';
+import type { AgentEvent } from '../../agent/events';
 import type { AgentRunner, TurnHandle, TurnOptions } from '../../agent/runner';
 import type { Db } from '../../db/client';
 import { projects, type UserRow } from '../../db/schema';
@@ -119,6 +120,83 @@ describe('Watchdog: stiller Hänger wird als Fehler sichtbar', () => {
     await waitFor(() => !service.isTurnActive(projectId), 3000);
     const err = (await service.listMessages(projectId)).find((m) => m.role === 'error');
     expect(err?.content).toContain('ECONNREFUSED');
+  });
+});
+
+describe('Auto-Retry: stummer Agent-Start wird einmal neu versucht (msb-Flakiness)', () => {
+  test('Versuch 1 stirbt ohne Events, Versuch 2 liefert — Turn wird trotzdem fertig', async () => {
+    let calls = 0;
+    const flakyRunner: AgentRunner = {
+      startTurn(): TurnHandle {
+        calls += 1;
+        if (calls === 1) {
+          // msb-Flake: Prozess stirbt sofort, ohne je ein Event zu liefern.
+          const events = (async function* (): AsyncGenerator<AgentEvent> {
+            yield { type: 'turn-aborted' };
+          })();
+          return { events, abort: () => {} };
+        }
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          yield { type: 'text-delta', text: 'Klappt jetzt.' };
+          yield { type: 'turn-completed', sessionId: 's2' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { service, projectId } = await setup(flakyRunner, 500, 40);
+    await service.sendMessage(sendInput(projectId, 'Bau'));
+    await waitFor(() => !service.isTurnActive(projectId));
+
+    expect(calls).toBe(2);
+    const messages = await service.listMessages(projectId);
+    expect(messages.some((m) => m.role === 'assistant' && m.content === 'Klappt jetzt.')).toBe(
+      true,
+    );
+    // Der Retry ist transparent (Systemzeile), aber KEIN error.
+    expect(messages.some((m) => m.role === 'system' && /zweiter versuch/i.test(m.content))).toBe(
+      true,
+    );
+  });
+
+  test('auch der Watchdog-Fall (gar keine Reaktion) wird einmal neu versucht', async () => {
+    let calls = 0;
+    const flakyRunner: AgentRunner = {
+      startTurn(): TurnHandle {
+        calls += 1;
+        if (calls === 1) {
+          const events: AsyncIterable<never> = {
+            [Symbol.asyncIterator]: () => ({ next: () => new Promise<never>(() => {}) }),
+          };
+          return { events, abort: () => {} };
+        }
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          yield { type: 'turn-completed', sessionId: 's2' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { service, projectId } = await setup(flakyRunner, 40, 40);
+    await service.sendMessage(sendInput(projectId, 'x'));
+    await waitFor(() => !service.isTurnActive(projectId), 3000);
+    expect(calls).toBe(2);
+  });
+
+  test('kein Retry, wenn der Agent schon sinnvoll gearbeitet hat (echter Abbruch)', async () => {
+    let calls = 0;
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        calls += 1;
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          yield { type: 'text-delta', text: 'Ich fange an…' };
+          yield { type: 'turn-aborted' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { service, projectId } = await setup(runner, 500, 40);
+    await service.sendMessage(sendInput(projectId, 'x'));
+    await waitFor(() => !service.isTurnActive(projectId));
+    expect(calls).toBe(1);
   });
 });
 

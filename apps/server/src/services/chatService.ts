@@ -201,6 +201,43 @@ export class ChatService {
 
   private async runTurn(projectId: string, turn: QueuedTurn): Promise<void> {
     const state = this.state(projectId);
+    // msb exec ist gelegentlich flaky: die Exec-Session stirbt oder liefert nie
+    // Output. Liefert ein Versuch KEIN einziges sinnvolles Event, wird er genau
+    // einmal wiederholt (transparent per Systemzeile) — erst dann Fehler.
+    const maxAttempts = 2;
+    let lastRow: ChatMessageRow | null = null;
+    let completed = false;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const result = await this.runAttempt(projectId, turn, attempt === maxAttempts);
+      if (result.lastRow !== null) lastRow = result.lastRow;
+      completed = result.completed;
+      if (result.completed || result.sawMeaningful) break;
+      if (attempt < maxAttempts) {
+        lastRow = await this.insertMessage(
+          projectId,
+          turn.turnId,
+          'system',
+          'Der Agent-Prozess hat nicht reagiert — zweiter Versuch …',
+        );
+      }
+    }
+
+    // Turn-Ende IMMER signalisieren (turnActive = ob noch etwas in der Queue ist),
+    // sonst bleibt der Client auf "Agent arbeitet" hängen (Regression 2026-07-04).
+    if (lastRow !== null) {
+      this.publish(projectId, lastRow, state.queue.length > 0);
+    }
+    if (completed) {
+      await this.hooks.onTurnEnd?.(projectId, turn.prompt);
+    }
+  }
+
+  private async runAttempt(
+    projectId: string,
+    turn: QueuedTurn,
+    isLastAttempt: boolean,
+  ): Promise<{ completed: boolean; sawMeaningful: boolean; lastRow: ChatMessageRow | null }> {
+    const state = this.state(projectId);
     const projectRow = (
       await this.db.select().from(projects).where(eq(projects.id, projectId)).limit(1)
     )[0];
@@ -224,6 +261,9 @@ export class ChatService {
     // auch wenn der Turn mit einem Tool-Call endet (sonst hängt "Agent arbeitet").
     let lastRow: ChatMessageRow | null = null;
     let completed = false;
+    // Kam irgendein sinnvolles Lebenszeichen (alles außer error/turn-aborted)?
+    // Wenn nicht, war der Start ein msb-Flake und darf wiederholt werden.
+    let sawMeaningful = false;
 
     const insert = async (
       role: ChatMessageRow['role'],
@@ -284,6 +324,9 @@ export class ChatService {
     };
     const handleEvent = async (event: AgentEvent): Promise<void> => {
       this.hooks.onAgentActivity?.(projectId);
+      if (event.type !== 'error' && event.type !== 'turn-aborted') {
+        sawMeaningful = true;
+      }
       switch (event.type) {
         case 'text-delta':
           assistantRow = await appendDelta(assistantRow, 'assistant', event.text);
@@ -325,7 +368,11 @@ export class ChatService {
           await insert('error', event.message);
           break;
         case 'turn-aborted':
-          await insert('system', 'Turn abgebrochen');
+          // Stiller Flake-Abbruch (nichts Sinnvolles passiert, Retry folgt):
+          // keine verwirrende „Turn abgebrochen"-Zeile posten.
+          if (sawMeaningful || isLastAttempt) {
+            await insert('system', 'Turn abgebrochen');
+          }
           break;
         case 'turn-completed':
           completed = true;
@@ -343,19 +390,21 @@ export class ChatService {
       for (;;) {
         const step = await race(this.idleTimeoutMs);
         if (step === 'timeout') {
-          // Stiller Hänger: abbrechen und als Fehler SICHTBAR machen (statt ewig
-          // „Agent arbeitet"). Danach kurz nachlesen, ob noch ein Detail kommt.
+          // Stiller Hänger: abbrechen. Beim letzten Versuch als Fehler SICHTBAR
+          // machen (statt ewig „Agent arbeitet"); sonst folgt gleich der Retry.
           handle.abort();
           const detail = await drainForErrorDetail();
-          const secs = Math.round(this.idleTimeoutMs / 1000);
-          await insert(
-            'error',
-            `Der Agent hat ${secs}s lang nicht reagiert und wurde abgebrochen.` +
-              (detail
-                ? `\n\n${detail}`
-                : ' Kein weiterer Fehlertext verfügbar — mögliche Ursache: die Claude-API ' +
-                  'antwortet nicht (Netz-/Rate-Limit-Problem).'),
-          );
+          if (sawMeaningful || isLastAttempt) {
+            const secs = Math.round(this.idleTimeoutMs / 1000);
+            await insert(
+              'error',
+              `Der Agent hat ${secs}s lang nicht reagiert und wurde abgebrochen.` +
+                (detail
+                  ? `\n\n${detail}`
+                  : ' Kein weiterer Fehlertext verfügbar — mögliche Ursache: die Claude-API ' +
+                    'antwortet nicht (Netz-/Rate-Limit-Problem).'),
+            );
+          }
           break;
         }
         pending = iterator.next();
@@ -369,14 +418,6 @@ export class ChatService {
       state.currentHandle = null;
     }
 
-    // Turn-Ende IMMER signalisieren (turnActive = ob noch etwas in der Queue ist),
-    // sonst bleibt der Client auf "Agent arbeitet" hängen (Regression 2026-07-04).
-    if (lastRow !== null) {
-      this.publish(projectId, lastRow, state.queue.length > 0);
-    }
-
-    if (completed) {
-      await this.hooks.onTurnEnd?.(projectId, turn.prompt);
-    }
+    return { completed, sawMeaningful, lastRow };
   }
 }
