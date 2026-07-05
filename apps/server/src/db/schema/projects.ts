@@ -22,6 +22,12 @@ export const projects = sqliteTable(
       .$defaultFn(() => new Date()),
     /** Claude-Session des Agenten — für --resume nach Sandbox-Neustart (R9). */
     claudeSessionId: text('claude_session_id'),
+    /**
+     * Modell, mit dem die Session erstellt wurde. Wird es geändert, darf die
+     * Session NICHT fortgesetzt werden (--resume + anderes --model hängt) —
+     * bei Abweichung/NULL startet der Turn frisch.
+     */
+    claudeSessionModel: text('claude_session_model'),
   },
   (table) => ({
     // Projektnamen müssen nur pro User eindeutig sein.

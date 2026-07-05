@@ -15,6 +15,13 @@
       "when": 1783106868805,
       "tag": "0001_chat",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1783277027115,
+      "tag": "0002_fat_bloodstorm",
+      "breakpoints": true
     }
   ]
 }

@@ -1,0 +1,1 @@
+ALTER TABLE `projects` ADD `claude_session_model` text;

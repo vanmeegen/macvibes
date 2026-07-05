@@ -1,3 +1,4 @@
+import { AGENT_MODEL } from './agentModel';
 import { parseStreamJsonLine } from './claudeStreamJson';
 import type { AgentEvent } from './events';
 import type { AgentRunner, TurnHandle, TurnOptions } from './runner';
@@ -78,7 +79,7 @@ export class VmAgentRunner implements AgentRunner {
       // Opus, wodurch der Live-Denk-Stream (💭) gehaltvoller ist. Der Proxy hebt
       // den adaptiven Thinking-Request ohnehin auf display:"summarized" an.
       '--model',
-      'claude-sonnet-5',
+      AGENT_MODEL,
     ];
     if (options.resumeSessionId !== null) {
       args.push('--resume', options.resumeSessionId);

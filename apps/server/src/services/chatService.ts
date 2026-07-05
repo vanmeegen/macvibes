@@ -1,4 +1,5 @@
 import { asc, eq, sql } from 'drizzle-orm';
+import { AGENT_MODEL } from '../agent/agentModel';
 import type { AgentRunner, TurnHandle } from '../agent/runner';
 import type { Db } from '../db/client';
 import { chatMessages, projects, type ChatMessageRow } from '../db/schema';
@@ -186,11 +187,16 @@ export class ChatService {
       await this.db.select().from(projects).where(eq(projects.id, projectId)).limit(1)
     )[0];
 
+    // Nur fortsetzen, wenn die Session mit dem AKTUELLEN Modell erstellt wurde.
+    // Sonst (anderes/kein Modell) frisch starten — ein --resume über einen
+    // Modellwechsel hinweg bringt Claude Code zum Hängen ("Agent arbeitet" ewig).
+    const canResume =
+      projectRow?.claudeSessionId != null && projectRow.claudeSessionModel === AGENT_MODEL;
     const handle = this.runner.startTurn({
       projectId,
       prompt: turn.prompt,
       workspaceDir: turn.workspaceDir,
-      resumeSessionId: projectRow?.claudeSessionId ?? null,
+      resumeSessionId: canResume ? projectRow.claudeSessionId : null,
     });
     state.currentHandle = handle;
 
@@ -252,9 +258,11 @@ export class ChatService {
             break;
           case 'session':
             // Session-ID früh sichern — überlebt auch einen abgebrochenen Turn (R9).
+            // Modell mitschreiben: ein späterer Modellwechsel darf diese Session
+            // NICHT fortsetzen (--resume + anderes --model hängt).
             await this.db
               .update(projects)
-              .set({ claudeSessionId: event.sessionId })
+              .set({ claudeSessionId: event.sessionId, claudeSessionModel: AGENT_MODEL })
               .where(eq(projects.id, projectId));
             break;
           case 'api-retry':
@@ -277,7 +285,7 @@ export class ChatService {
             if (event.sessionId !== null) {
               await this.db
                 .update(projects)
-                .set({ claudeSessionId: event.sessionId })
+                .set({ claudeSessionId: event.sessionId, claudeSessionModel: AGENT_MODEL })
                 .where(eq(projects.id, projectId));
             }
             break;

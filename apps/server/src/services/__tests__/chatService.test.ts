@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
+import { AGENT_MODEL } from '../../agent/agentModel';
 import { FakeAgentRunner } from '../../agent/fakeRunner';
 import type { AgentRunner, TurnHandle, TurnOptions } from '../../agent/runner';
 import type { Db } from '../../db/client';
@@ -58,6 +59,69 @@ async function setup(runner?: AgentRunner): Promise<TestSetup> {
 function sendInput(projectId: string, text: string) {
   return { projectId, workspaceDir: '/tmp/fake-workspace', resumeSessionId: null, text };
 }
+
+describe('Session-Resume nur bei gleichem Modell (Hänger-Schutz)', () => {
+  /** Runner, der das übergebene resumeSessionId festhält und den Turn sofort beendet. */
+  function capturingRunner(): { runner: AgentRunner; seen: () => string | null } {
+    let captured: string | null = null;
+    const runner: AgentRunner = {
+      startTurn(options: TurnOptions): TurnHandle {
+        captured = options.resumeSessionId;
+        const events = (async function* () {
+          yield { type: 'turn-completed', sessionId: 'neue-session' } as const;
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    return { runner, seen: () => captured };
+  }
+
+  test('setzt das Modell beim Speichern der Session (frische Session)', async () => {
+    const { db, service, projectId } = await setup(capturingRunner().runner);
+    await service.sendMessage(sendInput(projectId, 'Bau'));
+    await waitFor(() => !service.isTurnActive(projectId));
+    const row = (await db.select().from(projects).where(eq(projects.id, projectId)))[0];
+    expect(row?.claudeSessionId).toBe('neue-session');
+    expect(row?.claudeSessionModel).toBe(AGENT_MODEL);
+  });
+
+  test('resumed eine Session mit passendem Modell', async () => {
+    const cap = capturingRunner();
+    const { db, service, projectId } = await setup(cap.runner);
+    await db
+      .update(projects)
+      .set({ claudeSessionId: 'alte-session', claudeSessionModel: AGENT_MODEL })
+      .where(eq(projects.id, projectId));
+    await service.sendMessage(sendInput(projectId, 'Weiter'));
+    await waitFor(() => !service.isTurnActive(projectId));
+    expect(cap.seen()).toBe('alte-session');
+  });
+
+  test('startet frisch, wenn die Session unter einem ANDEREN Modell erstellt wurde', async () => {
+    const cap = capturingRunner();
+    const { db, service, projectId } = await setup(cap.runner);
+    await db
+      .update(projects)
+      .set({ claudeSessionId: 'opus-session', claudeSessionModel: 'claude-opus-4-8' })
+      .where(eq(projects.id, projectId));
+    await service.sendMessage(sendInput(projectId, 'Weiter'));
+    await waitFor(() => !service.isTurnActive(projectId));
+    // Modellwechsel auf bestehender Session hängt — darf NICHT resumed werden.
+    expect(cap.seen()).toBeNull();
+  });
+
+  test('startet frisch, wenn kein Session-Modell hinterlegt ist (Altbestand)', async () => {
+    const cap = capturingRunner();
+    const { db, service, projectId } = await setup(cap.runner);
+    await db
+      .update(projects)
+      .set({ claudeSessionId: 'legacy-session', claudeSessionModel: null })
+      .where(eq(projects.id, projectId));
+    await service.sendMessage(sendInput(projectId, 'Weiter'));
+    await waitFor(() => !service.isTurnActive(projectId));
+    expect(cap.seen()).toBeNull();
+  });
+});
 
 describe('Streaming-Rendering (Tool live, Text/Denk getrennt)', () => {
   test('Tool-Zeile ohne Detail zeigt nur den Namen (live via content_block_start)', async () => {
