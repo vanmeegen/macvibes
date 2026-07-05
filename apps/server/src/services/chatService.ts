@@ -47,6 +47,12 @@ export interface ChatServiceOptions {
    * statt ewig auf „Agent arbeitet" zu stehen.
    */
   agentIdleTimeoutMs?: number | undefined;
+  /**
+   * Kommt nach dem Start GAR KEIN Event in dieser Zeit, ist der Start kaputt
+   * (claudes init-Zeile kommt sonst in 1–3s) — sofort abbrechen/retryen statt
+   * den vollen Idle-Timeout abzuwarten.
+   */
+  agentFirstEventTimeoutMs?: number | undefined;
   /** Nachlauf nach dem Abbruch, um einen späten Fehlertext (stderr) einzusammeln. */
   agentAbortGraceMs?: number | undefined;
 }
@@ -54,6 +60,7 @@ export interface ChatServiceOptions {
 export class ChatService {
   private readonly states = new Map<string, ProjectChatState>();
   private readonly idleTimeoutMs: number;
+  private readonly firstEventTimeoutMs: number;
   private readonly abortGraceMs: number;
 
   constructor(
@@ -63,6 +70,11 @@ export class ChatService {
     options: ChatServiceOptions = {},
   ) {
     this.idleTimeoutMs = options.agentIdleTimeoutMs ?? 180_000;
+    // Nie länger warten als der Idle-Timeout — der Start-Timeout ist die UNTERE Schranke.
+    this.firstEventTimeoutMs = Math.min(
+      options.agentFirstEventTimeoutMs ?? 15_000,
+      this.idleTimeoutMs,
+    );
     this.abortGraceMs = options.agentAbortGraceMs ?? 5_000;
   }
 
@@ -264,6 +276,7 @@ export class ChatService {
     // Kam irgendein sinnvolles Lebenszeichen (alles außer error/turn-aborted)?
     // Wenn nicht, war der Start ein msb-Flake und darf wiederholt werden.
     let sawMeaningful = false;
+    let sawAnyEvent = false;
 
     const insert = async (
       role: ChatMessageRow['role'],
@@ -324,6 +337,7 @@ export class ChatService {
     };
     const handleEvent = async (event: AgentEvent): Promise<void> => {
       this.hooks.onAgentActivity?.(projectId);
+      sawAnyEvent = true;
       if (event.type !== 'error' && event.type !== 'turn-aborted') {
         sawMeaningful = true;
       }
@@ -388,14 +402,17 @@ export class ChatService {
 
     try {
       for (;;) {
-        const step = await race(this.idleTimeoutMs);
+        // Vor dem ersten Event gilt der kurze Start-Timeout (kaputter msb-exec
+        // wird in Sekunden erkannt), danach der großzügige Idle-Timeout.
+        const step = await race(sawAnyEvent ? this.idleTimeoutMs : this.firstEventTimeoutMs);
         if (step === 'timeout') {
           // Stiller Hänger: abbrechen. Beim letzten Versuch als Fehler SICHTBAR
           // machen (statt ewig „Agent arbeitet"); sonst folgt gleich der Retry.
           handle.abort();
           const detail = await drainForErrorDetail();
           if (sawMeaningful || isLastAttempt) {
-            const secs = Math.round(this.idleTimeoutMs / 1000);
+            const usedMs = sawAnyEvent ? this.idleTimeoutMs : this.firstEventTimeoutMs;
+            const secs = Math.round(usedMs / 1000);
             await insert(
               'error',
               `Der Agent hat ${secs}s lang nicht reagiert und wurde abgebrochen.` +

@@ -46,6 +46,7 @@ async function setup(
   runner?: AgentRunner,
   agentIdleTimeoutMs?: number,
   agentAbortGraceMs?: number,
+  agentFirstEventTimeoutMs?: number,
 ): Promise<TestSetup> {
   const db = createTestDb();
   const owner = await createUser(db, 'marco');
@@ -61,7 +62,7 @@ async function setup(
         turnEnds.push(prompt);
       },
     },
-    { agentIdleTimeoutMs, agentAbortGraceMs },
+    { agentIdleTimeoutMs, agentAbortGraceMs, agentFirstEventTimeoutMs },
   );
   return { db, service, projectId, turnEnds, activity };
 }
@@ -120,6 +121,61 @@ describe('Watchdog: stiller Hänger wird als Fehler sichtbar', () => {
     await waitFor(() => !service.isTurnActive(projectId), 3000);
     const err = (await service.listMessages(projectId)).find((m) => m.role === 'error');
     expect(err?.content).toContain('ECONNREFUSED');
+  });
+});
+
+describe('First-Event-Timeout: kaputter Start wird SCHNELL erkannt (nicht erst nach 180s)', () => {
+  test('kein einziges Event nach firstEventTimeout => Abbruch + sofortiger Retry', async () => {
+    let calls = 0;
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        calls += 1;
+        if (calls === 1) {
+          // Erststart liefert NIE etwas (msb-Flake) — muss nach firstEventTimeout sterben,
+          // obwohl der (viel längere) Idle-Timeout noch lange nicht erreicht ist.
+          const events: AsyncIterable<never> = {
+            [Symbol.asyncIterator]: () => ({ next: () => new Promise<never>(() => {}) }),
+          };
+          return { events, abort: () => {} };
+        }
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          yield { type: 'text-delta', text: 'ok' };
+          yield { type: 'turn-completed', sessionId: 's' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    // idle riesig (10s), firstEvent klein (50ms) — der Test bleibt nur schnell,
+    // wenn wirklich der First-Event-Timeout greift.
+    const { service, projectId } = await setup(runner, 10_000, 40, 50);
+    const t0 = Date.now();
+    await service.sendMessage(sendInput(projectId, 'x'));
+    await waitFor(() => !service.isTurnActive(projectId), 5000);
+    expect(Date.now() - t0).toBeLessThan(3000);
+    expect(calls).toBe(2);
+  });
+
+  test('nach dem ersten Event gilt der normale (längere) Idle-Timeout', async () => {
+    // Ein Event kommt sofort, danach Pause LÄNGER als der First-Event-Timeout —
+    // der Turn darf dadurch NICHT abgebrochen werden.
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          yield { type: 'text-delta', text: 'sofort da' };
+          await new Promise((r) => setTimeout(r, 300));
+          yield { type: 'text-delta', text: ' — und fertig' };
+          yield { type: 'turn-completed', sessionId: 's' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { service, projectId } = await setup(runner, 10_000, 40, 50);
+    await service.sendMessage(sendInput(projectId, 'x'));
+    await waitFor(() => !service.isTurnActive(projectId), 5000);
+    const messages = await service.listMessages(projectId);
+    const assistant = messages.find((m) => m.role === 'assistant');
+    expect(assistant?.content).toBe('sofort da — und fertig');
+    expect(messages.some((m) => m.role === 'error')).toBe(false);
   });
 });
 

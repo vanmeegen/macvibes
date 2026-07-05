@@ -138,6 +138,9 @@ const chatService = new ChatService(
     agentIdleTimeoutMs: Bun.env.MACVIBES_AGENT_IDLE_TIMEOUT_MS
       ? Number(Bun.env.MACVIBES_AGENT_IDLE_TIMEOUT_MS)
       : undefined,
+    agentFirstEventTimeoutMs: Bun.env.MACVIBES_AGENT_FIRST_EVENT_TIMEOUT_MS
+      ? Number(Bun.env.MACVIBES_AGENT_FIRST_EVENT_TIMEOUT_MS)
+      : undefined,
   },
 );
 chatServiceRef = chatService;
