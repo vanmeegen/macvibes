@@ -77,6 +77,36 @@ describe('sendMessage (R6)', () => {
     expect(assistant?.content).toContain('Echo: Hallo Welt');
   });
 
+  test('Turn OHNE abschließenden Text (endet mit Tool) meldet trotzdem turnActive=false', async () => {
+    // Regression: sonst bleibt der Client ewig auf "Agent arbeitet".
+    const toolOnlyRunner: AgentRunner = {
+      startTurn(): TurnHandle {
+        const events = (async function* () {
+          yield { type: 'tool-use', name: 'Edit', detail: '' } as const;
+          yield { type: 'block-stop' } as const;
+          yield { type: 'turn-completed', sessionId: 'sess-t' } as const;
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { service, projectId } = await setup(toolOnlyRunner);
+    const payloads: ChatEventPayload[] = [];
+    const subscription = service.subscribe(projectId);
+    const collector = (async () => {
+      for await (const payload of subscription) payloads.push(payload);
+    })();
+
+    await service.sendMessage(sendInput(projectId, 'Ändere die Überschrift'));
+    await waitFor(() => !service.isTurnActive(projectId));
+    // Es muss ein finales Event mit turnActive=false angekommen sein.
+    await waitFor(() => payloads.some((p) => !p.turnActive));
+    await subscription.return?.(undefined);
+    await collector;
+
+    expect(service.isTurnActive(projectId)).toBe(false);
+    expect(payloads[payloads.length - 1]?.turnActive).toBe(false);
+  });
+
   test('veröffentlicht Events an Subscriber; letztes Event meldet turnActive=false', async () => {
     const { service, projectId } = await setup();
     const payloads: ChatEventPayload[] = [];

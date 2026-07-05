@@ -196,7 +196,18 @@ export class ChatService {
 
     let assistantRow: ChatMessageRow | null = null;
     let thinkingRow: ChatMessageRow | null = null;
+    // Zuletzt gesendete Zeile — damit das Turn-Ende IMMER signalisiert werden kann,
+    // auch wenn der Turn mit einem Tool-Call endet (sonst hängt "Agent arbeitet").
+    let lastRow: ChatMessageRow | null = null;
     let completed = false;
+
+    const insert = async (
+      role: ChatMessageRow['role'],
+      content: string,
+    ): Promise<ChatMessageRow> => {
+      lastRow = await this.insertMessage(projectId, turn.turnId, role, content);
+      return lastRow;
+    };
 
     // Streamt ein Delta in die laufende Zeile der jeweiligen Rolle (assistant/thinking).
     const appendDelta = async (
@@ -205,7 +216,7 @@ export class ChatService {
       text: string,
     ): Promise<ChatMessageRow> => {
       if (current === null) {
-        return this.insertMessage(projectId, turn.turnId, role, text);
+        return insert(role, text);
       }
       const updated: ChatMessageRow = { ...current, content: current.content + text };
       await this.db
@@ -213,6 +224,7 @@ export class ChatService {
         .set({ content: updated.content })
         .where(eq(chatMessages.id, updated.id));
       this.publish(projectId, updated, true);
+      lastRow = updated;
       return updated;
     };
 
@@ -231,12 +243,7 @@ export class ChatService {
             // Neuer Tool-Call beginnt: die laufende Text-/Denk-Bubble ist zu Ende.
             assistantRow = null;
             thinkingRow = null;
-            await this.insertMessage(
-              projectId,
-              turn.turnId,
-              'tool',
-              event.detail ? `${event.name}: ${event.detail}` : event.name,
-            );
+            await insert('tool', event.detail ? `${event.name}: ${event.detail}` : event.name);
             break;
           case 'block-stop':
             // Blockgrenze: die nächste Text-/Denk-Sequenz startet eine neue Bubble.
@@ -253,27 +260,19 @@ export class ChatService {
           case 'api-retry':
             // Sichtbar machen (R6) — aber nur einmal pro Turn, kein Retry-Spam.
             if (event.attempt === 1) {
-              await this.insertMessage(
-                projectId,
-                turn.turnId,
+              await insert(
                 'system',
                 `Claude-API-Störung: ${event.message} — automatische Wiederholung läuft (max. ${event.maxRetries} Versuche)`,
               );
             }
             break;
           case 'error':
-            await this.insertMessage(projectId, turn.turnId, 'error', event.message);
+            await insert('error', event.message);
             break;
           case 'turn-aborted':
-            await this.insertMessage(
-              projectId,
-              turn.turnId,
-              'system',
-              'Turn abgebrochen',
-              state.queue.length > 0,
-            );
+            await insert('system', 'Turn abgebrochen');
             break;
-          case 'turn-completed': {
+          case 'turn-completed':
             completed = true;
             if (event.sessionId !== null) {
               await this.db
@@ -281,24 +280,20 @@ export class ChatService {
                 .set({ claudeSessionId: event.sessionId })
                 .where(eq(projects.id, projectId));
             }
-            if (assistantRow !== null) {
-              // Abschluss signalisieren: letzte Assistant-Zeile mit turnActive=false.
-              this.publish(projectId, assistantRow, state.queue.length > 0);
-            }
             break;
-          }
         }
       }
     } catch (error) {
       // Runner-Fehler nie verschlucken — als error-Zeile in die Historie.
-      await this.insertMessage(
-        projectId,
-        turn.turnId,
-        'error',
-        error instanceof Error ? error.message : String(error),
-      );
+      await insert('error', error instanceof Error ? error.message : String(error));
     } finally {
       state.currentHandle = null;
+    }
+
+    // Turn-Ende IMMER signalisieren (turnActive = ob noch etwas in der Queue ist),
+    // sonst bleibt der Client auf "Agent arbeitet" hängen (Regression 2026-07-04).
+    if (lastRow !== null) {
+      this.publish(projectId, lastRow, state.queue.length > 0);
     }
 
     if (completed) {
