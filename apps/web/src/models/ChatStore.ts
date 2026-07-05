@@ -33,6 +33,12 @@ const STOP_TURN_MUTATION = /* GraphQL */ `
   }
 `;
 
+const TURN_ACTIVE_QUERY = /* GraphQL */ `
+  query TurnActive($projectId: ID!) {
+    turnActive(projectId: $projectId)
+  }
+`;
+
 const CHAT_EVENTS_SUBSCRIPTION = (projectId: string): string => /* GraphQL */ `
   subscription {
     chatEvents(projectId: ${JSON.stringify(projectId)}) {
@@ -70,13 +76,33 @@ export class ChatStore {
   optimisticCounter = 0;
   /** SSE-Verbindung — bewusst nicht observable. */
   eventSource: EventSource | null = null;
+  /** Reconcile-Timer gegen verpasste Turn-Ende-Events — nicht observable. */
+  reconcileTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
-    makeAutoObservable(this, { eventSource: false }, { autoBind: true });
+    makeAutoObservable(this, { eventSource: false, reconcileTimer: false }, { autoBind: true });
   }
 
   setDraft(value: string): void {
     this.draft = value;
+  }
+
+  /**
+   * Sicherheitsnetz: fragt den Server nach dem echten Turn-Status. Reißt die
+   * SSE-Verbindung ab und geht das finale turnActive=false verloren, würde die
+   * UI sonst auf „Agent arbeitet" hängen bleiben.
+   */
+  async reconcileTurnActive(): Promise<void> {
+    const projectId = this.projectId;
+    if (projectId === null || !this.turnActive) return;
+    try {
+      const data = await gqlRequest<{ turnActive: boolean }>(TURN_ACTIVE_QUERY, { projectId });
+      runInAction(() => {
+        if (!data.turnActive) this.turnActive = false;
+      });
+    } catch (err) {
+      console.error('ChatStore.reconcileTurnActive fehlgeschlagen', err);
+    }
   }
 
   /** Upsert per Message-ID — Streaming-Deltas ersetzen die bestehende Zeile. */
@@ -143,11 +169,18 @@ export class ChatStore {
       console.error('Chat-Subscription unterbrochen', err);
     };
     this.eventSource = eventSource;
+
+    // Sicherheitsnetz: regelmäßig mit dem echten Server-Status abgleichen.
+    this.reconcileTimer = setInterval(() => void this.reconcileTurnActive(), 5000);
   }
 
   disconnect(): void {
     this.eventSource?.close();
     this.eventSource = null;
+    if (this.reconcileTimer !== null) {
+      clearInterval(this.reconcileTimer);
+      this.reconcileTimer = null;
+    }
     this.projectId = null;
   }
 

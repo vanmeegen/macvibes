@@ -151,6 +151,30 @@ describe('ChatStore', () => {
     });
   });
 
+  describe('reconcile — Sicherheitsnetz gegen verpasstes Turn-Ende', () => {
+    it('setzt turnActive auf false, wenn der Server keinen aktiven Turn meldet', async () => {
+      gqlRequestMock.mockResolvedValue({ turnActive: false });
+      const store = new ChatStore();
+      store.projectId = 'p1';
+      store.turnActive = true; // SSE-Endevent verpasst
+
+      await store.reconcileTurnActive();
+
+      expect(store.turnActive).toBe(false);
+    });
+
+    it('lässt turnActive true, solange der Server den Turn noch als aktiv meldet', async () => {
+      gqlRequestMock.mockResolvedValue({ turnActive: true });
+      const store = new ChatStore();
+      store.projectId = 'p1';
+      store.turnActive = true;
+
+      await store.reconcileTurnActive();
+
+      expect(store.turnActive).toBe(true);
+    });
+  });
+
   describe('stop', () => {
     it('ruft die stopTurn-Mutation auf', async () => {
       gqlRequestMock.mockResolvedValue({ stopTurn: true });
