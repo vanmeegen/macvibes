@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { agentConfigDirFor, ensureWorkspace } from '../services/workspaceService';
 import { baselineExists, baselineSnapshotName } from './baselineService';
 import { httpProbe } from './httpProbe';
-import { msbExec, runMsb } from './msb';
+import { MicrosandboxError, msbExec, runMsb } from './msb';
 import { PreviewSupervisor } from './previewSupervisor';
 import { findFreePort } from './portService';
 import type { PreviewStatus, SandboxContext, SandboxHandle, SandboxProvider } from './provider';
@@ -21,6 +21,25 @@ export interface MicrosandboxProviderConfig {
 /** Sandbox-Name eines Projekts — vom Provider und vom VM-Runner genutzt. */
 export function microsandboxSandboxName(projectId: string): string {
   return `macvibes-${projectId}`;
+}
+
+/**
+ * Wartet, bis `msb exec` in der Sandbox funktioniert (Gast-Agent-Endpunkt
+ * bereit). Verhindert die "no agent endpoint found"-Race beim ersten Prompt.
+ */
+export async function waitForExecReady(name: string, timeoutMs = 30_000): Promise<void> {
+  const start = Date.now();
+  let lastError: unknown = null;
+  while (Date.now() - start < timeoutMs) {
+    try {
+      await runMsb(['exec', name, '--', 'true']);
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }
+  throw new MicrosandboxError(`Sandbox ${name} wurde nicht exec-bereit: ${String(lastError)}`);
 }
 
 /** Arbeitsverzeichnis in der VM — Mountpunkt des Projekt-Workspace. */
@@ -104,6 +123,11 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       '-c',
       `${bootstrap}; exec sleep infinity`,
     ]);
+
+    // `msb run -d` kehrt zurück, bevor der Gast-Agent-Endpunkt für `msb exec`
+    // bereit ist. Ohne dieses Warten scheitern die ersten Prompts/Dev-Server-
+    // Starts mit "no agent endpoint found" (Race, 2026-07-05).
+    await waitForExecReady(name);
 
     // Watchdog: Dev-Server per `msb exec` starten + überwachen (host-seitig).
     const supervisor = new PreviewSupervisor({

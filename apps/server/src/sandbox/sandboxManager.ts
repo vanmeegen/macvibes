@@ -28,6 +28,8 @@ interface SandboxEntry {
   lastActivityAt: number;
   graceTimer: Timer | null;
   idleTimer: Timer | null;
+  /** Läuft der Start gerade? Zweite enter()-Aufrufe warten darauf (Race-Fix). */
+  startPromise: Promise<void> | null;
 }
 
 export class SandboxManager {
@@ -37,7 +39,15 @@ export class SandboxManager {
 
   async enter(context: SandboxContext): Promise<void> {
     const existing = this.entries.get(context.projectId);
-    if (existing && (existing.status === 'running' || existing.status === 'starting')) {
+    if (existing && existing.status === 'starting' && existing.startPromise) {
+      // Start läuft schon — darauf warten, damit der Agent nicht auf eine noch
+      // nicht exec-bereite VM losfeuert ("no agent endpoint found", Race-Fix).
+      this.clearGrace(existing);
+      await existing.startPromise;
+      this.touch(existing);
+      return;
+    }
+    if (existing && existing.status === 'running') {
       this.clearGrace(existing);
       this.touch(existing);
       return;
@@ -50,20 +60,29 @@ export class SandboxManager {
       lastActivityAt: Date.now(),
       graceTimer: null,
       idleTimer: null,
+      startPromise: null,
     };
     this.entries.set(context.projectId, entry);
 
     await this.evictLeastActiveIfNeeded(context.projectId);
 
     this.setStatus(entry, 'starting');
+    const startWork = (async () => {
+      try {
+        entry.handle = await this.options.provider.start(context);
+      } catch (error) {
+        this.setStatus(entry, 'stopped');
+        throw error;
+      }
+      this.setStatus(entry, 'running');
+      this.touch(entry);
+    })();
+    entry.startPromise = startWork;
     try {
-      entry.handle = await this.options.provider.start(context);
-    } catch (error) {
-      this.setStatus(entry, 'stopped');
-      throw error;
+      await startWork;
+    } finally {
+      entry.startPromise = null;
     }
-    this.setStatus(entry, 'running');
-    this.touch(entry);
   }
 
   leave(projectId: string): void {

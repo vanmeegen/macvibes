@@ -73,6 +73,50 @@ describe('enter', () => {
     expect(provider.startCalls).toEqual(['p1']);
   });
 
+  test('ein zweiter enter() während des Starts wartet auf den laufenden Start (Race-Fix)', async () => {
+    // Provider mit verzögertem Start — simuliert die VM, die erst exec-bereit wird.
+    let started = false;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const provider: SandboxProvider = {
+      async start(_context) {
+        await gate;
+        started = true;
+        return { previewHostPort: 1, previewStatus: () => 'ready' as const, stop: async () => {} };
+      },
+    };
+    const manager = new SandboxManager({
+      provider,
+      graceMs: 1000,
+      idleMs: 10_000,
+      maxSandboxes: 8,
+    });
+
+    const first = manager.enter(ctx('p1'));
+    // Warten bis der Status wirklich 'starting' ist (Start läuft, hängt am Gate).
+    await Bun.sleep(10);
+    expect(manager.status('p1')).toBe('starting');
+
+    // Zweiter enter, während der erste noch im Start hängt:
+    let secondResolved = false;
+    const second = manager.enter(ctx('p1')).then(() => {
+      secondResolved = true;
+    });
+    await Bun.sleep(20);
+    // Der zweite enter darf NICHT zurückkehren, solange der Start nicht fertig ist.
+    expect(secondResolved).toBe(false);
+    expect(started).toBe(false);
+
+    release();
+    await Promise.all([first, second]);
+    expect(secondResolved).toBe(true);
+    expect(manager.status('p1')).toBe('running');
+    // Nur EIN echter Start (kein Doppelstart durch den zweiten enter).
+    expect(manager.status('p1')).toBe('running');
+  });
+
   test('unbekannte Projekte sind stopped', () => {
     const { manager } = setup();
     expect(manager.status('unbekannt')).toBe('stopped');
