@@ -4,6 +4,7 @@ import { loadConfig } from './config';
 import { createDb } from './db/client';
 import { runMigrations } from './db/migrate';
 import { createAnthropicProxy } from './http/anthropicProxy';
+import { startEgressProxy } from './http/egressProxy';
 import { readSessionToken } from './http/cookies';
 import { serveWebUi } from './http/staticFiles';
 import { existsSync } from 'node:fs';
@@ -37,6 +38,10 @@ await ensureBareRepo(config.bareRepoPath);
 // Shared Secret VM → Credential-Proxy, pro Serverstart neu (B5c).
 // Zufällig pro Start; für kontrollierte Diagnose per Env überschreibbar.
 const proxyToken = Bun.env.MACVIBES_PROXY_TOKEN ?? crypto.randomUUID();
+// Egress-Proxy: einziger Weg der VMs ins Internet (msb-Regeln blocken Public).
+const egressPort = Bun.env.MACVIBES_EGRESS_PORT ? Number(Bun.env.MACVIBES_EGRESS_PORT) : 4010;
+const egressProxy = startEgressProxy({ port: egressPort, token: proxyToken });
+console.log(`Egress-Proxy für VMs auf Port ${egressProxy.port}`);
 const anthropicProxy = createAnthropicProxy({
   upstreamUrl: config.anthropic.upstreamUrl,
   proxyToken,
@@ -107,7 +112,7 @@ function selectAgentRunner() {
     console.log('Agent-Backend: claude in VM (msb exec, Credential-Proxy)');
     return new VmAgentRunner({
       sandboxNameFor: microsandboxSandboxName,
-      agentEnv: () => buildVmAgentEnv({ serverPort: config.port, proxyToken }),
+      agentEnv: () => buildVmAgentEnv({ serverPort: config.port, proxyToken, egressPort }),
       spawn: msbExecSpawner,
       guestWorkdir: '/work',
     });

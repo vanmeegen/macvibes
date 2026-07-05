@@ -4,8 +4,10 @@ import { AGENT_CONFIG_GUEST_DIR } from '../sandbox/microsandboxProvider';
 export interface VmAgentEnvParams {
   /** Port des macvibes-Servers (Host-Proxy). */
   serverPort: number;
-  /** Shared Secret VM → Credential-Proxy. */
+  /** Shared Secret VM → Credential-Proxy (auch Basic-Auth des Egress-Proxys). */
   proxyToken: string;
+  /** Port des Egress-Proxys (CONNECT) auf dem Host. */
+  egressPort: number;
 }
 
 /**
@@ -18,6 +20,10 @@ export interface VmAgentEnvParams {
  *   Claude Code mit "cannot be used with root" ab).
  * - CLAUDE_CONFIG_DIR: Sessiondaten aufs persistente Volume — sonst geht die
  *   Session bei jedem VM-Neustart verloren und `--resume` scheitert (R9).
+ * - HTTP(S)_PROXY: msb blockt mit gesetzten net-rules JEDEN Public-Egress
+ *   (Bug, 2026-07-05) — claudes Startup hing dadurch ~180s in Connect-
+ *   Timeouts. Aller Nicht-API-Traffic läuft deshalb über den Egress-Proxy
+ *   auf dem Host; NO_PROXY hält den Credential-Proxy-Pfad direkt.
  */
 export function buildVmAgentEnv(params: VmAgentEnvParams): Record<string, string> {
   return {
@@ -26,5 +32,8 @@ export function buildVmAgentEnv(params: VmAgentEnvParams): Record<string, string
     ANTHROPIC_API_KEY: 'macvibes-proxy',
     IS_SANDBOX: '1',
     CLAUDE_CONFIG_DIR: AGENT_CONFIG_GUEST_DIR,
+    HTTP_PROXY: `http://mv:${params.proxyToken}@host.microsandbox.internal:${params.egressPort}`,
+    HTTPS_PROXY: `http://mv:${params.proxyToken}@host.microsandbox.internal:${params.egressPort}`,
+    NO_PROXY: 'host.microsandbox.internal,localhost,127.0.0.1',
   };
 }
