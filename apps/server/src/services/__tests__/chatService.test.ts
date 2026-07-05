@@ -59,6 +59,72 @@ function sendInput(projectId: string, text: string) {
   return { projectId, workspaceDir: '/tmp/fake-workspace', resumeSessionId: null, text };
 }
 
+describe('Streaming-Rendering (Tool live, Text/Denk getrennt)', () => {
+  test('Tool-Zeile ohne Detail zeigt nur den Namen (live via content_block_start)', async () => {
+    const toolRunner: AgentRunner = {
+      startTurn(): TurnHandle {
+        const events = (async function* () {
+          yield { type: 'tool-use', name: 'Read', detail: '' } as const;
+          yield { type: 'tool-use', name: 'Edit', detail: 'index.html' } as const;
+          yield { type: 'turn-completed', sessionId: 's' } as const;
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { service, projectId } = await setup(toolRunner);
+    await service.sendMessage(sendInput(projectId, 'Bau'));
+    await waitFor(() => !service.isTurnActive(projectId));
+
+    const tools = (await service.listMessages(projectId)).filter((m) => m.role === 'tool');
+    expect(tools.map((m) => m.content)).toEqual(['Read', 'Edit: index.html']);
+  });
+
+  test('Text vor und nach einem Tool landet in getrennten Bubbles (block-stop)', async () => {
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        const events = (async function* () {
+          yield { type: 'text-delta', text: 'Ich lese die Datei.' } as const;
+          yield { type: 'block-stop' } as const;
+          yield { type: 'tool-use', name: 'Read', detail: '' } as const;
+          yield { type: 'text-delta', text: 'Erledigt.' } as const;
+          yield { type: 'turn-completed', sessionId: 's' } as const;
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { service, projectId } = await setup(runner);
+    await service.sendMessage(sendInput(projectId, 'Los'));
+    await waitFor(() => !service.isTurnActive(projectId));
+
+    const assistants = (await service.listMessages(projectId)).filter(
+      (m) => m.role === 'assistant',
+    );
+    expect(assistants.map((m) => m.content)).toEqual(['Ich lese die Datei.', 'Erledigt.']);
+  });
+
+  test('thinking-delta landet in einer eigenen "thinking"-Zeile', async () => {
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        const events = (async function* () {
+          yield { type: 'thinking-delta', text: 'Ich überlege… ' } as const;
+          yield { type: 'thinking-delta', text: 'fertig gedacht.' } as const;
+          yield { type: 'text-delta', text: 'Antwort.' } as const;
+          yield { type: 'turn-completed', sessionId: 's' } as const;
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { service, projectId } = await setup(runner);
+    await service.sendMessage(sendInput(projectId, 'Denk nach'));
+    await waitFor(() => !service.isTurnActive(projectId));
+
+    const messages = await service.listMessages(projectId);
+    const thinking = messages.find((m) => m.role === 'thinking');
+    expect(thinking?.content).toBe('Ich überlege… fertig gedacht.');
+    expect(messages.find((m) => m.role === 'assistant')?.content).toBe('Antwort.');
+  });
+});
+
 describe('sendMessage (R6)', () => {
   test('persistiert die Nutzer-Nachricht sofort und streamt die Antwort in die Historie', async () => {
     const { service, projectId } = await setup();

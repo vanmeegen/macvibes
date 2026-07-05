@@ -23,23 +23,39 @@ export function microsandboxSandboxName(projectId: string): string {
   return `macvibes-${projectId}`;
 }
 
+export interface WaitForExecReadyOptions {
+  timeoutMs?: number;
+  intervalMs?: number;
+  /** Exec-Probe (injizierbar für Tests). Wirft, solange die VM nicht bereit ist. */
+  probe?: (name: string) => Promise<unknown>;
+}
+
 /**
  * Wartet, bis `msb exec` in der Sandbox funktioniert (Gast-Agent-Endpunkt
  * bereit). Verhindert die "no agent endpoint found"-Race beim ersten Prompt.
  */
-export async function waitForExecReady(name: string, timeoutMs = 30_000): Promise<void> {
+export async function waitForExecReady(
+  name: string,
+  options: WaitForExecReadyOptions = {},
+): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  const intervalMs = options.intervalMs ?? 250;
+  const probe = options.probe ?? ((n: string) => runMsb(['exec', n, '--', 'true']));
+
   const start = Date.now();
   let lastError: unknown = null;
-  while (Date.now() - start < timeoutMs) {
+  for (;;) {
     try {
-      await runMsb(['exec', name, '--', 'true']);
+      await probe(name);
       return;
     } catch (error) {
       lastError = error;
-      await new Promise((r) => setTimeout(r, 250));
     }
+    if (Date.now() - start >= timeoutMs) {
+      throw new MicrosandboxError(`Sandbox ${name} wurde nicht exec-bereit: ${String(lastError)}`);
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
   }
-  throw new MicrosandboxError(`Sandbox ${name} wurde nicht exec-bereit: ${String(lastError)}`);
 }
 
 /** Arbeitsverzeichnis in der VM — Mountpunkt des Projekt-Workspace. */
