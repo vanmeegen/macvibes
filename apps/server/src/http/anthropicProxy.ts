@@ -44,9 +44,11 @@ export function injectThinkingDisplay(bodyText: string): string {
   const thinking = (parsed as Record<string, unknown>).thinking;
   if (typeof thinking !== 'object' || thinking === null) return bodyText;
   const t = thinking as Record<string, unknown>;
-  // Nur bei aktivem Thinking eingreifen; ein bereits gesetztes "summarized" ist
-  // schon das Gewünschte (idempotent). "omitted" oder fehlend → anheben.
-  if (t.type !== 'enabled' || t.display === 'summarized') return bodyText;
+  // Nur bei AKTIVEM Thinking eingreifen. On-Modi: "adaptive" (die einzige On-Form
+  // auf Opus 4.8/4.7/Fable 5) und das ältere "enabled". "disabled"/fehlend bleibt
+  // unangetastet, ein bereits gesetztes "summarized" ebenso (idempotent).
+  if (t.type !== 'adaptive' && t.type !== 'enabled') return bodyText;
+  if (t.display === 'summarized') return bodyText;
   t.display = 'summarized';
   return JSON.stringify(parsed);
 }

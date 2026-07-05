@@ -169,6 +169,14 @@ describe('Thinking-Text sichtbar machen (display: summarized)', () => {
     expect(out.thinking).toEqual({ type: 'disabled' });
   });
 
+  test('ergänzt display auch bei adaptivem Thinking (die On-Form auf Opus 4.8)', () => {
+    // Opus 4.8 kennt nur adaptive als On-Modus (enabled+budget_tokens => 400).
+    // Aktiviert Claude Code Thinking, kommt {type:"adaptive"} — das MUSS greifen.
+    const body = JSON.stringify({ model: 'claude-opus-4-8', thinking: { type: 'adaptive' } });
+    const out = JSON.parse(injectThinkingDisplay(body));
+    expect(out.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
+  });
+
   test('hebt ein explizites display:"omitted" auf "summarized" an (wir wollen den Text)', () => {
     // Claude Code sendet Thinking evtl. mit display:"omitted" — dann streamt die
     // API keinen Text. Genau das heben wir an, sonst liefe die Injektion ins Leere.
