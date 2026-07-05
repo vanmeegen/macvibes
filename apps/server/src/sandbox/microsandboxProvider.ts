@@ -4,7 +4,7 @@ import { baselineExists, baselineSnapshotName } from './baselineService';
 import { httpProbe } from './httpProbe';
 import { MicrosandboxError, msbExec, runMsb } from './msb';
 import { PreviewSupervisor } from './previewSupervisor';
-import { findFreePort } from './portService';
+import { PortAllocator } from './portService';
 import type { PreviewStatus, SandboxContext, SandboxHandle, SandboxProvider } from './provider';
 
 export { MicrosandboxError, msbAvailable } from './msb';
@@ -80,6 +80,10 @@ export const AGENT_CONFIG_GUEST_DIR = '/agent-config';
  * `devCommand` + `previewPort` + PORT-Env aus templates.json.
  */
 export class MicrosandboxSandboxProvider implements SandboxProvider {
+  // Geteilt über ALLE Sandboxen dieses Providers → kollisionsfreie Host-Ports
+  // auch bei parallelen Starts (zwei pwa-Projekte wollen beide previewPort 5173).
+  private readonly ports = new PortAllocator();
+
   constructor(private readonly config: MicrosandboxProviderConfig) {}
 
   async start(context: SandboxContext): Promise<SandboxHandle> {
@@ -93,7 +97,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     const agentConfigDir = agentConfigDirFor(this.config.macvibesHome, context.projectId);
     mkdirSync(agentConfigDir, { recursive: true });
 
-    const hostPort = await findFreePort(context.previewPort);
+    const hostPort = await this.ports.allocate(context.previewPort);
     const name = microsandboxSandboxName(context.projectId);
 
     // Baseline-Fork (B5b): node_modules kommt vorinstalliert aus dem Snapshot
@@ -169,6 +173,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       previewStatus: (): PreviewStatus => supervisor.getStatus(),
       stop: async () => {
         clearTimeout(supervisorDelay);
+        this.ports.release(hostPort);
         await supervisor.stop();
         try {
           await runMsb(['stop', name]);
