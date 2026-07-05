@@ -112,12 +112,23 @@ const ProjectCard = observer(function ProjectCard({
 const CreateProjectDialog = observer(function CreateProjectDialog({
   model,
   projectsStore,
+  onCreated,
 }: {
   model: CreateProjectModel;
   projectsStore: ProjectsStore;
+  /** Nach erfolgreicher Anlage: direkt in den Chat des neuen Projekts. */
+  onCreated: (projectId: string) => void;
 }): JSX.Element {
+  const submitAndOpenChat = async (): Promise<void> => {
+    const projectId = await model.submit();
+    if (projectId !== null) {
+      onCreated(projectId);
+    }
+  };
   return (
-    <Dialog open={model.open} onClose={model.close} fullWidth maxWidth="sm">
+    // disableRestoreFocus: sonst klaut MUIs Focus-Restore dem Namensfeld den
+    // Autofokus beim Öffnen des Dialogs.
+    <Dialog open={model.open} onClose={model.close} fullWidth maxWidth="sm" disableRestoreFocus>
       <DialogTitle>Neues Projekt</DialogTitle>
       <DialogContent>
         <Stack spacing={3} sx={{ mt: 1 }}>
@@ -130,6 +141,12 @@ const CreateProjectDialog = observer(function CreateProjectDialog({
             label="Projektname"
             value={model.name}
             onChange={(e) => model.setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && model.canSubmit) {
+                e.preventDefault();
+                void submitAndOpenChat();
+              }
+            }}
             autoFocus
             inputProps={{ 'data-testselector': 'new-project-name' }}
           />
@@ -179,7 +196,7 @@ const CreateProjectDialog = observer(function CreateProjectDialog({
         </Button>
         <Button
           variant="contained"
-          onClick={() => void model.submit()}
+          onClick={() => void submitAndOpenChat()}
           disabled={!model.canSubmit}
           data-testselector="new-project-submit"
         >
@@ -235,6 +252,7 @@ export const ProjectsPage = observer(function ProjectsPage({
   projectsStore,
   createProjectModel,
 }: ProjectsPageProps): JSX.Element {
+  const navigate = useNavigate();
   useEffect(() => {
     void projectsStore.load();
     projectsStore.startPolling();
@@ -336,7 +354,11 @@ export const ProjectsPage = observer(function ProjectsPage({
         <AddIcon />
       </Fab>
 
-      <CreateProjectDialog model={createProjectModel} projectsStore={projectsStore} />
+      <CreateProjectDialog
+        model={createProjectModel}
+        projectsStore={projectsStore}
+        onCreated={(projectId) => navigate(`/projects/${projectId}`)}
+      />
       <DeleteConfirmDialog projectsStore={projectsStore} />
     </Box>
   );

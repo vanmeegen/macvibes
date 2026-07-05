@@ -67,19 +67,23 @@ export class CreateProjectModel {
     return this.nameValid && this.selectedTemplateDir.length > 0 && !this.submitting;
   }
 
-  async submit(): Promise<void> {
+  /**
+   * Legt das Projekt an. Liefert die ID des neuen Projekts (für den direkten
+   * Wechsel in dessen Chat) — oder null, wenn nichts angelegt wurde.
+   */
+  async submit(): Promise<string | null> {
     if (!this.nameValid) {
       this.error = 'Bitte einen Projektnamen eingeben.';
-      return;
+      return null;
     }
     if (this.selectedTemplateDir.length === 0) {
       this.error = 'Bitte eine Vorlage auswählen.';
-      return;
+      return null;
     }
     this.submitting = true;
     this.error = null;
     try {
-      await gqlRequest<{ createProject: Project }>(CREATE_PROJECT_MUTATION, {
+      const data = await gqlRequest<{ createProject: Project }>(CREATE_PROJECT_MUTATION, {
         name: this.name.trim(),
         templateDir: this.selectedTemplateDir,
       });
@@ -87,11 +91,13 @@ export class CreateProjectModel {
         this.open = false;
       });
       await this.projectsStore.load();
+      return data.createProject.id;
     } catch (err) {
       console.error('CreateProjectModel.submit fehlgeschlagen', err);
       runInAction(() => {
         this.error = toErrorMessage(err);
       });
+      return null;
     } finally {
       runInAction(() => {
         this.submitting = false;

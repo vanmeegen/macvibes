@@ -1,6 +1,6 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { runInAction } from 'mobx';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { gqlRequest } from '../../api/graphqlClient';
 import type { Project, Template } from '../../api/types';
@@ -81,6 +81,55 @@ describe('ProjectsPage', () => {
     );
     return { authStore, projectsStore };
   }
+
+  it('Neuanlage-Flow: Name-Feld hat Fokus, Enter legt an und wechselt in den Chat', async () => {
+    // createProject wird über den Query-Text erkannt, alles andere ist Laden.
+    const created = { ...projects[0], id: 'p9', name: 'Blitz' };
+    mockGql.mockImplementation(async (query: string) =>
+      query.includes('createProject') ? { createProject: created } : { projects, templates },
+    );
+
+    const authStore = new AuthStore();
+    runInAction(() => {
+      authStore.currentUser = { id: 'u1', username: 'alice' };
+      authStore.initialized = true;
+    });
+    const projectsStore = new ProjectsStore(authStore);
+    const createProjectModel = new CreateProjectModel(projectsStore);
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route
+            path="/"
+            element={
+              <ProjectsPage
+                authStore={authStore}
+                projectsStore={projectsStore}
+                createProjectModel={createProjectModel}
+              />
+            }
+          />
+          <Route path="/projects/:id" element={<div data-testselector="chat-page-stub" />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Mein Vibe-Projekt');
+    fireEvent.click(screen.getByTestId('new-project-fab'));
+
+    const nameInput = document.querySelector<HTMLInputElement>(
+      '[data-testselector="new-project-name"]',
+    );
+    expect(nameInput).not.toBeNull();
+    // Autofokus: sofort lostippen können.
+    expect(document.activeElement).toBe(nameInput);
+
+    fireEvent.change(nameInput as HTMLInputElement, { target: { value: 'Blitz' } });
+    // Enter statt Klick auf "Erstellen" …
+    fireEvent.keyDown(nameInput as HTMLInputElement, { key: 'Enter' });
+    // … und nach dem Anlegen landet man direkt im Chat des neuen Projekts.
+    expect(await screen.findByTestId('chat-page-stub')).toBeInTheDocument();
+  });
 
   it('rendert die eigenen Projekte nach dem Laden (Default-Filter "mine")', async () => {
     renderPage();
