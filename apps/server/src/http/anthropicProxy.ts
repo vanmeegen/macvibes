@@ -22,6 +22,35 @@ function withOAuthBeta(existing: string | null): string {
   return parts.join(',');
 }
 
+/**
+ * Erzwingt bei aktivem Extended Thinking den Stream der Reasoning-Zusammenfassung:
+ * Neuere Modelle streamen den Thinking-Text sonst NICHT (nur `signature_delta`,
+ * `thinking:""`) — eine Latenz-Optimierung, kein Credential-Effekt. Setzen wir
+ * `thinking.display: 'summarized'`, liefert die API `thinking_delta`-Text-Events,
+ * die unser Parser/UI als „💭"-Zeile live darstellen kann.
+ *
+ * Angefasst wird nur ein JSON-Body mit bereits AKTIVEM Thinking und ohne explizit
+ * gesetztes `display`. Alles andere (kein Thinking, fremdes `display`, kein/ungültiges
+ * JSON) bleibt unverändert — der Proxy darf keine Requests kaputtmachen.
+ */
+export function injectThinkingDisplay(bodyText: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bodyText);
+  } catch {
+    return bodyText;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return bodyText;
+  const thinking = (parsed as Record<string, unknown>).thinking;
+  if (typeof thinking !== 'object' || thinking === null) return bodyText;
+  const t = thinking as Record<string, unknown>;
+  // Nur bei aktivem Thinking eingreifen; ein bereits gesetztes "summarized" ist
+  // schon das Gewünschte (idempotent). "omitted" oder fehlend → anheben.
+  if (t.type !== 'enabled' || t.display === 'summarized') return bodyText;
+  t.display = 'summarized';
+  return JSON.stringify(parsed);
+}
+
 export interface AnthropicProxyConfig {
   upstreamUrl: string;
   /** Shared Secret VM → Proxy (pro Serverstart zufällig). */
@@ -55,6 +84,9 @@ export function createAnthropicProxy(config: AnthropicProxyConfig): AnthropicPro
     // Unkomprimiert anfordern: sonst kollidieren content-encoding und der
     // (von Bun beim Durchreichen ent-/gepackte) Body → ZlibError im Client.
     headers.delete('accept-encoding');
+    // Body wird gepuffert und ggf. umgeschrieben — alte Länge verwerfen, fetch
+    // setzt content-length passend zum tatsächlich gesendeten Body neu.
+    headers.delete('content-length');
     if (config.oauthToken !== null) {
       headers.set('authorization', `Bearer ${config.oauthToken}`);
       // Abo-Token braucht das OAuth-Beta-Flag (sonst 401), bestehende Betas erhalten.
@@ -65,10 +97,15 @@ export function createAnthropicProxy(config: AnthropicProxyConfig): AnthropicPro
 
     const upstreamUrl = `${config.upstreamUrl}${upstreamPath}`;
     const hasBody = request.method !== 'GET' && request.method !== 'HEAD';
+    // Body puffern und ggf. `thinking.display: summarized` ergänzen, damit die
+    // API den Reasoning-Text streamt (statt nur der Signatur). Der Messages-
+    // Request ist ein einzelnes JSON — Puffern kostet nichts; content-length
+    // setzt fetch neu. Die SSE-ANTWORT bleibt davon unberührt (Streaming).
+    const outgoingBody = hasBody ? injectThinkingDisplay(await request.text()) : undefined;
     const upstreamResponse = await fetch(upstreamUrl, {
       method: request.method,
       headers,
-      ...(hasBody ? { body: request.body, duplex: 'half' } : {}),
+      ...(hasBody ? { body: outgoingBody } : {}),
     } as RequestInit);
 
     // fetch dekomprimiert den Body bereits — content-encoding/-length der

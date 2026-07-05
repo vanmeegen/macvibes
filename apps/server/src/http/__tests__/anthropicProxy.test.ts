@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import {
   createAnthropicProxy,
+  injectThinkingDisplay,
   PROXY_TOKEN_HEADER,
   type AnthropicProxyConfig,
 } from '../anthropicProxy';
@@ -136,6 +137,71 @@ describe('Anthropic-Credential-Proxy (B5c, R10/NFR)', () => {
     const response = await proxy(vmRequest(), '/v1/messages');
     expect(response.status).toBe(503);
     expect(await response.text()).toContain('CLAUDE_CODE_OAUTH_TOKEN');
+  });
+});
+
+describe('Thinking-Text sichtbar machen (display: summarized)', () => {
+  test('ergänzt display:"summarized" bei aktivem Thinking', () => {
+    const body = JSON.stringify({
+      model: 'claude',
+      max_tokens: 1000,
+      thinking: { type: 'enabled', budget_tokens: 10_000 },
+    });
+    const out = JSON.parse(injectThinkingDisplay(body));
+    expect(out.thinking).toEqual({
+      type: 'enabled',
+      budget_tokens: 10_000,
+      display: 'summarized',
+    });
+    // Der Rest des Bodys bleibt unangetastet.
+    expect(out.model).toBe('claude');
+    expect(out.max_tokens).toBe(1000);
+  });
+
+  test('lässt einen Body ohne Thinking unverändert', () => {
+    const body = JSON.stringify({ model: 'claude', max_tokens: 1 });
+    expect(injectThinkingDisplay(body)).toBe(body);
+  });
+
+  test('lässt deaktiviertes Thinking unverändert', () => {
+    const body = JSON.stringify({ model: 'claude', thinking: { type: 'disabled' } });
+    const out = JSON.parse(injectThinkingDisplay(body));
+    expect(out.thinking).toEqual({ type: 'disabled' });
+  });
+
+  test('hebt ein explizites display:"omitted" auf "summarized" an (wir wollen den Text)', () => {
+    // Claude Code sendet Thinking evtl. mit display:"omitted" — dann streamt die
+    // API keinen Text. Genau das heben wir an, sonst liefe die Injektion ins Leere.
+    const body = JSON.stringify({
+      thinking: { type: 'enabled', budget_tokens: 5, display: 'omitted' },
+    });
+    const out = JSON.parse(injectThinkingDisplay(body));
+    expect(out.thinking.display).toBe('summarized');
+  });
+
+  test('lässt ein bereits gesetztes display:"summarized" unverändert (idempotent)', () => {
+    const body = JSON.stringify({
+      thinking: { type: 'enabled', budget_tokens: 5, display: 'summarized' },
+    });
+    expect(injectThinkingDisplay(body)).toBe(body);
+  });
+
+  test('reicht ungültiges JSON unverändert durch (darf nie werfen)', () => {
+    expect(injectThinkingDisplay('nicht-json{')).toBe('nicht-json{');
+    expect(injectThinkingDisplay('')).toBe('');
+  });
+
+  test('End-to-End: der Upstream sieht den ergänzten Body', async () => {
+    const proxy = makeProxy();
+    seen.length = 0;
+    const body = JSON.stringify({
+      model: 'claude',
+      max_tokens: 1,
+      thinking: { type: 'enabled', budget_tokens: 8000 },
+    });
+    await proxy(vmRequest({}, body), '/v1/messages');
+    const forwarded = JSON.parse(seen[0]?.body ?? '{}');
+    expect(forwarded.thinking.display).toBe('summarized');
   });
 });
 
