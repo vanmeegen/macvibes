@@ -74,6 +74,11 @@ export class VmAgentRunner implements AgentRunner {
       '--verbose',
       '--permission-mode',
       'bypassPermissions',
+      // Sonnet 5: denkt für dieselbe Aufgabe deutlich ausführlicher „laut" als
+      // Opus, wodurch der Live-Denk-Stream (💭) gehaltvoller ist. Der Proxy hebt
+      // den adaptiven Thinking-Request ohnehin auf display:"summarized" an.
+      '--model',
+      'claude-sonnet-5',
     ];
     if (options.resumeSessionId !== null) {
       args.push('--resume', options.resumeSessionId);

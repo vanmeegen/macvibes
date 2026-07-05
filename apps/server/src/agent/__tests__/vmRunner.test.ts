@@ -112,6 +112,9 @@ describe('VmAgentRunner (B5c)', () => {
     expect(fake.captured?.args).toContain('Baue X');
     expect(fake.captured?.args).toContain('stream-json');
     expect(fake.captured?.args).toContain('bypassPermissions');
+    // Sonnet 5: denkt sichtbar „lauter" — der Denk-Stream (💭) ist gehaltvoller.
+    const modelIdx = fake.captured?.args.indexOf('--model') ?? -1;
+    expect(fake.captured?.args[modelIdx + 1]).toBe('claude-sonnet-5');
     const resumeIdx = fake.captured?.args.indexOf('--resume') ?? -1;
     expect(fake.captured?.args[resumeIdx + 1]).toBe('sess-prev');
     expect(fake.captured?.env['ANTHROPIC_BASE_URL']).toContain('host.microsandbox.internal');
