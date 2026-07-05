@@ -19,7 +19,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import type { ChatMessage } from '../api/types';
 import type { ChatStore } from '../models/ChatStore';
 import { derivePreviewView } from '../models/PreviewModel';
-import { sandboxStatusLabel, type ProjectsStore } from '../models/ProjectsStore';
+import { agentWorkingLabel, sandboxStatusLabel, type ProjectsStore } from '../models/ProjectsStore';
 
 export interface ChatPageProps {
   projectsStore: ProjectsStore;
@@ -254,7 +254,7 @@ export const ChatPage = observer(function ChatPage({
                       <Stack direction="row" spacing={1.5} alignItems="center">
                         <CircularProgress size={14} />
                         <Typography variant="body2" color="text.secondary">
-                          Agent arbeitet …
+                          {agentWorkingLabel(project?.sandboxStatus ?? 'running')}
                         </Typography>
                       </Stack>
                     </Paper>

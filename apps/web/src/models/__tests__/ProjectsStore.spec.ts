@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { gqlRequest } from '../../api/graphqlClient';
 import type { Project, Template } from '../../api/types';
 import { AuthStore } from '../AuthStore';
-import { PROJECT_FILTER_STORAGE_KEY, ProjectsStore } from '../ProjectsStore';
+import { agentWorkingLabel, PROJECT_FILTER_STORAGE_KEY, ProjectsStore } from '../ProjectsStore';
 
 vi.mock('../../api/graphqlClient', () => ({
   gqlRequest: vi.fn(),
@@ -44,6 +44,21 @@ function makeAuthStore(username: string | null): AuthStore {
   });
   return authStore;
 }
+
+describe('agentWorkingLabel — sichtbares Boot-Feedback statt gefühltem Hänger', () => {
+  it('zeigt beim VM-Boot klar an, dass die MicroVM startet', () => {
+    expect(agentWorkingLabel('starting')).toBe('MicroVM startet — Workspace wird vorbereitet …');
+  });
+
+  it('zeigt bei gestoppter/stoppender Sandbox, dass sie gleich gestartet wird', () => {
+    expect(agentWorkingLabel('stopped')).toBe('Sandbox wird gestartet …');
+    expect(agentWorkingLabel('stopping')).toBe('Sandbox wird gestartet …');
+  });
+
+  it('zeigt bei laufender Sandbox den normalen Agenten-Status', () => {
+    expect(agentWorkingLabel('running')).toBe('Agent arbeitet …');
+  });
+});
 
 describe('ProjectsStore', () => {
   beforeEach(() => {

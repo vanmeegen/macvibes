@@ -87,6 +87,23 @@ export function formatTimestamp(value: string): string {
   });
 }
 
+/**
+ * Text des „Agent arbeitet"-Indikators, abhängig vom Sandbox-Status: während
+ * die MicroVM bootet, sieht der User WARUM noch nichts passiert (kein
+ * gefühlter Hänger).
+ */
+export function agentWorkingLabel(sandboxStatus: string): string {
+  switch (sandboxStatus) {
+    case 'starting':
+      return 'MicroVM startet — Workspace wird vorbereitet …';
+    case 'stopped':
+    case 'stopping':
+      return 'Sandbox wird gestartet …';
+    default:
+      return 'Agent arbeitet …';
+  }
+}
+
 /** Deutsche Anzeige des Sandbox-Status. */
 export function sandboxStatusLabel(status: string): string {
   switch (status) {
