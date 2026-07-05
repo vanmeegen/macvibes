@@ -1,3 +1,10 @@
 # Hoisted node_modules für Kompatibilität mit Vite/ESLint-Toolchain
 [install]
 linker = "hoisted"
+
+# `bun test` führt nur Bun-Tests aus (*.test.ts). Die *.spec.*-Dateien gehören
+# anderen Runnern: apps/web/src → Vitest (vi.mock), apps/web/e2e → Playwright.
+# Ohne Ignore sammelt ein nacktes `bun test` im Root diese ein und meldet
+# Pseudo-Fehler ("Playwright Test did not expect test() to be called here").
+[test]
+pathIgnorePatterns = ["**/*.spec.ts", "**/*.spec.tsx"]
