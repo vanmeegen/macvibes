@@ -53,6 +53,12 @@ export interface ChatServiceOptions {
    * den vollen Idle-Timeout abzuwarten.
    */
   agentFirstEventTimeoutMs?: number | undefined;
+  /**
+   * Erster Turn eines Projekts = frisch geforkte VM + claude-First-Run; das
+   * dauert deutlich länger als ein Folge-Turn. Für diesen Kaltstart gilt ein
+   * großzügigerer First-Event-Timeout (der User sieht derweil „MicroVM startet").
+   */
+  agentColdStartTimeoutMs?: number | undefined;
   /** Nachlauf nach dem Abbruch, um einen späten Fehlertext (stderr) einzusammeln. */
   agentAbortGraceMs?: number | undefined;
 }
@@ -61,6 +67,7 @@ export class ChatService {
   private readonly states = new Map<string, ProjectChatState>();
   private readonly idleTimeoutMs: number;
   private readonly firstEventTimeoutMs: number;
+  private readonly coldStartTimeoutMs: number;
   private readonly abortGraceMs: number;
 
   constructor(
@@ -73,6 +80,10 @@ export class ChatService {
     // Nie länger warten als der Idle-Timeout — der Start-Timeout ist die UNTERE Schranke.
     this.firstEventTimeoutMs = Math.min(
       options.agentFirstEventTimeoutMs ?? 8_000,
+      this.idleTimeoutMs,
+    );
+    this.coldStartTimeoutMs = Math.min(
+      options.agentColdStartTimeoutMs ?? 30_000,
       this.idleTimeoutMs,
     );
     this.abortGraceMs = options.agentAbortGraceMs ?? 5_000;
@@ -259,6 +270,8 @@ export class ChatService {
     // Modellwechsel hinweg bringt Claude Code zum Hängen ("Agent arbeitet" ewig).
     const canResume =
       projectRow?.claudeSessionId != null && projectRow.claudeSessionModel === AGENT_MODEL;
+    // Kaltstart: erster Turn dieser (frischen) VM — mehr Zeit bis zum ersten Event.
+    const firstEventBudget = canResume ? this.firstEventTimeoutMs : this.coldStartTimeoutMs;
     const handle = this.runner.startTurn({
       projectId,
       prompt: turn.prompt,
@@ -404,14 +417,14 @@ export class ChatService {
       for (;;) {
         // Vor dem ersten Event gilt der kurze Start-Timeout (kaputter msb-exec
         // wird in Sekunden erkannt), danach der großzügige Idle-Timeout.
-        const step = await race(sawAnyEvent ? this.idleTimeoutMs : this.firstEventTimeoutMs);
+        const step = await race(sawAnyEvent ? this.idleTimeoutMs : firstEventBudget);
         if (step === 'timeout') {
           // Stiller Hänger: abbrechen. Beim letzten Versuch als Fehler SICHTBAR
           // machen (statt ewig „Agent arbeitet"); sonst folgt gleich der Retry.
           handle.abort();
           const detail = await drainForErrorDetail();
           if (sawMeaningful || isLastAttempt) {
-            const usedMs = sawAnyEvent ? this.idleTimeoutMs : this.firstEventTimeoutMs;
+            const usedMs = sawAnyEvent ? this.idleTimeoutMs : firstEventBudget;
             const secs = Math.round(usedMs / 1000);
             await insert(
               'error',

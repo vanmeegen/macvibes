@@ -47,6 +47,7 @@ async function setup(
   agentIdleTimeoutMs?: number,
   agentAbortGraceMs?: number,
   agentFirstEventTimeoutMs?: number,
+  agentColdStartTimeoutMs?: number,
 ): Promise<TestSetup> {
   const db = createTestDb();
   const owner = await createUser(db, 'marco');
@@ -62,7 +63,7 @@ async function setup(
         turnEnds.push(prompt);
       },
     },
-    { agentIdleTimeoutMs, agentAbortGraceMs, agentFirstEventTimeoutMs },
+    { agentIdleTimeoutMs, agentAbortGraceMs, agentFirstEventTimeoutMs, agentColdStartTimeoutMs },
   );
   return { db, service, projectId, turnEnds, activity };
 }
@@ -124,6 +125,30 @@ describe('Watchdog: stiller Hänger wird als Fehler sichtbar', () => {
   });
 });
 
+describe('Kaltstart-Timeout: der ERSTE Turn (frische VM) bekommt mehr Zeit', () => {
+  test('erstes Event kommt spät (nach dem kurzen Timeout), Turn läuft trotzdem — weil Kaltstart', async () => {
+    // Frisches Projekt (keine Session) => Kaltstart. claudes First-Run in der frisch
+    // geforkten VM braucht >kurzer-Timeout; das darf NICHT fälschlich abbrechen.
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          await new Promise((r) => setTimeout(r, 200)); // "langsamer" erster Start
+          yield { type: 'text-delta', text: 'Endlich da.' };
+          yield { type: 'turn-completed', sessionId: 's1' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    // firstEvent kurz (50ms) würde abbrechen; coldStart großzügig (2s) rettet den ersten Turn.
+    const { service, projectId } = await setup(runner, 10_000, 40, 50, 2_000);
+    await service.sendMessage(sendInput(projectId, 'Erster Prompt'));
+    await waitFor(() => !service.isTurnActive(projectId), 5000);
+    const messages = await service.listMessages(projectId);
+    expect(messages.some((m) => m.role === 'assistant' && m.content === 'Endlich da.')).toBe(true);
+    expect(messages.some((m) => m.role === 'error')).toBe(false);
+  });
+});
+
 describe('First-Event-Timeout: kaputter Start wird SCHNELL erkannt (nicht erst nach 180s)', () => {
   test('kein einziges Event nach firstEventTimeout => Abbruch + sofortiger Retry', async () => {
     let calls = 0;
@@ -147,7 +172,7 @@ describe('First-Event-Timeout: kaputter Start wird SCHNELL erkannt (nicht erst n
     };
     // idle riesig (10s), firstEvent klein (50ms) — der Test bleibt nur schnell,
     // wenn wirklich der First-Event-Timeout greift.
-    const { service, projectId } = await setup(runner, 10_000, 40, 50);
+    const { service, projectId } = await setup(runner, 10_000, 40, 50, 50);
     const t0 = Date.now();
     await service.sendMessage(sendInput(projectId, 'x'));
     await waitFor(() => !service.isTurnActive(projectId), 5000);
@@ -169,7 +194,7 @@ describe('First-Event-Timeout: kaputter Start wird SCHNELL erkannt (nicht erst n
         return { events, abort: () => {} };
       },
     };
-    const { service, projectId } = await setup(runner, 10_000, 40, 50);
+    const { service, projectId } = await setup(runner, 10_000, 40, 50, 50);
     await service.sendMessage(sendInput(projectId, 'x'));
     await waitFor(() => !service.isTurnActive(projectId), 5000);
     const messages = await service.listMessages(projectId);
