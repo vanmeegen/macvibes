@@ -67,6 +67,43 @@ describe.skipIf(!available)('msbExecSpawner (B5c, echte VM-Naht)', () => {
   );
 
   test(
+    'tötet verwaiste claude-Prozesse vor dem Start (msb-Stream-Crossing-Schutz)',
+    async () => {
+      // Fake-"claude" (langlebig) im Gast starten — simuliert den Orphan eines
+      // abgebrochenen Turns, der weiterläuft und exec-Streams durcheinanderbringt.
+      await runMsb([
+        'exec',
+        SANDBOX,
+        '--',
+        'sh',
+        '-c',
+        'cp /bin/sleep /tmp/claude && (/tmp/claude 300 >/dev/null 2>&1 &) && echo orphan-da',
+      ]);
+
+      const proc = msbExecSpawner({
+        sandboxName: SANDBOX,
+        args: ['sh', '-c', 'echo neu-gestartet'],
+        env: {},
+        cwd: '/',
+      });
+      expect(await readAll(proc.stdout)).toContain('neu-gestartet');
+      expect(await proc.exited).toBe(0);
+
+      // Der Orphan muss weg sein.
+      const check = await runMsb([
+        'exec',
+        SANDBOX,
+        '--',
+        'sh',
+        '-c',
+        'n=0; for d in /proc/[0-9]*; do case "$(readlink "$d/exe" 2>/dev/null)" in *claude*) n=$((n+1));; esac; done; echo "orphans=$n"',
+      ]);
+      expect(check).toContain('orphans=0');
+    },
+    { timeout: 60_000 },
+  );
+
+  test(
     'stdout wird als Stream durchgereicht, stderr getrennt erfasst, Exit-Code stimmt',
     async () => {
       const proc = msbExecSpawner({
