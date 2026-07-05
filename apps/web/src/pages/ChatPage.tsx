@@ -31,13 +31,37 @@ const MessageBubble = observer(function MessageBubble({
 }: {
   message: ChatMessage;
 }): JSX.Element {
-  if (message.role === 'system' || message.role === 'error') {
+  if (message.role === 'error') {
+    // Fehler nie verschlucken: kurze Überschrift, per Aufklappen der genaue Text.
     return (
-      <Alert
-        severity={message.role === 'error' ? 'error' : 'info'}
-        data-testselector="chat-message"
-        data-role={message.role}
-      >
+      <Alert severity="error" data-testselector="chat-message" data-role="error">
+        <Box
+          component="details"
+          data-testselector="chat-error-details"
+          sx={{ '& summary': { cursor: 'pointer', fontWeight: 600, userSelect: 'none' } }}
+        >
+          <summary>Interner Fehler – Details anzeigen</summary>
+          <Box
+            component="pre"
+            sx={{
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word',
+              m: 0,
+              mt: 1,
+              fontFamily: 'monospace',
+              fontSize: '0.8em',
+            }}
+          >
+            {message.content}
+          </Box>
+        </Box>
+      </Alert>
+    );
+  }
+
+  if (message.role === 'system') {
+    return (
+      <Alert severity="info" data-testselector="chat-message" data-role="system">
         {message.content}
       </Alert>
     );

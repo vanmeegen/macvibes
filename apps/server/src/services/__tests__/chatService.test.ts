@@ -41,24 +41,86 @@ interface TestSetup {
   activity: string[];
 }
 
-async function setup(runner?: AgentRunner): Promise<TestSetup> {
+async function setup(
+  runner?: AgentRunner,
+  agentIdleTimeoutMs?: number,
+  agentAbortGraceMs?: number,
+): Promise<TestSetup> {
   const db = createTestDb();
   const owner = await createUser(db, 'marco');
   const projectId = await createProjectRow(db, owner);
   const turnEnds: string[] = [];
   const activity: string[] = [];
-  const service = new ChatService(db, runner ?? new FakeAgentRunner(1), {
-    onAgentActivity: (id) => activity.push(id),
-    onTurnEnd: async (_id, prompt) => {
-      turnEnds.push(prompt);
+  const service = new ChatService(
+    db,
+    runner ?? new FakeAgentRunner(1),
+    {
+      onAgentActivity: (id) => activity.push(id),
+      onTurnEnd: async (_id, prompt) => {
+        turnEnds.push(prompt);
+      },
     },
-  });
+    { agentIdleTimeoutMs, agentAbortGraceMs },
+  );
   return { db, service, projectId, turnEnds, activity };
 }
 
 function sendInput(projectId: string, text: string) {
   return { projectId, workspaceDir: '/tmp/fake-workspace', resumeSessionId: null, text };
 }
+
+describe('Watchdog: stiller Hänger wird als Fehler sichtbar', () => {
+  test('bricht ab und schreibt eine error-Zeile, wenn der Agent nicht reagiert', async () => {
+    // Runner, der NIE ein Event liefert (VM-Hänger auf einem Netz-Call).
+    let aborted = false;
+    const stallingRunner: AgentRunner = {
+      startTurn(): TurnHandle {
+        // next() löst nie auf — exakt der VM-Hänger auf einem Netz-Call.
+        const events: AsyncIterable<never> = {
+          [Symbol.asyncIterator]: () => ({ next: () => new Promise<never>(() => {}) }),
+        };
+        return {
+          events,
+          abort: () => {
+            aborted = true;
+          },
+        };
+      },
+    };
+    const { service, projectId } = await setup(stallingRunner, 40, 40);
+    await service.sendMessage(sendInput(projectId, 'Bau was Großes'));
+
+    await waitFor(() => !service.isTurnActive(projectId), 3000);
+    expect(aborted).toBe(true);
+    const messages = await service.listMessages(projectId);
+    const err = messages.find((m) => m.role === 'error');
+    expect(err).toBeDefined();
+    expect(err?.content.toLowerCase()).toContain('nicht reagiert');
+  });
+
+  test('liefert der abgebrochene Prozess noch eine Fehlermeldung, hängt sie an', async () => {
+    // Nach dem Abort meldet der Runner (wie VmAgentRunner) noch einen stderr-Fehler.
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        let release: (() => void) | null = null;
+        const events = (async function* () {
+          // Erst hängen bis abort, dann noch einen Fehler mit Detail nachliefern.
+          await new Promise<void>((r) => {
+            release = r;
+          });
+          yield { type: 'error', message: 'claude: cannot reach api (ECONNREFUSED)' } as const;
+          yield { type: 'turn-aborted' } as const;
+        })();
+        return { events, abort: () => release?.() };
+      },
+    };
+    const { service, projectId } = await setup(runner, 40, 200);
+    await service.sendMessage(sendInput(projectId, 'x'));
+    await waitFor(() => !service.isTurnActive(projectId), 3000);
+    const err = (await service.listMessages(projectId)).find((m) => m.role === 'error');
+    expect(err?.content).toContain('ECONNREFUSED');
+  });
+});
 
 describe('Session-Resume nur bei gleichem Modell (Hänger-Schutz)', () => {
   /** Runner, der das übergebene resumeSessionId festhält und den Turn sofort beendet. */

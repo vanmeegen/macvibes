@@ -118,17 +118,28 @@ function selectAgentRunner() {
 
 const agentRunner = selectAgentRunner();
 
-const chatService = new ChatService(db, agentRunner, {
-  onAgentActivity: (projectId) => sandboxManager.noteAgentActivity(projectId),
-  // Auto-Commit nach jedem abgeschlossenen Turn (R8).
-  onTurnEnd: (projectId, userPrompt) => {
-    if (chatServiceRef === null) return Promise.resolve();
-    return createTurnEndAutoCommit({
-      macvibesHome: config.macvibesHome,
-      chatService: chatServiceRef,
-    })(projectId, userPrompt);
+const chatService = new ChatService(
+  db,
+  agentRunner,
+  {
+    onAgentActivity: (projectId) => sandboxManager.noteAgentActivity(projectId),
+    // Auto-Commit nach jedem abgeschlossenen Turn (R8).
+    onTurnEnd: (projectId, userPrompt) => {
+      if (chatServiceRef === null) return Promise.resolve();
+      return createTurnEndAutoCommit({
+        macvibesHome: config.macvibesHome,
+        chatService: chatServiceRef,
+      })(projectId, userPrompt);
+    },
   },
-});
+  {
+    // Reagiert der Agent so lange gar nicht, gilt der Turn als hängend und wird als
+    // Fehler sichtbar abgebrochen (statt ewig „Agent arbeitet"). Env-übersteuerbar.
+    agentIdleTimeoutMs: Bun.env.MACVIBES_AGENT_IDLE_TIMEOUT_MS
+      ? Number(Bun.env.MACVIBES_AGENT_IDLE_TIMEOUT_MS)
+      : undefined,
+  },
+);
 chatServiceRef = chatService;
 
 const yoga = createYoga<Record<string, never>, GraphQLContext>({
@@ -147,6 +158,11 @@ const yoga = createYoga<Record<string, never>, GraphQLContext>({
 const server = Bun.serve({
   port: config.port,
   hostname: config.hostname,
+  // Bun kappt eingehende Verbindungen sonst nach 10s Idle — das trifft (a) den
+  // VM→Host-Proxy-Request, wenn die Claude-API bei großen Aufgaben (langes
+  // Thinking) >10s bis zum ersten Byte braucht → der Agent hängt, und (b) die
+  // SSE-Chat-Subscription. Maximum (255s) deckt beides großzügig ab.
+  idleTimeout: 255,
   fetch: async (request) => {
     const url = new URL(request.url);
     if (url.pathname === '/graphql') {

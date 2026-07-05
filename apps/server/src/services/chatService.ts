@@ -1,5 +1,6 @@
 import { asc, eq, sql } from 'drizzle-orm';
 import { AGENT_MODEL } from '../agent/agentModel';
+import type { AgentEvent } from '../agent/events';
 import type { AgentRunner, TurnHandle } from '../agent/runner';
 import type { Db } from '../db/client';
 import { chatMessages, projects, type ChatMessageRow } from '../db/schema';
@@ -39,14 +40,31 @@ interface ProjectChatState {
   subscribers: Set<(payload: ChatEventPayload) => void>;
 }
 
+export interface ChatServiceOptions {
+  /**
+   * Reagiert der Agent so lange gar nicht (kein einziges Event), gilt der Turn
+   * als hängend: er wird abgebrochen und der Hänger als Fehler sichtbar gemacht,
+   * statt ewig auf „Agent arbeitet" zu stehen.
+   */
+  agentIdleTimeoutMs?: number | undefined;
+  /** Nachlauf nach dem Abbruch, um einen späten Fehlertext (stderr) einzusammeln. */
+  agentAbortGraceMs?: number | undefined;
+}
+
 export class ChatService {
   private readonly states = new Map<string, ProjectChatState>();
+  private readonly idleTimeoutMs: number;
+  private readonly abortGraceMs: number;
 
   constructor(
     private readonly db: Db,
     private readonly runner: AgentRunner,
     private readonly hooks: ChatHooks = {},
-  ) {}
+    options: ChatServiceOptions = {},
+  ) {
+    this.idleTimeoutMs = options.agentIdleTimeoutMs ?? 180_000;
+    this.abortGraceMs = options.agentAbortGraceMs ?? 5_000;
+  }
 
   private state(projectId: string): ProjectChatState {
     let state = this.states.get(projectId);
@@ -234,62 +252,115 @@ export class ChatService {
       return updated;
     };
 
-    try {
-      for await (const event of handle.events) {
-        this.hooks.onAgentActivity?.(projectId);
-        switch (event.type) {
-          case 'text-delta':
-            assistantRow = await appendDelta(assistantRow, 'assistant', event.text);
-            break;
-          case 'thinking-delta':
-            // Denken live in eine eigene Zeile streamen (falls die API es liefert).
-            thinkingRow = await appendDelta(thinkingRow, 'thinking', event.text);
-            break;
-          case 'tool-use':
-            // Neuer Tool-Call beginnt: die laufende Text-/Denk-Bubble ist zu Ende.
-            assistantRow = null;
-            thinkingRow = null;
-            await insert('tool', event.detail ? `${event.name}: ${event.detail}` : event.name);
-            break;
-          case 'block-stop':
-            // Blockgrenze: die nächste Text-/Denk-Sequenz startet eine neue Bubble.
-            assistantRow = null;
-            thinkingRow = null;
-            break;
-          case 'session':
-            // Session-ID früh sichern — überlebt auch einen abgebrochenen Turn (R9).
-            // Modell mitschreiben: ein späterer Modellwechsel darf diese Session
-            // NICHT fortsetzen (--resume + anderes --model hängt).
+    const iterator = handle.events[Symbol.asyncIterator]();
+    // Genau EIN laufendes next() teilen — sonst geht bei einem Timeout das gerade
+    // schwebende Event verloren (der spätere Fehlertext läge im verworfenen next()).
+    let pending = iterator.next();
+    const race = async (timeoutMs: number): Promise<IteratorResult<AgentEvent> | 'timeout'> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeoutP = new Promise<'timeout'>((resolve) => {
+        timer = setTimeout(() => resolve('timeout'), timeoutMs);
+      });
+      try {
+        return await Promise.race([pending, timeoutP]);
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    // Nach dem Abbruch: kurz weiterlesen und einen etwaigen Fehlertext einsammeln.
+    const drainForErrorDetail = async (): Promise<string> => {
+      const deadline = Date.now() + this.abortGraceMs;
+      const parts: string[] = [];
+      for (;;) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+        const step = await race(remaining);
+        if (step === 'timeout') break;
+        pending = iterator.next();
+        if (step.done) break;
+        if (step.value.type === 'error') parts.push(step.value.message);
+      }
+      return parts.join('\n');
+    };
+    const handleEvent = async (event: AgentEvent): Promise<void> => {
+      this.hooks.onAgentActivity?.(projectId);
+      switch (event.type) {
+        case 'text-delta':
+          assistantRow = await appendDelta(assistantRow, 'assistant', event.text);
+          break;
+        case 'thinking-delta':
+          // Denken live in eine eigene Zeile streamen (falls die API es liefert).
+          thinkingRow = await appendDelta(thinkingRow, 'thinking', event.text);
+          break;
+        case 'tool-use':
+          // Neuer Tool-Call beginnt: die laufende Text-/Denk-Bubble ist zu Ende.
+          assistantRow = null;
+          thinkingRow = null;
+          await insert('tool', event.detail ? `${event.name}: ${event.detail}` : event.name);
+          break;
+        case 'block-stop':
+          // Blockgrenze: die nächste Text-/Denk-Sequenz startet eine neue Bubble.
+          assistantRow = null;
+          thinkingRow = null;
+          break;
+        case 'session':
+          // Session-ID früh sichern — überlebt auch einen abgebrochenen Turn (R9).
+          // Modell mitschreiben: ein späterer Modellwechsel darf diese Session
+          // NICHT fortsetzen (--resume + anderes --model hängt).
+          await this.db
+            .update(projects)
+            .set({ claudeSessionId: event.sessionId, claudeSessionModel: AGENT_MODEL })
+            .where(eq(projects.id, projectId));
+          break;
+        case 'api-retry':
+          // Sichtbar machen (R6) — aber nur einmal pro Turn, kein Retry-Spam.
+          if (event.attempt === 1) {
+            await insert(
+              'system',
+              `Claude-API-Störung: ${event.message} — automatische Wiederholung läuft (max. ${event.maxRetries} Versuche)`,
+            );
+          }
+          break;
+        case 'error':
+          await insert('error', event.message);
+          break;
+        case 'turn-aborted':
+          await insert('system', 'Turn abgebrochen');
+          break;
+        case 'turn-completed':
+          completed = true;
+          if (event.sessionId !== null) {
             await this.db
               .update(projects)
               .set({ claudeSessionId: event.sessionId, claudeSessionModel: AGENT_MODEL })
               .where(eq(projects.id, projectId));
-            break;
-          case 'api-retry':
-            // Sichtbar machen (R6) — aber nur einmal pro Turn, kein Retry-Spam.
-            if (event.attempt === 1) {
-              await insert(
-                'system',
-                `Claude-API-Störung: ${event.message} — automatische Wiederholung läuft (max. ${event.maxRetries} Versuche)`,
-              );
-            }
-            break;
-          case 'error':
-            await insert('error', event.message);
-            break;
-          case 'turn-aborted':
-            await insert('system', 'Turn abgebrochen');
-            break;
-          case 'turn-completed':
-            completed = true;
-            if (event.sessionId !== null) {
-              await this.db
-                .update(projects)
-                .set({ claudeSessionId: event.sessionId, claudeSessionModel: AGENT_MODEL })
-                .where(eq(projects.id, projectId));
-            }
-            break;
+          }
+          break;
+      }
+    };
+
+    try {
+      for (;;) {
+        const step = await race(this.idleTimeoutMs);
+        if (step === 'timeout') {
+          // Stiller Hänger: abbrechen und als Fehler SICHTBAR machen (statt ewig
+          // „Agent arbeitet"). Danach kurz nachlesen, ob noch ein Detail kommt.
+          handle.abort();
+          const detail = await drainForErrorDetail();
+          const secs = Math.round(this.idleTimeoutMs / 1000);
+          await insert(
+            'error',
+            `Der Agent hat ${secs}s lang nicht reagiert und wurde abgebrochen.` +
+              (detail
+                ? `\n\n${detail}`
+                : ' Kein weiterer Fehlertext verfügbar — mögliche Ursache: die Claude-API ' +
+                  'antwortet nicht (Netz-/Rate-Limit-Problem).'),
+          );
+          break;
         }
+        pending = iterator.next();
+        if (step.done) break;
+        await handleEvent(step.value);
       }
     } catch (error) {
       // Runner-Fehler nie verschlucken — als error-Zeile in die Historie.
