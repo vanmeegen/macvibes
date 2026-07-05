@@ -72,7 +72,7 @@ export class ChatService {
     this.idleTimeoutMs = options.agentIdleTimeoutMs ?? 180_000;
     // Nie länger warten als der Idle-Timeout — der Start-Timeout ist die UNTERE Schranke.
     this.firstEventTimeoutMs = Math.min(
-      options.agentFirstEventTimeoutMs ?? 15_000,
+      options.agentFirstEventTimeoutMs ?? 8_000,
       this.idleTimeoutMs,
     );
     this.abortGraceMs = options.agentAbortGraceMs ?? 5_000;
