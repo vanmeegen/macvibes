@@ -204,12 +204,15 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     });
 
     // Service-Konfiguration pro Projekt aufs Volume schreiben (ro-Mount).
+    // Owner-only (0700/0600): daemon.env.sh enthält das Proxy-Token — andere
+    // Host-Nutzer haben darauf nichts zu suchen (nicht auf die umask verlassen).
     const etcDir = join(projectVolumeDir(this.config.macvibesHome, context.projectId), 'vm-etc');
     rmSync(etcDir, { recursive: true, force: true });
+    mkdirSync(etcDir, { recursive: true, mode: 0o700 });
     for (const [relativePath, content] of Object.entries(services.files)) {
       const filePath = join(etcDir, relativePath);
-      mkdirSync(dirname(filePath), { recursive: true });
-      writeFileSync(filePath, content);
+      mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
+      writeFileSync(filePath, content, { mode: 0o600 });
     }
 
     // monit hat eine HTTP-Status-API — nur auf dem Host (127.0.0.1) gemappt.
