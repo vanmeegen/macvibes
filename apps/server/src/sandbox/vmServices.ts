@@ -55,6 +55,8 @@ function buildSharedFiles(spec: VmServicesSpec): Record<string, string> {
     'daemon.env.sh': `${envLines}\n`,
     'devserver-run.sh': [
       '#!/bin/sh',
+      '# monit startet Programme mit minimalem PATH — bun liegt in /usr/local/bin.',
+      'export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"',
       '# Dev-Server im Vordergrund — niedrige Priorität, damit der Agent-Turn',
       '# in derselben VM nicht verhungert (Kaltstart, chatproblems.md #12).',
       'cd /work',
@@ -64,6 +66,7 @@ function buildSharedFiles(spec: VmServicesSpec): Record<string, string> {
     ].join('\n'),
     'daemon-run.sh': [
       '#!/bin/sh',
+      'export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"',
       `. ${VM_ETC_DIR}/daemon.env.sh`,
       'cd /work',
       `exec bun ${VM_BIN_DIR}/main.js`,

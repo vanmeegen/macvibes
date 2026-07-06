@@ -47,6 +47,12 @@ export interface BuildBaselineOptions {
    * echte Produktions-Baseline (die dann leere node_modules hätte).
    */
   snapshotName?: string;
+  /**
+   * Agent-SDK + Supervisor-Kandidaten (tini/monit/horust) mit einbacken —
+   * Voraussetzung für den Daemon-Transport (Spike A+C). Default: true.
+   * Tests, die nur den Workspace-Fork brauchen, sparen sich damit apt & Co.
+   */
+  withAgentDaemon?: boolean;
 }
 
 /**
@@ -83,6 +89,24 @@ export async function buildTemplateBaseline(options: BuildBaselineOptions): Prom
     'infinity',
   ]);
 
+  // Agent SDK für den In-VM-Daemon (Spike A+C): liegt unter /opt/macvibes,
+  // das gemountete Daemon-Bundle (/opt/macvibes/bin/main.js) löst es von dort
+  // auf. Dazu die Supervisor-Kandidaten fürs Duell (architektur.md): tini+monit
+  // aus Debian, horust (optional) als statisches Binary vom GitHub-Release.
+  // Alles fehlertolerant — ohne diese Teile funktioniert nur der Daemon-
+  // Transport nicht, der exec-Pfad bleibt intakt.
+  const agentDaemonInstall =
+    '(mkdir -p /opt/macvibes && cd /opt/macvibes && printf %s "{}" > package.json && ' +
+    'bun add @anthropic-ai/claude-agent-sdk >/dev/null 2>&1 ' +
+    '|| echo "WARNUNG: Agent-SDK-Install fehlgeschlagen (Daemon-Transport ohne Funktion)") && ' +
+    '(apt-get update -qq >/dev/null 2>&1 && ' +
+    'apt-get install -y -qq tini monit curl >/dev/null 2>&1 ' +
+    '|| echo "WARNUNG: tini/monit-Install fehlgeschlagen (Daemon-Transport ohne Funktion)") && ' +
+    '(a="$(uname -m)" && curl -fsSL ' +
+    '"https://github.com/FedericoPonzi/Horust/releases/latest/download/horust-$a-unknown-linux-musl.tar.gz" ' +
+    '| tar -xz -C /usr/local/bin 2>/dev/null && chmod +x /usr/local/bin/horust ' +
+    '|| echo "WARNUNG: horust nicht installiert (optionaler Supervisor-Kandidat)") && ';
+
   try {
     await runMsb([
       'exec',
@@ -93,22 +117,7 @@ export async function buildTemplateBaseline(options: BuildBaselineOptions): Prom
       // node_modules vom Host ausschließen — die VM installiert selbst (Linux-Artefakte).
       // Claude Code global installieren (Agent läuft in der VM, B5c).
       'bun add -g @anthropic-ai/claude-code >/dev/null 2>&1 && ' +
-        // Agent SDK für den In-VM-Daemon (Spike A+C): liegt unter /opt/macvibes,
-        // das gemountete Daemon-Bundle (/opt/macvibes/bin/main.js) löst es von
-        // dort auf. Fehlertolerant — ohne SDK funktioniert nur der Daemon-
-        // Transport nicht, der exec-Pfad bleibt intakt.
-        '(mkdir -p /opt/macvibes && cd /opt/macvibes && printf %s "{}" > package.json && ' +
-        'bun add @anthropic-ai/claude-agent-sdk >/dev/null 2>&1 ' +
-        '|| echo "WARNUNG: Agent-SDK-Install fehlgeschlagen (Daemon-Transport ohne Funktion)") && ' +
-        // Supervisor-Kandidaten fürs Duell (architektur.md): tini+monit aus
-        // Debian, horust (optional) als statisches Binary vom GitHub-Release.
-        '(apt-get update -qq >/dev/null 2>&1 && ' +
-        'apt-get install -y -qq tini monit curl >/dev/null 2>&1 ' +
-        '|| echo "WARNUNG: tini/monit-Install fehlgeschlagen (Daemon-Transport ohne Funktion)") && ' +
-        '(a="$(uname -m)" && curl -fsSL ' +
-        '"https://github.com/FedericoPonzi/Horust/releases/latest/download/horust-$a-unknown-linux-musl.tar.gz" ' +
-        '| tar -xz -C /usr/local/bin 2>/dev/null && chmod +x /usr/local/bin/horust ' +
-        '|| echo "WARNUNG: horust nicht installiert (optionaler Supervisor-Kandidat)") && ' +
+        (options.withAgentDaemon === false ? '' : agentDaemonInstall) +
         'mkdir -p /baseline/work && cp -r /src/. /baseline/work && rm -rf /baseline/work/node_modules && ' +
         'cd /baseline/work && bun install --silent && mkdir -p node_modules',
     ]);

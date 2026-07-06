@@ -291,7 +291,13 @@ describe.skipIf(!available)('Template-Baselines (B5b, Snapshot-Fork)', () => {
 
       try {
         // Baseline für das isolierte Fixture-Template backen (bun install in der VM).
-        await buildTemplateBaseline({ templatesDir: templates, templateDir, image: 'oven/bun' });
+        // Ohne Daemon-Zubehör (apt/SDK) — hier zählt nur der Workspace-Fork.
+        await buildTemplateBaseline({
+          templatesDir: templates,
+          templateDir,
+          image: 'oven/bun',
+          withAgentDaemon: false,
+        });
         expect(await baselineExists(templateDir)).toBe(true);
 
         const provider = new MicrosandboxSandboxProvider({
