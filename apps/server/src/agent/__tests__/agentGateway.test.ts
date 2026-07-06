@@ -1,17 +1,17 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import type { Server } from 'bun';
 import { AGENT_GATEWAY_PATH, AgentGateway } from '../agentGateway';
-import type { GatewayNotification } from '../agentGateway';
+import type { GatewayNotification, GatewaySocketData } from '../agentGateway';
 
 const TOKEN = 'geheim-123';
 
 interface Harness {
   gateway: AgentGateway;
-  server: Server;
+  server: Server<GatewaySocketData>;
   url: (sandbox: string, token?: string) => string;
 }
 
-const servers: Server[] = [];
+const servers: Server<GatewaySocketData>[] = [];
 const sockets: WebSocket[] = [];
 
 function makeHarness(): Harness {

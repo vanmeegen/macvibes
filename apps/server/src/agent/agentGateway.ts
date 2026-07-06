@@ -31,7 +31,7 @@ export class AgentGateway {
   }
 
   /** Upgrade-Handler für index.ts — undefined, wenn der Socket übernommen wurde. */
-  handleUpgrade(request: Request, server: Server): Response | undefined {
+  handleUpgrade(request: Request, server: Server<GatewaySocketData>): Response | undefined {
     const url = new URL(request.url);
     const sandbox = url.searchParams.get('sandbox');
     const token = url.searchParams.get('token');
