@@ -13,9 +13,11 @@ const SPEC = {
 describe('buildVmServices (monit)', () => {
   const services = buildVmServices({ ...SPEC, supervisor: 'monit' });
 
-  test('PID 1 kopiert die monitrc mit Mode 600 und exec-t tini→monit im Vordergrund', () => {
+  test('PID 1 kopiert die monitrc mit Mode 600 und exec-t tini (Subreaper) → monit', () => {
     expect(services.pid1Command).toContain('install -m 600 /opt/macvibes/etc/monitrc');
-    expect(services.pid1Command).toContain('exec tini --');
+    // -s ist Pflicht: tini ist in der msb-VM nicht das echte PID 1 — ohne
+    // Subreaper bleiben tote Services Zombies und monit restartet nie.
+    expect(services.pid1Command).toContain('exec tini -s --');
     expect(services.pid1Command).toContain('monit -I');
   });
 

@@ -1,4 +1,4 @@
-import { MicrosandboxError, runMsb } from './msb';
+import { MicrosandboxError, runMsb, waitForExecReady } from './msb';
 
 /**
  * Template-Baselines (R9/PRD „Template-Baselines"): pro Template wird einmal
@@ -89,38 +89,72 @@ export async function buildTemplateBaseline(options: BuildBaselineOptions): Prom
     'infinity',
   ]);
 
-  // Agent SDK für den In-VM-Daemon (Spike A+C): liegt unter /opt/macvibes,
-  // das gemountete Daemon-Bundle (/opt/macvibes/bin/main.js) löst es von dort
-  // auf. Dazu die Supervisor-Kandidaten fürs Duell (architektur.md): tini+monit
-  // aus Debian, horust (optional) als statisches Binary vom GitHub-Release.
-  // Alles fehlertolerant — ohne diese Teile funktioniert nur der Daemon-
-  // Transport nicht, der exec-Pfad bleibt intakt.
-  const agentDaemonInstall =
-    '(mkdir -p /opt/macvibes && cd /opt/macvibes && printf %s "{}" > package.json && ' +
-    'bun add @anthropic-ai/claude-agent-sdk >/dev/null 2>&1 ' +
-    '|| echo "WARNUNG: Agent-SDK-Install fehlgeschlagen (Daemon-Transport ohne Funktion)") && ' +
-    '(apt-get update -qq >/dev/null 2>&1 && ' +
-    'apt-get install -y -qq tini monit curl >/dev/null 2>&1 ' +
-    '|| echo "WARNUNG: tini/monit-Install fehlgeschlagen (Daemon-Transport ohne Funktion)") && ' +
-    '(a="$(uname -m)" && curl -fsSL ' +
-    '"https://github.com/FedericoPonzi/Horust/releases/latest/download/horust-$a-unknown-linux-musl.tar.gz" ' +
-    '| tar -xz -C /usr/local/bin 2>/dev/null && chmod +x /usr/local/bin/horust ' +
-    '|| echo "WARNUNG: horust nicht installiert (optionaler Supervisor-Kandidat)") && ';
+  // Der Builder braucht dieselbe Ready-Wartezeit wie Projekt-VMs: `msb run -d`
+  // kehrt zurück, bevor der Gast-exec-Endpunkt steht — ein sofortiges exec
+  // stirbt sonst intermittierend mit "exec session ended without exit event"
+  // (live getroffen beim Daemon-Integrationstest, 2026-07-06).
+  await waitForExecReady(BUILDER_SANDBOX);
+
+  // Ein exec pro Schritt statt eines Mega-Befehls: kurze exec-Sessions sind
+  // bei msb deutlich robuster, und ein Fehler ist dem Schritt zuordenbar.
+  const steps: { beschreibung: string; script: string }[] = [
+    {
+      beschreibung: 'Claude Code global installieren (Agent läuft in der VM, B5c)',
+      script: 'bun add -g @anthropic-ai/claude-code >/dev/null 2>&1',
+    },
+  ];
+
+  if (options.withAgentDaemon !== false) {
+    // Agent SDK für den In-VM-Daemon (Spike A+C): liegt unter /opt/macvibes,
+    // das gemountete Daemon-Bundle (/opt/macvibes/bin/main.js) löst es von dort
+    // auf. Dazu die Supervisor-Kandidaten fürs Duell (architektur.md): tini+monit
+    // aus Debian, horust (optional) als statisches Binary vom GitHub-Release.
+    // Alles fehlertolerant — ohne diese Teile funktioniert nur der Daemon-
+    // Transport nicht, der exec-Pfad bleibt intakt.
+    steps.push(
+      {
+        beschreibung: 'Agent SDK nach /opt/macvibes',
+        script:
+          'mkdir -p /opt/macvibes && cd /opt/macvibes && printf %s "{}" > package.json && ' +
+          'bun add @anthropic-ai/claude-agent-sdk >/dev/null 2>&1 ' +
+          '|| echo "WARNUNG: Agent-SDK-Install fehlgeschlagen (Daemon-Transport ohne Funktion)"',
+      },
+      {
+        beschreibung: 'tini + monit (Supervisor) installieren',
+        script:
+          'apt-get update -qq >/dev/null 2>&1 && ' +
+          'apt-get install -y -qq tini monit curl >/dev/null 2>&1 ' +
+          '|| echo "WARNUNG: tini/monit-Install fehlgeschlagen (Daemon-Transport ohne Funktion)"',
+      },
+      {
+        beschreibung: 'horust (optionaler Supervisor-Kandidat) installieren',
+        script:
+          'a="$(uname -m)" && curl -fsSL ' +
+          '"https://github.com/FedericoPonzi/Horust/releases/latest/download/horust-$a-unknown-linux-musl.tar.gz" ' +
+          '| tar -xz -C /usr/local/bin 2>/dev/null && chmod +x /usr/local/bin/horust ' +
+          '|| echo "WARNUNG: horust nicht installiert (optionaler Supervisor-Kandidat)"',
+      },
+    );
+  }
+
+  steps.push({
+    // node_modules vom Host ausschließen — die VM installiert selbst (Linux-Artefakte).
+    beschreibung: 'Template kopieren + Dependencies installieren',
+    script:
+      'mkdir -p /baseline/work && cp -r /src/. /baseline/work && rm -rf /baseline/work/node_modules && ' +
+      'cd /baseline/work && bun install --silent && mkdir -p node_modules',
+  });
 
   try {
-    await runMsb([
-      'exec',
-      BUILDER_SANDBOX,
-      '--',
-      'sh',
-      '-c',
-      // node_modules vom Host ausschließen — die VM installiert selbst (Linux-Artefakte).
-      // Claude Code global installieren (Agent läuft in der VM, B5c).
-      'bun add -g @anthropic-ai/claude-code >/dev/null 2>&1 && ' +
-        (options.withAgentDaemon === false ? '' : agentDaemonInstall) +
-        'mkdir -p /baseline/work && cp -r /src/. /baseline/work && rm -rf /baseline/work/node_modules && ' +
-        'cd /baseline/work && bun install --silent && mkdir -p node_modules',
-    ]);
+    for (const step of steps) {
+      try {
+        await runMsb(['exec', BUILDER_SANDBOX, '--', 'sh', '-c', step.script]);
+      } catch (error) {
+        throw new MicrosandboxError(
+          `Baseline-Schritt „${step.beschreibung}" fehlgeschlagen: ${String(error)}`,
+        );
+      }
+    }
     await runMsb(['stop', BUILDER_SANDBOX]);
     await runMsb(['snapshot', 'create', '--force', '-q', '--from', BUILDER_SANDBOX, snapshotName]);
   } finally {

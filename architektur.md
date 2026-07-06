@@ -5,7 +5,80 @@
 > Datei das **Zukunfts- und Entscheidungsdokument**: welche Architektur-Fragen
 > müssen wir bewusst entscheiden, bevor wir weiter Pflaster stapeln.
 >
-> Status: Diskussionsgrundlage, noch **keine** Entscheidungen getroffen.
+> Status: **Entschieden am 2026-07-06 (Session mit Marco), Spike implementiert**
+> — siehe „Entscheidungen + Spike-Stand" direkt hier drunter. Der Rest der
+> Datei ist die ursprüngliche Diskussionsgrundlage.
+
+---
+
+## Entscheidungen + Spike-Stand (2026-07-06)
+
+**Entschieden:**
+
+1. **A+C kombiniert**: persistenter **Agent-Daemon in der VM** (Bun), der das
+   **Agent SDK im Streaming-Input-Modus** nutzt — EINE langlebige `query()`
+   über alle Turns, `interrupt()` statt Kill (behebt #13 ursächlich), kein
+   `--resume` pro Turn. Transport: der Daemon wählt sich **ausgehend** per
+   WebSocket beim Host-Gateway ein (`/agent`, gleicher Weg wie der
+   Credential-Proxy). msb nur noch für VM-Lifecycle.
+   Verifizierte SDK-Fakten dazu: das SDK spawnt die CLI als Subprozess (Tools
+   laufen, wo das SDK läuft → „C pur" auf dem Host würde die Isolation
+   brechen); `interrupt()`/`setModel()` nur im Streaming-Modus; Sessions
+   weiter auf Platte (`CLAUDE_CONFIG_DIR` bleibt), `resume`/`forkSession`
+   als Recovery-Hebel.
+2. **Vorgehen: Spike hinter Flag**, alter exec-Pfad bleibt intakt:
+   `MACVIBES_AGENT_TRANSPORT=daemon|exec` (Default `exec`). Umstellung des
+   Defaults erst nach grünem Härtetest (chatproblems.md §Empfehlung).
+3. **Supervision: Fertiges statt Eigenbau** (Marcos Leitplanke): PID 1 der VM
+   ist ein echter Supervisor statt `sleep infinity`; der host-seitige
+   PreviewSupervisor-Watchdog entfällt in diesem Pfad (Host LIEST nur noch
+   Status). Kein Python im Image → **Duell im Härtetest: tini+monit vs.
+   horust** (`MACVIBES_VM_SUPERVISOR=monit|horust`, Default monit — monit hat
+   Health-Check-Restart, Crash-Loop→Endzustand und Status-HTTP-API eingebaut;
+   horust ist der leichtere, aber junge Kandidat).
+
+**Implementiert (Branch `architektur`):**
+
+- `apps/server/src/agent/daemon/` — Protokoll, `DaemonSession` (SDK-Streaming,
+  Interrupt-Semantik, Modellwechsel-Guard), `main.ts` (WS-Client, Reconnect)
+- `apps/server/src/agent/agentGateway.ts` + `daemonRunner.ts` — Host-Seite;
+  `chatService` unverändert (der `AgentRunner`-Seam trägt)
+- `apps/server/src/sandbox/vmServices.ts` — monit-/horust-Konfiguration aus
+  einem Satz Run-Wrapper; `monitStatus.ts` + `previewStatusPoller.ts` für
+  `previewStatus` (nur lesen); Provider-Zweig `startWithDaemon`
+- Baseline backt Agent SDK (`/opt/macvibes`) + tini/monit (+ horust
+  best-effort) ein — `bun run baselines` nach dem Umstellen nötig
+- Integrationstest gegen echtes msb (gated):
+  `MACVIBES_TEST_MSB=1 bun test daemonTransport.msb` — Daemon-Connect,
+  monit-Restart-Heilung, mit Credentials auch Turn/Interrupt/Kontext
+
+**Spike-Befunde aus dem echten msb-Lauf (2026-07-06, alle behoben — der
+Integrationstest ist grün inkl. Turn/Interrupt/Kontext):**
+
+- **msb-NAT lässt Verbindungen halbtot zurück**: FIN/RST der VM-Seite kommen
+  nicht immer am Host an — der Gateway-Socket bleibt scheinbar offen, Sends
+  verschwinden spurlos. Gegenmittel: `turn-started`-**Quittung** pro Turn
+  (bleibt sie 5s aus → Abbruch + Verbindung verwerfen; der chatService-Retry
+  trifft die frische Verbindung) plus **Heartbeat** (ping/pong alle 15s hält
+  den NAT-Flow in beide Richtungen warm).
+- **tini braucht `-s` (Subreaper)**: In der msb-VM ist unser PID-1-Kommando
+  nicht das echte Init — ohne `-s` bleiben tote Services **Zombies** und monit
+  startet nie neu („process is a zombie" im 2s-Takt).
+- **msb-exec-Sessions haben eigene PID-Namespaces**: Sie können den PID-1-Baum
+  nicht killen (Pidfile-PIDs laufen ins Leere). Daher `shutdown`-Kommando im
+  Protokoll — nur der Daemon selbst kann sich zuverlässig beenden.
+- **monit färbt seine Status-API mit ANSI-Codes** — der Parser strippt sie.
+- **Baseline-Builder brauchte `waitForExecReady`** + kurze exec-Schritte statt
+  eines Mega-Befehls (sonst „exec session ended without exit event").
+
+**Offen (nächste Schritte):**
+
+- Härtetest aus chatproblems.md gegen `MACVIBES_AGENT_TRANSPORT=daemon`
+  (Browser, 8–10 Turns, 2–3 Projekte, kalt+warm, Interrupt-Szenario) +
+  Supervisor-Duell → dann Default umstellen
+- Phase 2 (Rückbau): msbExecSpawner/KILL_ORPHANS, 1,5s-Stagger, vmRunner,
+  CLI-Install im Baseline; chatService-Timeouts/Retry entschärfen;
+  optional launchd für den Produktionsbetrieb
 
 ---
 

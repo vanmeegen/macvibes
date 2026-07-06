@@ -19,10 +19,32 @@ export type HostToDaemonMessage =
       resumeSessionId: string | null;
       model: string;
     }
-  | { kind: 'interrupt'; turnId: string };
+  | { kind: 'interrupt'; turnId: string }
+  /** Antwort auf einen Daemon-ping — Liveness-Beweis für die Host→VM-Richtung. */
+  | { kind: 'pong' }
+  /**
+   * Daemon soll sich beenden — der In-VM-Supervisor startet ihn frisch.
+   * Nur der Daemon selbst kann das zuverlässig: msb-exec-Sessions leben in
+   * eigenen PID-Namespaces und können den PID-1-Baum nicht killen.
+   */
+  | { kind: 'shutdown' };
 
 export type DaemonToHostMessage =
-  { kind: 'ready' } | { kind: 'event'; turnId: string; event: AgentEvent };
+  | { kind: 'ready' }
+  /**
+   * Heartbeat des Daemons: hält den NAT-Flow der VM→Host-Verbindung warm —
+   * microsandbox lässt idle TCP-Flows still sterben, danach verschwinden
+   * Kommandos spurlos (Live-Befund 2026-07-06).
+   */
+  | { kind: 'ping' }
+  /**
+   * Sofortige Quittung auf start-turn. Ohne sie weiß der Host nicht, ob das
+   * Kommando ankam: nach einem Daemon-Neustart kann die registrierte
+   * Verbindung halbtot sein (msb-NAT verschluckt FIN/RST — der Host-Socket
+   * bleibt scheinbar offen) und Sends verschwinden spurlos (Live-Befund).
+   */
+  | { kind: 'turn-started'; turnId: string }
+  | { kind: 'event'; turnId: string; event: AgentEvent };
 
 function parseJsonObject(raw: string): Record<string, unknown> | null {
   let value: unknown;
@@ -62,6 +84,14 @@ export function parseHostToDaemon(raw: string): HostToDaemonMessage | null {
     return { kind: 'interrupt', turnId: msg['turnId'] };
   }
 
+  if (msg['kind'] === 'pong') {
+    return { kind: 'pong' };
+  }
+
+  if (msg['kind'] === 'shutdown') {
+    return { kind: 'shutdown' };
+  }
+
   return null;
 }
 
@@ -71,6 +101,14 @@ export function parseDaemonToHost(raw: string): DaemonToHostMessage | null {
 
   if (msg['kind'] === 'ready') {
     return { kind: 'ready' };
+  }
+
+  if (msg['kind'] === 'ping') {
+    return { kind: 'ping' };
+  }
+
+  if (msg['kind'] === 'turn-started' && typeof msg['turnId'] === 'string') {
+    return { kind: 'turn-started', turnId: msg['turnId'] };
   }
 
   if (msg['kind'] === 'event' && typeof msg['turnId'] === 'string') {

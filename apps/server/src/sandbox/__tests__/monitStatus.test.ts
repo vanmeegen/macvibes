@@ -52,4 +52,19 @@ describe('previewStatusFromMonitText', () => {
     expect(previewStatusFromMonitText(monitText('Not monitored'), 'devserver')).toBe('failed');
     expect(previewStatusFromMonitText(monitText('Not monitored'), 'agent-daemon')).toBe('ready');
   });
+
+  test('echte monit-Ausgabe mit ANSI-Farbcodes wird geparst (Live-Befund 2026-07-06)', () => {
+    // So sieht die _status-Antwort von monit 5.34 wirklich aus: Farbcodes um
+    // Abschnittstitel und Statuswerte — ohne Strippen matcht gar nichts.
+    const colored = [
+      'Monit 5.34.3 uptime: 0m',
+      '',
+      "[1;36mProcess 'devserver'[0m",
+      '  status                       [0;92mOK[0m',
+      '  monitoring status            Monitored',
+      '  pid                          [0;39m385[0m',
+      '',
+    ].join('\n');
+    expect(previewStatusFromMonitText(colored)).toBe('ready');
+  });
 });

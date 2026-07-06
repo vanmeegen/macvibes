@@ -4,7 +4,7 @@ import { agentConfigDirFor, ensureWorkspace, projectVolumeDir } from '../service
 import { baselineExists, baselineSnapshotName } from './baselineService';
 import { httpProbe } from './httpProbe';
 import { previewStatusFromMonitText } from './monitStatus';
-import { MicrosandboxError, msbExec, runMsb } from './msb';
+import { msbExec, runMsb } from './msb';
 import { PreviewSupervisor } from './previewSupervisor';
 import { PreviewStatusPoller } from './previewStatusPoller';
 import { PortAllocator } from './portService';
@@ -12,7 +12,9 @@ import { MONIT_HTTPD_PORT, VM_BIN_DIR, VM_ETC_DIR, buildVmServices } from './vmS
 import type { VmSupervisorKind } from './vmServices';
 import type { PreviewStatus, SandboxContext, SandboxHandle, SandboxProvider } from './provider';
 
-export { MicrosandboxError, msbAvailable } from './msb';
+export { MicrosandboxError, msbAvailable, waitForExecReady } from './msb';
+export type { WaitForExecReadyOptions } from './msb';
+import { waitForExecReady } from './msb';
 
 /** Konfiguration des Daemon-Transports (Spike A+C) — undefined = exec-Pfad. */
 export interface AgentDaemonProviderConfig {
@@ -38,41 +40,6 @@ export interface MicrosandboxProviderConfig {
 /** Sandbox-Name eines Projekts — vom Provider und vom VM-Runner genutzt. */
 export function microsandboxSandboxName(projectId: string): string {
   return `macvibes-${projectId}`;
-}
-
-export interface WaitForExecReadyOptions {
-  timeoutMs?: number;
-  intervalMs?: number;
-  /** Exec-Probe (injizierbar für Tests). Wirft, solange die VM nicht bereit ist. */
-  probe?: (name: string) => Promise<unknown>;
-}
-
-/**
- * Wartet, bis `msb exec` in der Sandbox funktioniert (Gast-Agent-Endpunkt
- * bereit). Verhindert die "no agent endpoint found"-Race beim ersten Prompt.
- */
-export async function waitForExecReady(
-  name: string,
-  options: WaitForExecReadyOptions = {},
-): Promise<void> {
-  const timeoutMs = options.timeoutMs ?? 30_000;
-  const intervalMs = options.intervalMs ?? 250;
-  const probe = options.probe ?? ((n: string) => runMsb(['exec', n, '--', 'true']));
-
-  const start = Date.now();
-  let lastError: unknown = null;
-  for (;;) {
-    try {
-      await probe(name);
-      return;
-    } catch (error) {
-      lastError = error;
-    }
-    if (Date.now() - start >= timeoutMs) {
-      throw new MicrosandboxError(`Sandbox ${name} wurde nicht exec-bereit: ${String(lastError)}`);
-    }
-    await new Promise((r) => setTimeout(r, intervalMs));
-  }
 }
 
 /** Arbeitsverzeichnis in der VM — Mountpunkt des Projekt-Workspace. */

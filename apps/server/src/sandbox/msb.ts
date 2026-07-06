@@ -59,3 +59,39 @@ export async function msbAvailable(): Promise<boolean> {
     return false;
   }
 }
+
+export interface WaitForExecReadyOptions {
+  timeoutMs?: number;
+  intervalMs?: number;
+  /** Exec-Probe (injizierbar für Tests). Wirft, solange die VM nicht bereit ist. */
+  probe?: (name: string) => Promise<unknown>;
+}
+
+/**
+ * Wartet, bis `msb exec` in der Sandbox funktioniert (Gast-Agent-Endpunkt
+ * bereit). Verhindert die "no agent endpoint found"-Race beim ersten Prompt
+ * und "exec session ended without exit event" direkt nach `msb run -d`.
+ */
+export async function waitForExecReady(
+  name: string,
+  options: WaitForExecReadyOptions = {},
+): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  const intervalMs = options.intervalMs ?? 250;
+  const probe = options.probe ?? ((n: string) => runMsb(['exec', n, '--', 'true']));
+
+  const start = Date.now();
+  let lastError: unknown = null;
+  for (;;) {
+    try {
+      await probe(name);
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+    if (Date.now() - start >= timeoutMs) {
+      throw new MicrosandboxError(`Sandbox ${name} wurde nicht exec-bereit: ${String(lastError)}`);
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}

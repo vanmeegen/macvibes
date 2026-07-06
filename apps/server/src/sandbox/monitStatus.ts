@@ -6,7 +6,10 @@ import type { PreviewStatus } from './provider';
  * maßgeblich ist die `status`-Zeile im Abschnitt des gesuchten Services.
  */
 export function previewStatusFromMonitText(text: string, service = 'devserver'): PreviewStatus {
-  const status = serviceStatusLine(text, service);
+  // monit färbt die Ausgabe mit ANSI-Codes ein (auch über HTTP) — erst strippen,
+  // sonst matchen weder Abschnittstitel noch Statuswerte (Live-Befund 2026-07-06).
+  // eslint-disable-next-line no-control-regex
+  const status = serviceStatusLine(text.replace(/\u001b?\[[0-9;]*m/g, ''), service);
   if (status === null) return 'starting';
 
   const normalized = status.toLowerCase();

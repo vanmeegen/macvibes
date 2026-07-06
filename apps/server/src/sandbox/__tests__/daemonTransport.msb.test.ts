@@ -52,10 +52,29 @@ let gateway: AgentGateway;
 let handle: SandboxHandle | null = null;
 let runner: DaemonAgentRunner;
 
-async function collectTurn(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
+async function collectTurn(
+  events: AsyncIterable<AgentEvent>,
+  maxMs = 180_000,
+): Promise<AgentEvent[]> {
   const all: AgentEvent[] = [];
-  for await (const event of events) {
-    all.push(event);
+  const deadline = Date.now() + maxMs;
+  const iterator = events[Symbol.asyncIterator]();
+  for (;;) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      all.push({ type: 'error', message: 'Test: Timeout beim Event-Sammeln (Turn hängt)' });
+      break;
+    }
+    const result = await Promise.race([
+      iterator.next(),
+      Bun.sleep(remaining).then(() => 'timeout' as const),
+    ]);
+    if (result === 'timeout') {
+      all.push({ type: 'error', message: 'Test: Timeout beim Event-Sammeln (Turn hängt)' });
+      break;
+    }
+    if (result.done) break;
+    all.push(result.value);
   }
   return all;
 }
@@ -201,21 +220,57 @@ describe.skipIf(!enabled)(
       async () => {
         await gateway.waitForConnection(SANDBOX_NAME, 120_000);
 
-        // Daemon in der VM hart killen (Prozess mit main.js in der cmdline).
-        const killScript =
-          'for p in /proc/[0-9]*; do pid=${p#/proc/}; ' +
-          'tr "\\0" " " < "$p/cmdline" 2>/dev/null | grep -q "macvibes/bin/main.js" && kill -9 "$pid"; ' +
-          'done; true';
-        await runMsb(['exec', SANDBOX_NAME, '--', 'sh', '-c', killScript]);
+        const readPid = async (): Promise<string> =>
+          (
+            await runMsb([
+              'exec',
+              SANDBOX_NAME,
+              '--',
+              'sh',
+              '-c',
+              'cat /run/macvibes/agent-daemon.pid 2>/dev/null || echo leer',
+            ])
+          ).trim();
+        const pidVorher = await readPid();
+        expect(pidVorher).not.toBe('leer');
 
-        // Verbindung fällt …
-        const dropStart = Date.now();
-        while (gateway.isConnected(SANDBOX_NAME) && Date.now() - dropStart < 30_000) {
-          await Bun.sleep(200);
+        // Daemon beenden — per shutdown-Kommando über die stehende Verbindung.
+        // Von außen geht es nicht: msb-exec-Sessions leben in eigenen
+        // PID-Namespaces und können den PID-1-Baum nicht killen (Live-Befund;
+        // deckt sich mit chatproblems.md „PID-Files nutzlos").
+        expect(gateway.send(SANDBOX_NAME, { kind: 'shutdown' })).toBe(true);
+
+        // monit startet neu (2s-Zyklus) — der Restart ist oft SCHNELLER als die
+        // beobachtbare Trennung (die neue Verbindung ersetzt die alte im
+        // Gateway, bevor der Drop durchschlägt). Beweis ist daher der
+        // PID-Wechsel im Pidfile, nicht ein sichtbarer Disconnect.
+        const restartStart = Date.now();
+        let pidNachher = pidVorher;
+        while (Date.now() - restartStart < 90_000) {
+          pidNachher = await readPid();
+          if (pidNachher !== 'leer' && pidNachher !== pidVorher) break;
+          await Bun.sleep(1000);
         }
-        expect(gateway.isConnected(SANDBOX_NAME)).toBe(false);
 
-        // … und monit + Daemon-Reconnect stellen sie ohne Host-Zutun wieder her.
+        // Diagnose bei Fehlschlag: Logs aus der VM sind die einzige Wahrheit.
+        if (pidNachher === pidVorher) {
+          const dump = async (datei: string): Promise<void> => {
+            const inhalt = await runMsb([
+              'exec',
+              SANDBOX_NAME,
+              '--',
+              'sh',
+              '-c',
+              `tail -40 ${datei} 2>/dev/null || echo "(fehlt: ${datei})"`,
+            ]).catch((e) => `Dump fehlgeschlagen: ${String(e)}`);
+            console.log(`--- ${datei} ---\n${inhalt}`);
+          };
+          await dump('/var/log/macvibes-agent-daemon.log');
+          await dump('/var/log/monit.log');
+        }
+        expect(pidNachher).not.toBe(pidVorher);
+
+        // … und der neue Daemon hängt wieder am Gateway, ohne Host-Zutun.
         await gateway.waitForConnection(SANDBOX_NAME, 90_000);
         expect(gateway.isConnected(SANDBOX_NAME)).toBe(true);
       },
@@ -228,15 +283,37 @@ describe.skipIf(!enabled)(
         await gateway.waitForConnection(SANDBOX_NAME, 120_000);
 
         // Turn 1: normaler Durchlauf bis turn-completed inkl. Session-ID.
-        const turn1 = await collectTurn(
-          runner.startTurn({
-            projectId: PROJECT_ID,
-            prompt: 'Antworte ausschließlich mit dem Wort: bereit. Merke dir die Zahl 42.',
-            workspaceDir: '/egal-host-pfad',
-            resumeSessionId: null,
-          }).events,
-        );
+        // Versuch 1 darf an einer halbtoten Verbindung scheitern (Daemon-
+        // Neustart aus dem vorigen Test; msb-NAT verschluckt FIN) — Versuch 2
+        // spiegelt exakt den Auto-Retry des chatService.
+        const startTurn1 = () =>
+          collectTurn(
+            runner.startTurn({
+              projectId: PROJECT_ID,
+              prompt: 'Antworte ausschließlich mit dem Wort: bereit. Merke dir die Zahl 42.',
+              workspaceDir: '/egal-host-pfad',
+              resumeSessionId: null,
+            }).events,
+          );
+        let turn1 = await startTurn1();
+        if (turn1.at(-1)?.type !== 'turn-completed') {
+          console.log('Turn 1, Versuch 1 (erwartbar nach Daemon-Neustart):', JSON.stringify(turn1));
+          await gateway.waitForConnection(SANDBOX_NAME, 60_000);
+          turn1 = await startTurn1();
+        }
         const completed = turn1.at(-1);
+        if (completed?.type !== 'turn-completed') {
+          console.log('Turn 1 scheiterte — Events:', JSON.stringify(turn1, null, 2));
+          const daemonLog = await runMsb([
+            'exec',
+            SANDBOX_NAME,
+            '--',
+            'sh',
+            '-c',
+            'tail -40 /var/log/macvibes-agent-daemon.log 2>/dev/null || echo kein-log',
+          ]).catch((e) => `Dump fehlgeschlagen: ${String(e)}`);
+          console.log('--- agent-daemon.log ---\n' + daemonLog);
+        }
         expect(completed?.type).toBe('turn-completed');
         const text = turn1
           .filter((e): e is Extract<AgentEvent, { type: 'text-delta' }> => e.type === 'text-delta')

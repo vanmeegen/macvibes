@@ -167,8 +167,11 @@ export function buildVmServices(spec: VmServicesSpec): VmServices {
     return {
       files: { ...shared, ...buildMonitFiles(spec) },
       // monit verlangt Mode 600 auf der Config — der ro-Mount garantiert das
-      // nicht, deshalb wird sie beim Boot nach /etc kopiert. tini reapt Zombies.
-      pid1Command: `install -m 600 ${VM_ETC_DIR}/monitrc /etc/monitrc && exec tini -- monit -I -c /etc/monitrc`,
+      // nicht, deshalb wird sie beim Boot nach /etc kopiert. tini reapt Zombies;
+      // -s (Subreaper) ist Pflicht: in der msb-VM ist tini NICHT das echte PID 1,
+      // ohne -s bleiben tote Services als Zombies stehen und monit startet sie
+      // nie neu ("process is a zombie", Live-Befund 2026-07-06).
+      pid1Command: `install -m 600 ${VM_ETC_DIR}/monitrc /etc/monitrc && exec tini -s -- monit -I -c /etc/monitrc`,
     };
   }
 

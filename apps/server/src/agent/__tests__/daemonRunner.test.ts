@@ -9,7 +9,12 @@ class FakeGateway {
   readonly sent: HostToDaemonMessage[] = [];
   connected = true;
   sendSucceeds = true;
+  invalidated: string[] = [];
   private readonly listeners = new Map<string, Set<GatewayListener>>();
+
+  invalidate(sandbox: string): void {
+    this.invalidated.push(sandbox);
+  }
 
   async waitForConnection(sandbox: string, timeoutMs: number): Promise<void> {
     if (this.connected) return;
@@ -44,12 +49,13 @@ class FakeGateway {
   }
 }
 
-function makeRunner(gateway: FakeGateway, connectTimeoutMs = 100) {
+function makeRunner(gateway: FakeGateway, connectTimeoutMs = 100, ackTimeoutMs = 5_000) {
   return new DaemonAgentRunner({
     gateway,
     sandboxNameFor: (projectId) => `sb-${projectId}`,
     model: 'claude-sonnet-5',
     connectTimeoutMs,
+    ackTimeoutMs,
   });
 }
 
@@ -59,6 +65,12 @@ const TURN = {
   workspaceDir: '/host/pfad/egal',
   resumeSessionId: 'sess-1',
 };
+
+/** turnId des zuerst gesendeten start-turn-Kommandos. */
+function firstTurnId(gw: FakeGateway): string {
+  const first = gw.sent[0];
+  return first !== undefined && first.kind === 'start-turn' ? first.turnId : '';
+}
 
 async function collect(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
   const all: AgentEvent[] = [];
@@ -134,7 +146,7 @@ describe('DaemonAgentRunner', () => {
     const collected = collect(handle.events);
     await tick();
 
-    const turnId = gw.sent[0]!.turnId;
+    const turnId = firstTurnId(gw);
     gw.emitEvent('sb-p1', turnId, { type: 'text-delta', text: 'Anfang' });
     gw.notify('sb-p1', { kind: 'disconnected' });
 
@@ -151,7 +163,7 @@ describe('DaemonAgentRunner', () => {
     const handle = runner.startTurn(TURN);
     const collected = collect(handle.events);
     await tick();
-    const turnId = gw.sent[0]!.turnId;
+    const turnId = firstTurnId(gw);
 
     handle.abort();
     await tick();
@@ -169,12 +181,41 @@ describe('DaemonAgentRunner', () => {
     const handle = runner.startTurn(TURN);
     const collected = collect(handle.events);
     await tick();
-    const turnId = gw.sent[0]!.turnId;
+    const turnId = firstTurnId(gw);
 
     gw.notify('sb-p1', { kind: 'message', message: { kind: 'ready' } });
     gw.emitEvent('sb-p1', turnId, { type: 'turn-completed', sessionId: null });
 
     expect(await collected).toEqual([{ type: 'turn-completed', sessionId: null }]);
+  });
+
+  test('ohne turn-started-Quittung: schneller Abbruch + Verbindung verworfen (halbtote NAT-Verbindung)', async () => {
+    const gw = new FakeGateway();
+    const runner = makeRunner(gw, 100, 40);
+
+    const events = await collect(runner.startTurn(TURN).events);
+
+    expect(gw.invalidated).toEqual(['sb-p1']);
+    expect(events[0]?.type).toBe('error');
+    expect(events.at(-1)).toEqual({ type: 'turn-aborted' });
+  });
+
+  test('turn-started-Quittung entschärft den Wächter — Turn läuft normal weiter', async () => {
+    const gw = new FakeGateway();
+    const runner = makeRunner(gw, 100, 40);
+
+    const handle = runner.startTurn(TURN);
+    const collected = collect(handle.events);
+    await tick();
+    const turnId = firstTurnId(gw);
+
+    gw.notify('sb-p1', { kind: 'message', message: { kind: 'turn-started', turnId } });
+    await Bun.sleep(80); // länger als ackTimeoutMs — der Wächter darf nicht feuern
+    gw.emitEvent('sb-p1', turnId, { type: 'turn-completed', sessionId: 's-1' });
+
+    const events = await collected;
+    expect(gw.invalidated).toEqual([]);
+    expect(events).toEqual([{ type: 'turn-completed', sessionId: 's-1' }]);
   });
 
   test('resumeSessionId null wird durchgereicht (frischer Start)', async () => {
@@ -186,7 +227,7 @@ describe('DaemonAgentRunner', () => {
     await tick();
 
     expect(gw.sent[0]).toMatchObject({ kind: 'start-turn', resumeSessionId: null });
-    const turnId = gw.sent[0]!.turnId;
+    const turnId = firstTurnId(gw);
     gw.emitEvent('sb-p1', turnId, { type: 'turn-completed', sessionId: 's-neu' });
     await collected;
   });

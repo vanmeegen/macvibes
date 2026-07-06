@@ -53,7 +53,7 @@ export class AgentGateway {
     return {
       open: (ws) => this.onOpen(ws),
       message: (ws, raw) => this.onMessage(ws, raw),
-      close: (ws) => this.onClose(ws),
+      close: (ws, code, reason) => this.onClose(ws, code, reason),
     };
   }
 
@@ -83,8 +83,26 @@ export class AgentGateway {
   send(sandbox: string, message: HostToDaemonMessage): boolean {
     const ws = this.connections.get(sandbox);
     if (ws === undefined) return false;
-    ws.send(JSON.stringify(message));
+    // Bun: Rückgabe -1 = Backpressure, 0 = verworfen (Socket zu), >0 = Bytes raus.
+    const result = ws.send(JSON.stringify(message));
+    if (result <= 0) {
+      console.error(`Agent-Gateway: send(${message.kind}) an ${sandbox} → Ergebnis ${result}`);
+    }
     return true;
+  }
+
+  /**
+   * Verwirft die registrierte Verbindung einer Sandbox (mutmaßlich halbtot —
+   * msb-NAT verschluckt FIN/RST, der Socket bleibt scheinbar offen). Der
+   * Daemon-Reconnect registriert danach eine frische Verbindung.
+   */
+  invalidate(sandbox: string): void {
+    const ws = this.connections.get(sandbox);
+    if (ws === undefined) return;
+    this.connections.delete(sandbox);
+    console.error(`Agent-Gateway: Verbindung von ${sandbox} verworfen (keine Quittung)`);
+    // terminate: kein Close-Handshake — der Gegenüber ist mutmaßlich weg.
+    ws.terminate();
   }
 
   /** Abonniert Nachrichten/Disconnects einer Sandbox; Rückgabe: Abbestellen. */
@@ -100,11 +118,17 @@ export class AgentGateway {
   private onOpen(ws: ServerWebSocket<GatewaySocketData>): void {
     const { sandbox } = ws.data;
     const previous = this.connections.get(sandbox);
+    console.log(
+      `Agent-Gateway: ${sandbox} verbunden (ersetzt alte Verbindung: ${previous !== undefined ? 'ja' : 'nein'}, ${new Date().toISOString().slice(11, 19)})`,
+    );
+    // ERST die neue Verbindung registrieren, DANN die alte schließen: liefert
+    // Bun den close-Callback synchron, sähe onClose sonst noch die alte als
+    // registriert und feuerte ein falsches "disconnected" für die Sandbox.
+    this.connections.set(sandbox, ws);
     if (previous !== undefined) {
       // Daemon-Neustart: die neue Verbindung gilt, die alte ist tot.
       previous.close(4000, 'Ersetzt durch neue Daemon-Verbindung');
     }
-    this.connections.set(sandbox, ws);
     const waiters = this.connectWaiters.get(sandbox);
     if (waiters !== undefined) {
       this.connectWaiters.delete(sandbox);
@@ -118,15 +142,22 @@ export class AgentGateway {
       console.error(`Agent-Gateway: unverständliche Daemon-Nachricht von ${ws.data.sandbox}`);
       return;
     }
+    // Heartbeat dient nur dem NAT-Warmhalten — nicht an Abonnenten durchreichen.
+    // Die pong-Antwort hält auch die Host→VM-Richtung des Flows aktiv.
+    if (message.kind === 'ping') {
+      ws.send(JSON.stringify({ kind: 'pong' }));
+      return;
+    }
     this.notify(ws.data.sandbox, { kind: 'message', message });
   }
 
-  private onClose(ws: ServerWebSocket<GatewaySocketData>): void {
+  private onClose(ws: ServerWebSocket<GatewaySocketData>, code?: number, reason?: string): void {
     const { sandbox } = ws.data;
     // Nur die aktuell registrierte Verbindung meldet einen Disconnect —
     // eine ersetzte (Reconnect) darf den neuen Daemon nicht "trennen".
     if (this.connections.get(sandbox) !== ws) return;
     this.connections.delete(sandbox);
+    console.error(`Agent-Gateway: ${sandbox} getrennt (Code ${code ?? '?'}, ${reason ?? ''})`);
     this.notify(sandbox, { kind: 'disconnected' });
   }
 

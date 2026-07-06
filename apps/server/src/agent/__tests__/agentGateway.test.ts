@@ -151,6 +151,8 @@ describe('AgentGateway', () => {
 
   test('Reconnect derselben Sandbox ersetzt die alte Verbindung', async () => {
     const h = makeHarness();
+    const received: GatewayNotification[] = [];
+    h.gateway.subscribe('sb-1', (n) => received.push(n));
     const first = await openSocket(h.url('sb-1'));
     await h.gateway.waitForConnection('sb-1', 2000);
 
@@ -165,11 +167,26 @@ describe('AgentGateway', () => {
     h.gateway.send('sb-1', { kind: 'interrupt', turnId: 't-9' });
     await Bun.sleep(50);
     expect(incoming).toHaveLength(1);
+    // Der Replace darf KEIN falsches disconnected feuern — sonst bricht ein
+    // gerade startender Turn grundlos ab (Live-Befund 2026-07-06).
+    expect(received.filter((n) => n.kind === 'disconnected')).toEqual([]);
   });
 
   test('waitForConnection läuft in einen Timeout, wenn niemand kommt', async () => {
     const h = makeHarness();
     await expect(h.gateway.waitForConnection('sb-leer', 50)).rejects.toThrow();
+  });
+
+  test('ping-Heartbeats werden NICHT an Abonnenten durchgereicht', async () => {
+    const h = makeHarness();
+    const received: GatewayNotification[] = [];
+    h.gateway.subscribe('sb-1', (n) => received.push(n));
+
+    const ws = await openSocket(h.url('sb-1'));
+    ws.send(JSON.stringify({ kind: 'ping' }));
+    ws.send(JSON.stringify({ kind: 'ready' }));
+    await Bun.sleep(50);
+    expect(received).toEqual([{ kind: 'message', message: { kind: 'ready' } }]);
   });
 
   test('abbestellte Listener bekommen nichts mehr', async () => {

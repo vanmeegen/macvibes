@@ -36,6 +36,10 @@ describe('parseHostToDaemon', () => {
     expect(parseHostToDaemon(raw)).toEqual({ kind: 'interrupt', turnId: 't-1' });
   });
 
+  test('shutdown wird geparst (Daemon beendet sich selbst, Supervisor startet neu)', () => {
+    expect(parseHostToDaemon(JSON.stringify({ kind: 'shutdown' }))).toEqual({ kind: 'shutdown' });
+  });
+
   test('kaputte/unbekannte Nachrichten ergeben null, keine Exception', () => {
     expect(parseHostToDaemon('{ kaputt')).toBeNull();
     expect(parseHostToDaemon('42')).toBeNull();
@@ -53,6 +57,10 @@ describe('parseHostToDaemon', () => {
 describe('parseDaemonToHost', () => {
   test('ready wird geparst', () => {
     expect(parseDaemonToHost(JSON.stringify({ kind: 'ready' }))).toEqual({ kind: 'ready' });
+  });
+
+  test('ping (NAT-Heartbeat) wird geparst', () => {
+    expect(parseDaemonToHost(JSON.stringify({ kind: 'ping' }))).toEqual({ kind: 'ping' });
   });
 
   test('event-Nachricht mit AgentEvent wird geparst', () => {
