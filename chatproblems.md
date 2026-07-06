@@ -104,6 +104,20 @@ Symptom abgefedert, Ursache liegt tiefer (meist in msb).
     Kaltstart-Timeout _(2235154, 5c1d972, 1a1e433)_ — **[Workaround]**. Wir
     geben mehr Ressourcen und drosseln, statt die zwei Lasten sauber zu trennen.
 
+13. **Interrupt korrumpiert die claude-Session → Endlos-Deadlock** _(live
+    reproduziert am 2026-07-06)_: Wird ein laufender Turn per neuem Prompt
+    unterbrochen, killt der Abort claude **mitten im Session-Schreiben**. Die
+    `.jsonl`-Session bleibt inkonsistent zurück. Danach hängt **jeder** Folge-
+    Prompt, weil `--resume` auf die kaputte Session kein Event liefert; auch der
+    Auto-Retry resumte bisher DIESELBE kaputte Session → wieder Hänger. Raus/rein
+    half nicht (die `claude_session_id` ist persistiert). Fix: der Retry startet
+    jetzt **ohne** Resume (frische Session) → heilt sich _(a5e5597)_ —
+    **[Workaround für msb/claude-CLI-Fragilität]**. Wieder ein Symptom davon, dass
+    wir einen langlebigen CLI-Prozess extern killen und seinen internen Zustand
+    (Session-Datei) nicht kontrollieren. Kostenpunkt: nach einem Interrupt ist der
+    erste Folge-Prompt einmalig langsam (hängender Resume-Versuch + Retry), und
+    der claude-interne Gesprächskontext geht in dem Fall verloren.
+
 ---
 
 ## Das übergreifende Muster (das eigentliche Problem)
