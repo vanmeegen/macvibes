@@ -16,6 +16,15 @@ export function parseStreamJsonLine(line: string): AgentEvent[] {
   } catch {
     return [];
   }
+  return agentEventsFromMessage(message);
+}
+
+/**
+ * Mapping auf Objekt-Ebene: eine Agent-Message (CLI-stream-json-Zeile ODER
+ * SDK-Message aus `query()` — beide haben dieselbe Form) → AgentEvents.
+ * Wird vom Zeilen-Parser (VM-Runner) und vom Agent-Daemon (SDK) geteilt.
+ */
+export function agentEventsFromMessage(message: unknown): AgentEvent[] {
   if (typeof message !== 'object' || message === null) return [];
   const msg = message as Record<string, unknown>;
 
