@@ -297,6 +297,34 @@ export class ChatService {
     }
   }
 
+  /**
+   * Stellt dem Prompt den bisherigen Gesprächsverlauf voran, falls es einen gibt
+   * (nur user/assistant, gekappt). Nur nötig, wenn OHNE `--resume` gestartet wird
+   * — sonst würde der Agent den Kontext der Konversation nicht kennen.
+   */
+  private async withHistoryContext(
+    projectId: string,
+    currentTurnId: string,
+    prompt: string,
+  ): Promise<string> {
+    const rows = await this.listMessages(projectId);
+    const convo = rows.filter(
+      (m) => m.turnId !== currentTurnId && (m.role === 'user' || m.role === 'assistant'),
+    );
+    if (convo.length === 0) return prompt;
+    const MAX_CHARS = 8_000;
+    let verlauf = convo
+      .slice(-30)
+      .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+      .join('\n\n');
+    if (verlauf.length > MAX_CHARS) verlauf = `…\n\n${verlauf.slice(-MAX_CHARS)}`;
+    return (
+      'Bisheriger Gesprächsverlauf dieses Projekts (der Sitzungskontext wurde ' +
+      'nach einem Abbruch neu aufgebaut; der aktuelle Stand des Codes liegt in ' +
+      `den Dateien im Workspace):\n\n${verlauf}\n\n---\n\nAktuelle Aufgabe:\n${prompt}`
+    );
+  }
+
   private async runAttempt(
     projectId: string,
     turn: QueuedTurn,
@@ -325,9 +353,16 @@ export class ChatService {
       projectRow.claudeSessionModel === AGENT_MODEL;
     // Kaltstart: erster Turn dieser (frischen) VM — mehr Zeit bis zum ersten Event.
     const firstEventBudget = canResume ? this.firstEventTimeoutMs : this.coldStartTimeoutMs;
+    // Kontext-Recovery: OHNE Resume sähe claude nur den neuen Prompt (z. B. nur
+    // „weiter"). Gibt es schon einen Chat-Verlauf (nach Interrupt-Reset oder
+    // heilendem Retry), betten wir ihn in den Prompt ein — sonst startet der
+    // Agent gedächtnislos. Mit Resume trägt --resume den Kontext, dann nicht.
+    const prompt = canResume
+      ? turn.prompt
+      : await this.withHistoryContext(projectId, turn.turnId, turn.prompt);
     const handle = this.runner.startTurn({
       projectId,
-      prompt: turn.prompt,
+      prompt,
       workspaceDir: turn.workspaceDir,
       resumeSessionId: canResume ? projectRow.claudeSessionId : null,
     });

@@ -285,6 +285,56 @@ describe('First-Event-Timeout: kaputter Start wird SCHNELL erkannt (nicht erst n
   });
 });
 
+describe('Kontext-Recovery: frischer Start bekommt die Chat-Historie mitgegeben', () => {
+  function capturingRunner(): { runner: AgentRunner; prompt: () => string } {
+    let seen = '';
+    const runner: AgentRunner = {
+      startTurn(options: TurnOptions): TurnHandle {
+        seen = options.prompt;
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          yield { type: 'turn-completed', sessionId: 's' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    return { runner, prompt: () => seen };
+  }
+
+  test('ohne Resume (keine Session) wird der bisherige Verlauf in den Prompt gepackt', async () => {
+    const cap = capturingRunner();
+    const { service, projectId } = await setup(cap.runner);
+    await service.postMessage(projectId, 'user', 'Baue ein Dobble-Spiel');
+    await service.postMessage(projectId, 'assistant', 'Grundgeruest steht.');
+    await service.sendMessage(sendInput(projectId, 'mach die Karten groesser'));
+    await waitFor(() => !service.isTurnActive(projectId));
+    const p = cap.prompt();
+    expect(p).toContain('Baue ein Dobble-Spiel'); // Verlauf drin
+    expect(p).toContain('Grundgeruest steht'); // Assistant-Antwort drin
+    expect(p).toContain('mach die Karten groesser'); // die eigentliche neue Aufgabe
+  });
+
+  test('mit gültiger Session (Resume) wird KEINE Historie eingebettet — Resume trägt sie', async () => {
+    const cap = capturingRunner();
+    const { db, service, projectId } = await setup(cap.runner);
+    await db
+      .update(projects)
+      .set({ claudeSessionId: 's1', claudeSessionModel: AGENT_MODEL })
+      .where(eq(projects.id, projectId));
+    await service.postMessage(projectId, 'user', 'alter turn');
+    await service.sendMessage(sendInput(projectId, 'neuer prompt'));
+    await waitFor(() => !service.isTurnActive(projectId));
+    expect(cap.prompt()).toBe('neuer prompt');
+  });
+
+  test('erster Turn ohne jede Historie bekommt nur den reinen Prompt', async () => {
+    const cap = capturingRunner();
+    const { service, projectId } = await setup(cap.runner);
+    await service.sendMessage(sendInput(projectId, 'allererster prompt'));
+    await waitFor(() => !service.isTurnActive(projectId));
+    expect(cap.prompt()).toBe('allererster prompt');
+  });
+});
+
 describe('Retry ohne Session-Resume: hängender/korrupter Resume heilt sich selbst', () => {
   test('Versuch 1 resumed (hängt), Versuch 2 startet FRISCH und liefert', async () => {
     // Reproduziert den Live-Bug: ein per neuem Prompt unterbrochener Turn lässt
@@ -638,8 +688,8 @@ describe('sendMessage (R6)', () => {
     const assistants = (await service.listMessages(projectId)).filter(
       (m) => m.role === 'assistant',
     );
-    expect(assistants[0]?.content).toContain('Echo: Eins');
-    expect(assistants[1]?.content).toContain('Echo: Zwei');
+    expect(assistants[0]?.content).toContain('Eins');
+    expect(assistants[1]?.content).toContain('Zwei');
   });
 });
 
@@ -666,9 +716,9 @@ describe('Mid-Turn-Steering (Phase C, interrupt)', () => {
     expect(messages.some((m) => m.role === 'system' && m.content.includes('abgebrochen'))).toBe(
       true,
     );
-    expect(
-      messages.some((m) => m.role === 'assistant' && m.content.includes('Echo: Neue Aufgabe')),
-    ).toBe(true);
+    expect(messages.some((m) => m.role === 'assistant' && m.content.includes('Neue Aufgabe'))).toBe(
+      true,
+    );
   });
 
   test('ohne interrupt bleibt es beim Queue-Verhalten (kein Abbruch)', async () => {
