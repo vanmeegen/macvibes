@@ -69,6 +69,8 @@ const OPTIMISTIC_PREFIX = 'optimistic-';
 export class ChatStore {
   messages: ChatMessage[] = [];
   turnActive = false;
+  /** Chat-Spalte ausgeblendet → Preview nimmt das ganze Fenster ein. */
+  chatCollapsed = false;
   error: string | null = null;
   draft = '';
   projectId: string | null = null;
@@ -85,6 +87,10 @@ export class ChatStore {
 
   setDraft(value: string): void {
     this.draft = value;
+  }
+
+  toggleChatCollapsed(): void {
+    this.chatCollapsed = !this.chatCollapsed;
   }
 
   /**
@@ -132,6 +138,8 @@ export class ChatStore {
     this.projectId = projectId;
     this.messages = [];
     this.error = null;
+    // Projektwechsel: Chat immer sichtbar starten (kein „versteckter" Chat).
+    this.chatCollapsed = false;
 
     try {
       const data = await gqlRequest<{ chatMessages: ChatMessage[]; turnActive: boolean }>(

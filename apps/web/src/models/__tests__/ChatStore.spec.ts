@@ -187,3 +187,33 @@ describe('ChatStore', () => {
     });
   });
 });
+
+describe('Chat ausblendbar (Preview im Vollbild)', () => {
+  it('chatCollapsed startet sichtbar und lässt sich togglen', () => {
+    const store = new ChatStore();
+    expect(store.chatCollapsed).toBe(false);
+    store.toggleChatCollapsed();
+    expect(store.chatCollapsed).toBe(true);
+    store.toggleChatCollapsed();
+    expect(store.chatCollapsed).toBe(false);
+  });
+
+  it('connect() eines Projekts blendet den Chat wieder ein (kein versteckter Chat beim Projektwechsel)', async () => {
+    const store = new ChatStore();
+    store.toggleChatCollapsed();
+    expect(store.chatCollapsed).toBe(true);
+    gqlRequestMock.mockResolvedValueOnce({ chatMessages: [], turnActive: false });
+    // jsdom hat kein EventSource — minimaler Stub reicht für connect().
+    vi.stubGlobal(
+      'EventSource',
+      class {
+        addEventListener(): void {}
+        close(): void {}
+        onerror: unknown = null;
+      },
+    );
+    await store.connect('p1');
+    vi.unstubAllGlobals();
+    expect(store.chatCollapsed).toBe(false);
+  });
+});

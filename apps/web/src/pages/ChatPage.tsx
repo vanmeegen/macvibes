@@ -1,4 +1,7 @@
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import SendIcon from '@mui/icons-material/Send';
 import StopIcon from '@mui/icons-material/Stop';
 import Alert from '@mui/material/Alert';
@@ -210,6 +213,27 @@ export const ChatPage = observer(function ChatPage({
               von {project.owner.username}
             </Typography>
           )}
+          {preview.url !== null && (
+            <IconButton
+              component="a"
+              href={preview.url}
+              target="_blank"
+              rel="noopener"
+              aria-label="Preview in neuem Tab öffnen"
+              sx={{ ml: 1 }}
+              data-testselector="chat-preview-open"
+            >
+              <OpenInNewIcon />
+            </IconButton>
+          )}
+          <IconButton
+            onClick={chatStore.toggleChatCollapsed}
+            aria-label={chatStore.chatCollapsed ? 'Chat einblenden' : 'Chat ausblenden'}
+            sx={{ ml: 1 }}
+            data-testselector="chat-collapse-toggle"
+          >
+            {chatStore.chatCollapsed ? <ChevronRightIcon /> : <ChevronLeftIcon />}
+          </IconButton>
         </Toolbar>
       </AppBar>
 
@@ -227,7 +251,13 @@ export const ChatPage = observer(function ChatPage({
       <Stack direction="row" spacing={2} sx={{ flexGrow: 1, minHeight: 0, p: 2 }}>
         <Paper
           variant="outlined"
-          sx={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}
+          sx={{
+            flex: 1,
+            display: chatStore.chatCollapsed ? 'none' : 'flex',
+            flexDirection: 'column',
+            minWidth: 0,
+          }}
+          data-testselector="chat-column"
         >
           <Box
             ref={scrollRef}
