@@ -72,6 +72,87 @@ function sendInput(projectId: string, text: string) {
   return { projectId, workspaceDir: '/tmp/fake-workspace', resumeSessionId: null, text };
 }
 
+describe('Config-Warmup: erster Turn wird schnell, weil beim Öffnen vorgewärmt', () => {
+  test('prewarm startet EINEN stillen Warmup-Turn (kein Chat-Eintrag)', async () => {
+    const prompts: string[] = [];
+    const runner: AgentRunner = {
+      startTurn(options: TurnOptions): TurnHandle {
+        prompts.push(options.prompt);
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          yield { type: 'text-delta', text: 'bereit' };
+          yield { type: 'turn-completed', sessionId: 'w' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { service, projectId } = await setup(runner);
+    await service.prewarm(projectId, '/tmp/ws');
+    await service.prewarm(projectId, '/tmp/ws'); // zweiter Aufruf = No-Op
+    await waitFor(() => prompts.length >= 1);
+    await Bun.sleep(50);
+    expect(prompts.length).toBe(1); // nur EIN Warmup
+    // Der Warmup erzeugt KEINE Chat-Nachrichten.
+    expect((await service.listMessages(projectId)).length).toBe(0);
+  });
+
+  test('echter Turn wartet auf den laufenden Warmup (keine msb-Konkurrenz)', async () => {
+    const order: string[] = [];
+    let releaseWarmup: () => void = () => {};
+    const runner: AgentRunner = {
+      startTurn(_options: TurnOptions): TurnHandle {
+        const isWarmup = order.length === 0;
+        order.push(isWarmup ? 'warmup' : 'real');
+        if (isWarmup) {
+          const events = (async function* (): AsyncGenerator<AgentEvent> {
+            await new Promise<void>((r) => {
+              releaseWarmup = r;
+            });
+            yield { type: 'turn-completed', sessionId: 'w' };
+          })();
+          return { events, abort: () => {} };
+        }
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          yield { type: 'text-delta', text: 'echt' };
+          yield { type: 'turn-completed', sessionId: 'r' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { service, projectId } = await setup(runner);
+    await service.prewarm(projectId, '/tmp/ws');
+    await waitFor(() => order.length === 1);
+    await service.sendMessage(sendInput(projectId, 'echte Nachricht'));
+    await Bun.sleep(60);
+    // Der echte Turn darf NICHT laufen, solange der Warmup nicht fertig ist.
+    expect(order).toEqual(['warmup']);
+    releaseWarmup();
+    await waitFor(() => !service.isTurnActive(projectId));
+    expect(order).toEqual(['warmup', 'real']);
+    expect((await service.listMessages(projectId)).some((m) => m.content === 'echt')).toBe(true);
+  });
+
+  test('prewarm überspringt, wenn schon eine Session existiert (Config bereits warm)', async () => {
+    const prompts: string[] = [];
+    const runner: AgentRunner = {
+      startTurn(options: TurnOptions): TurnHandle {
+        prompts.push(options.prompt);
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          yield { type: 'turn-completed', sessionId: 'x' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { db, service, projectId } = await setup(runner);
+    await db
+      .update(projects)
+      .set({ claudeSessionId: 'vorhanden', claudeSessionModel: AGENT_MODEL })
+      .where(eq(projects.id, projectId));
+    await service.prewarm(projectId, '/tmp/ws');
+    await Bun.sleep(50);
+    expect(prompts.length).toBe(0);
+  });
+});
+
 describe('Watchdog: stiller Hänger wird als Fehler sichtbar', () => {
   test('bricht ab und schreibt eine error-Zeile, wenn der Agent nicht reagiert', async () => {
     // Runner, der NIE ein Event liefert (VM-Hänger auf einem Netz-Call).

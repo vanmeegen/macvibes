@@ -65,6 +65,8 @@ export interface ChatServiceOptions {
 
 export class ChatService {
   private readonly states = new Map<string, ProjectChatState>();
+  /** Laufende Config-Warmups pro Projekt (siehe prewarm). */
+  private readonly warmups = new Map<string, Promise<void>>();
   private readonly idleTimeoutMs: number;
   private readonly firstEventTimeoutMs: number;
   private readonly coldStartTimeoutMs: number;
@@ -110,6 +112,41 @@ export class ChatService {
     const state = this.states.get(projectId);
     if (!state) return false;
     return state.pumpRunning || state.queue.length > 0 || state.currentHandle !== null;
+  }
+
+  /**
+   * Wärmt die claude-Config einer frisch geforkten VM vor: ein stiller
+   * Wegwerf-Turn (Output verworfen, keine Chat-Nachricht), der beim Öffnen des
+   * Projekts läuft, während der User seinen ersten Prompt tippt. Ohne dies
+   * trägt der ERSTE echte Turn den ganzen claude-First-Run (~9s auf dem
+   * gemounteten Volume) — mit Warmup ist er danach schnell. No-Op, wenn schon
+   * ein Warmup läuft oder das Projekt bereits eine Session hat (Config warm).
+   */
+  async prewarm(projectId: string, workspaceDir: string): Promise<void> {
+    if (this.warmups.has(projectId)) return;
+    const projectRow = (
+      await this.db.select().from(projects).where(eq(projects.id, projectId)).limit(1)
+    )[0];
+    if (projectRow?.claudeSessionId != null) return;
+    this.warmups.set(projectId, this.runWarmup(projectId, workspaceDir));
+  }
+
+  private async runWarmup(projectId: string, workspaceDir: string): Promise<void> {
+    try {
+      const handle = this.runner.startTurn({
+        projectId,
+        prompt: 'Antworte nur mit dem Wort: bereit',
+        workspaceDir,
+        resumeSessionId: null,
+      });
+      // Events konsumieren und VERWERFEN — der Warmup initialisiert nur die
+      // claude-Config in der VM, er erzeugt keine Chat-Nachrichten.
+      for await (const event of handle.events) {
+        void event;
+      }
+    } catch (error) {
+      console.error(`Config-Warmup für ${projectId} fehlgeschlagen:`, error);
+    }
   }
 
   /** Persistiert die Nutzer-Nachricht sofort und reiht den Turn ein (Queue, R6). */
@@ -261,6 +298,14 @@ export class ChatService {
     isLastAttempt: boolean,
   ): Promise<{ completed: boolean; sawMeaningful: boolean; lastRow: ChatMessageRow | null }> {
     const state = this.state(projectId);
+
+    // Läuft ein Config-Warmup, erst darauf warten — sonst konkurrieren zwei
+    // claude-exec-Sessions in der VM (microsandbox serialisiert sie → langsam).
+    const warmup = this.warmups.get(projectId);
+    if (warmup) {
+      await warmup;
+    }
+
     const projectRow = (
       await this.db.select().from(projects).where(eq(projects.id, projectId)).limit(1)
     )[0];

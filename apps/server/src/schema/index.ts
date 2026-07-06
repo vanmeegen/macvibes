@@ -232,14 +232,18 @@ builder.mutationType({
       resolve: async (_root, args, ctx) => {
         const user = requireUser(ctx);
         const project = await getProjectOwned(ctx, user, String(args.id));
+        const workspaceDir = workspaceDirFor(ctx.config.macvibesHome, project.id);
         await ctx.sandboxManager.enter({
           projectId: project.id,
           branchName: project.branchName,
-          workspaceDir: workspaceDirFor(ctx.config.macvibesHome, project.id),
+          workspaceDir,
           templateDir: project.templateDir,
           devCommand: project.devCommand,
           previewPort: project.previewPort,
         });
+        // Config-Warmup anstoßen (fire-and-forget), während der User tippt —
+        // der erste echte Turn trägt dann nicht mehr den claude-First-Run.
+        void ctx.chatService.prewarm(project.id, workspaceDir);
         await touchProject(ctx.db, project.id);
         return project;
       },
