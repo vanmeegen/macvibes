@@ -25,6 +25,12 @@ export const msbExecSpawner: ExecSpawner = ({ sandboxName, args, env, cwd }): Ex
     [
       'msb',
       'exec',
+      // --stream: stdout LIVE durchreichen. Ohne dieses Flag puffert `msb exec`
+      // den gesamten stdout und flusht erst bei Prozess-Ende — der komplette
+      // Turn (Denken, Tool-Calls) käme gebündelt statt live (bewiesen: echo A;
+      // sleep 3; echo B kam ohne --stream erst nach 6s auf einmal, mit --stream
+      // zeitversetzt). „no echo/CRLF translation — safe for JSON lines."
+      '--stream',
       '-w',
       cwd,
       ...envArgs,
