@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { agentConfigDirFor, ensureWorkspace } from '../services/workspaceService';
-import { baselineExists, baselineSnapshotName } from './baselineService';
+import { baselineBootstrapScript, baselineExists, baselineSnapshotName } from './baselineService';
 import { httpProbe } from './httpProbe';
 import { MicrosandboxError, msbExec, runMsb } from './msb';
 import { PreviewSupervisor } from './previewSupervisor';
@@ -104,7 +104,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     // und wird in den gemounteten Workspace gelinkt — kein Install zur Laufzeit.
     const useBaseline = await baselineExists(context.templateDir);
     const bootstrap = useBaseline
-      ? `[ -e node_modules ] || ln -s /baseline/work/node_modules node_modules`
+      ? baselineBootstrapScript
       : `if [ -f package.json ] && [ ! -d node_modules ]; then bun install --silent; fi`;
     const source = useBaseline
       ? ['--snapshot', baselineSnapshotName(context.templateDir)]
