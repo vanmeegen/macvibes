@@ -11,16 +11,16 @@ export class LoginPage {
     return this.page.getByTestId('login-password');
   }
 
-  get inviteCodeInput(): Locator {
-    return this.page.getByTestId('login-invite-code');
-  }
-
   get submitButton(): Locator {
     return this.page.getByTestId('login-submit');
   }
 
   get errorAlert(): Locator {
     return this.page.getByTestId('login-error');
+  }
+
+  get noticeAlert(): Locator {
+    return this.page.getByTestId('login-notice');
   }
 
   async goto(): Promise<void> {
@@ -31,11 +31,10 @@ export class LoginPage {
     return this.page.getByTestId('login-mode-toggle').locator(`button[value="${mode}"]`);
   }
 
-  async register(username: string, password: string, inviteCode: string): Promise<void> {
+  async register(username: string, password: string): Promise<void> {
     await this.modeButton('register').click();
     await this.usernameInput.fill(username);
     await this.passwordInput.fill(password);
-    await this.inviteCodeInput.fill(inviteCode);
     await this.submitButton.click();
   }
 

@@ -27,6 +27,10 @@ export class ProjectsPage {
     return this.page.getByTestId('logout-button');
   }
 
+  get adminLink(): Locator {
+    return this.page.getByTestId('admin-link');
+  }
+
   get filterMine(): Locator {
     return this.page.getByTestId('project-filter-mine');
   }

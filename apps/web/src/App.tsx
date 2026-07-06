@@ -9,6 +9,7 @@ import {
   loginModel,
   projectsStore,
 } from './models/stores';
+import { AdminPage } from './pages/AdminPage';
 import { ChatPage } from './pages/ChatPage';
 import { LoginPage } from './pages/LoginPage';
 import { ProjectsPage } from './pages/ProjectsPage';
@@ -49,6 +50,18 @@ export const App = observer(function App(): JSX.Element {
             />
           ) : (
             <Navigate to="/login" replace />
+          )
+        }
+      />
+      <Route
+        path="/admin"
+        element={
+          !loggedIn ? (
+            <Navigate to="/login" replace />
+          ) : authStore.isAdmin ? (
+            <AdminPage authStore={authStore} />
+          ) : (
+            <Navigate to="/" replace />
           )
         }
       />

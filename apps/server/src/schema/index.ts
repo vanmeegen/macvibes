@@ -4,7 +4,14 @@ import type { Db } from '../db/client';
 import { projects, type ChatMessageRow, type UserRow } from '../db/schema';
 import type { ChatEventPayload } from '../services/chatService';
 import { clearSessionCookie, readSessionToken, writeSessionCookie } from '../http/cookies';
-import { login, logout, register } from '../services/authService';
+import {
+  approveUser,
+  listUsers,
+  login,
+  logout,
+  register,
+  rejectUser,
+} from '../services/authService';
 import { DomainError } from '../services/errors';
 import {
   createProject,
@@ -22,6 +29,9 @@ UserRef.implement({
   fields: (t) => ({
     id: t.exposeID('id'),
     username: t.exposeString('username'),
+    role: t.exposeString('role'),
+    approved: t.exposeBoolean('approved'),
+    createdAt: t.string({ resolve: (user) => user.createdAt.toISOString() }),
   }),
 });
 
@@ -86,6 +96,14 @@ function requireUser(ctx: GraphQLContext): UserRow {
   return ctx.currentUser;
 }
 
+function requireAdmin(ctx: GraphQLContext): UserRow {
+  const user = requireUser(ctx);
+  if (user.role !== 'admin') {
+    throw new DomainError('Nur ein Admin darf das');
+  }
+  return user;
+}
+
 /** Lädt ein Projekt und stellt serverseitig die Ownership sicher (R10). */
 async function getProjectOwned(
   ctx: GraphQLContext,
@@ -116,6 +134,13 @@ builder.queryType({
     templates: t.field({
       type: [TemplateRef],
       resolve: (_root, _args, ctx) => loadTemplates(ctx.config.templatesDir),
+    }),
+    users: t.field({
+      type: [UserRef],
+      resolve: (_root, _args, ctx) => {
+        requireAdmin(ctx);
+        return listUsers(ctx.db);
+      },
     }),
     projects: t.field({
       type: [ProjectRef],
@@ -170,12 +195,35 @@ builder.mutationType({
       args: {
         username: t.arg.string({ required: true }),
         password: t.arg.string({ required: true }),
-        inviteCode: t.arg.string({ required: true }),
       },
       resolve: async (_root, args, ctx) => {
         const result = await register(ctx.db, ctx.config, args);
-        await writeSessionCookie(ctx.request, result.token, result.expiresAt);
+        // Nur der erste (Admin-)Nutzer ist sofort freigeschaltet und bekommt eine
+        // Session. Alle anderen sind pending und müssen zuerst zugelassen werden.
+        if (result.session) {
+          await writeSessionCookie(ctx.request, result.session.token, result.session.expiresAt);
+        }
         return result.user;
+      },
+    }),
+    approveUser: t.field({
+      type: UserRef,
+      args: {
+        userId: t.arg.id({ required: true }),
+      },
+      resolve: (_root, args, ctx) => {
+        requireAdmin(ctx);
+        return approveUser(ctx.db, String(args.userId));
+      },
+    }),
+    rejectUser: t.boolean({
+      args: {
+        userId: t.arg.id({ required: true }),
+      },
+      resolve: async (_root, args, ctx) => {
+        requireAdmin(ctx);
+        await rejectUser(ctx.db, String(args.userId));
+        return true;
       },
     }),
     login: t.field({

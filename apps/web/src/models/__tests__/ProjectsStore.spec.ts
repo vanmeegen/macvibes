@@ -16,7 +16,7 @@ function makeProject(overrides: Partial<Project> & { id: string }): Project {
     name: `Projekt ${overrides.id}`,
     branchName: `vibe/${overrides.id}`,
     templateDir: 'react-starter',
-    owner: { id: 'u1', username: 'alice' },
+    owner: { id: 'u1', username: 'alice', role: 'admin', approved: true, createdAt: 't0' },
     createdAt: '2026-07-01T10:00:00.000Z',
     lastActivityAt: '2026-07-02T12:00:00.000Z',
     sandboxStatus: 'stopped',
@@ -39,7 +39,10 @@ const templates: Template[] = [
 function makeAuthStore(username: string | null): AuthStore {
   const authStore = new AuthStore();
   runInAction(() => {
-    authStore.currentUser = username === null ? null : { id: 'u1', username };
+    authStore.currentUser =
+      username === null
+        ? null
+        : { id: 'u1', username, role: 'user', approved: true, createdAt: 't0' };
     authStore.initialized = true;
   });
   return authStore;
@@ -98,8 +101,14 @@ describe('ProjectsStore', () => {
       const store = new ProjectsStore(makeAuthStore('alice'));
       runInAction(() => {
         store.projects = [
-          makeProject({ id: 'p1', owner: { id: 'u1', username: 'alice' } }),
-          makeProject({ id: 'p2', owner: { id: 'u2', username: 'bob' } }),
+          makeProject({
+            id: 'p1',
+            owner: { id: 'u1', username: 'alice', role: 'admin', approved: true, createdAt: 't0' },
+          }),
+          makeProject({
+            id: 'p2',
+            owner: { id: 'u2', username: 'bob', role: 'user', approved: true, createdAt: 't1' },
+          }),
         ];
       });
 
@@ -111,8 +120,14 @@ describe('ProjectsStore', () => {
       const store = new ProjectsStore(makeAuthStore('alice'));
       runInAction(() => {
         store.projects = [
-          makeProject({ id: 'p1', owner: { id: 'u1', username: 'alice' } }),
-          makeProject({ id: 'p2', owner: { id: 'u2', username: 'bob' } }),
+          makeProject({
+            id: 'p1',
+            owner: { id: 'u1', username: 'alice', role: 'admin', approved: true, createdAt: 't0' },
+          }),
+          makeProject({
+            id: 'p2',
+            owner: { id: 'u2', username: 'bob', role: 'user', approved: true, createdAt: 't1' },
+          }),
         ];
       });
 

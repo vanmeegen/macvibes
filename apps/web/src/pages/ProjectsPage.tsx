@@ -279,6 +279,17 @@ export const ProjectsPage = observer(function ProjectsPage({
             <Typography variant="body2" color="text.secondary" data-testselector="current-username">
               {authStore.currentUser?.username ?? ''}
             </Typography>
+            {authStore.isAdmin && (
+              <Button
+                color="inherit"
+                variant="outlined"
+                size="small"
+                onClick={() => navigate('/admin')}
+                data-testselector="admin-link"
+              >
+                Nutzer verwalten
+              </Button>
+            )}
             <Button
               color="inherit"
               variant="outlined"
