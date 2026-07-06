@@ -13,14 +13,9 @@ test('Sandbox startet beim Öffnen der Chat-Page und stoppt nach der Grace-Perio
   const chatPage = new ChatPage(page);
   const name = uniqueProjectName('Lifecycle');
 
+  // Anlegen führt direkt in den Chat; das Öffnen startet die Sandbox,
+  // Startfortschritt bis "running" sichtbar (R6/R9).
   await projectsPage.createProject(name, 'pwa');
-
-  // Frisch angelegt: gestoppt.
-  const card = projectsPage.cardByName(name);
-  await expect(projectsPage.statusChipIn(card)).toHaveAttribute('data-status', 'stopped');
-
-  // Öffnen startet die Sandbox; Startfortschritt bis "running" sichtbar (R6).
-  await projectsPage.openProject(name);
   await expect(chatPage.sandboxStatus).toHaveAttribute('data-status', 'running', {
     timeout: 15_000,
   });

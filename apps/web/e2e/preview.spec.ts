@@ -12,7 +12,6 @@ test('Preview: Dev-Server der Sandbox wird im iframe erreichbar', async ({ page,
   const name = uniqueProjectName('Preview Test');
 
   await projectsPage.createProject(name, 'pwa');
-  await projectsPage.openProject(name);
 
   // Erst „startet…"-Zustand oder direkt ready — nie ein Browser-Fehlerbild.
   const iframe = page.getByTestId('chat-preview');
@@ -35,6 +34,7 @@ test('Preview zeigt klaren Zustand, wenn die Sandbox gestoppt ist', async ({ pag
   await registerNewUser(page);
   const name = uniqueProjectName('Preview Aus');
   await projectsPage.createProject(name, 'pwa');
+  await projectsPage.goto(); // Anlegen führt in den Chat — zurück zur Liste zum Abmelden.
   await projectsPage.logout();
 
   // Nur-Lese-Besucher startet keine Sandbox → Preview klar als nicht verfügbar markiert.

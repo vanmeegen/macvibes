@@ -36,6 +36,10 @@ export class LoginPage {
     await this.usernameInput.fill(username);
     await this.passwordInput.fill(password);
     await this.submitButton.click();
+    // Warten, bis die Registrierung verarbeitet ist (pending-Hinweis oder Fehler).
+    // Sonst wischt der noch laufende Request (pending-Zweig setzt das Passwort
+    // zurück) einen direkt folgenden login() weg.
+    await this.noticeAlert.or(this.errorAlert).first().waitFor();
   }
 
   async login(username: string, password: string): Promise<void> {

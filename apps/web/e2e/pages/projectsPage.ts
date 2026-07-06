@@ -73,11 +73,26 @@ export class ProjectsPage {
     await this.newProjectFab.click();
   }
 
-  async createProject(name: string, templateDir: string): Promise<void> {
+  private async fillCreateForm(name: string, templateDir: string): Promise<void> {
     await this.openCreateDialog();
     await this.nameInput.fill(name);
     await this.templateOption(templateDir).check();
     await this.submitButton.click();
+  }
+
+  /**
+   * Legt ein Projekt an. Der Neuanlage-Flow führt danach direkt in den Chat
+   * (`/projects/:id`) — wir warten auf diese Navigation, sodass ein
+   * anschließendes goto() zuverlässig die aktualisierte Liste zeigt.
+   */
+  async createProject(name: string, templateDir: string): Promise<void> {
+    await this.fillCreateForm(name, templateDir);
+    await this.page.waitForURL('**/projects/**');
+  }
+
+  /** Versucht anzulegen, erwartet aber einen Dialog-Fehler (kein Seitenwechsel). */
+  async createProjectExpectingError(name: string, templateDir: string): Promise<void> {
+    await this.fillCreateForm(name, templateDir);
   }
 
   async deleteProject(name: string): Promise<void> {

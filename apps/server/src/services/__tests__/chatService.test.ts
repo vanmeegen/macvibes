@@ -753,6 +753,26 @@ describe('stopTurn (R6 Stop-Button)', () => {
     expect(system?.content).toContain('abgebrochen');
     expect(turnEnds).toEqual([]);
   });
+
+  test('Race: stopTurn direkt nach sendMessage (noch KEIN Handle gesetzt) bricht trotzdem ab', async () => {
+    // sendMessage() reiht den Turn nur ein und stößt pump() fire-and-forget an —
+    // der Agent-Runner-Handle wird erst etwas später (nach dem ersten await in
+    // runAttempt) in state.currentHandle gesetzt. Klickt der Nutzer "Stopp"
+    // extrem schnell (die UI zeigt den Button optimistisch, noch bevor die
+    // sendMessage-Mutation überhaupt zurück ist), trifft stopTurn() auf ein noch
+    // leeres currentHandle — ohne Fix ist der Abbruch dann stillschweigend
+    // wirkungslos und der Turn läuft komplett durch.
+    const { service, projectId, turnEnds } = await setup();
+    await service.sendMessage(sendInput(projectId, 'LANGSAM bitte'));
+    service.stopTurn(projectId); // sofort, ohne zu warten — reproduziert die Race.
+
+    await waitFor(() => !service.isTurnActive(projectId), 15_000);
+
+    const messages = await service.listMessages(projectId);
+    const system = messages.find((m) => m.role === 'system');
+    expect(system?.content).toContain('abgebrochen');
+    expect(turnEnds).toEqual([]);
+  });
 });
 
 describe('Fehlerbehandlung (R6)', () => {

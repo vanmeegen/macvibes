@@ -19,6 +19,7 @@ export default defineConfig({
   retries: 0,
   timeout: 30_000,
   reporter: [['list']],
+  globalSetup: './e2e/globalSetup.ts',
   use: {
     baseURL: `http://localhost:${E2E_WEB_PORT}`,
     testIdAttribute: 'data-testselector',

@@ -18,6 +18,8 @@ test('legt ein Projekt aus einem Template an und zeigt es in der Liste', async (
   const name = uniqueProjectName('Mein Dashboard');
 
   await projectsPage.createProject(name, 'pwa');
+  // Anlegen führt in den Chat — zurück zur Liste, um das neue Projekt zu sehen.
+  await projectsPage.goto();
 
   const card = projectsPage.cardByName(name);
   await expect(card).toBeVisible();
@@ -30,9 +32,11 @@ test('lehnt doppelte Projektnamen desselben Users verständlich ab', async ({ pa
   const name = uniqueProjectName('Doppelt');
 
   await projectsPage.createProject(name, 'pwa');
+  await projectsPage.goto();
   await expect(projectsPage.cardByName(name)).toBeVisible();
 
-  await projectsPage.createProject(name, 'pwa');
+  // Zweite Anlage mit gleichem Namen: Dialog-Fehler, kein Wechsel in den Chat.
+  await projectsPage.createProjectExpectingError(name, 'pwa');
   await expect(projectsPage.dialogError).toBeVisible();
 });
 
@@ -44,6 +48,7 @@ test('Filter: „Nur meine" ist Default, „Alle" zeigt fremde Projekte ohne Lö
   const ownerName = await registerNewUser(page);
   const foreignProject = uniqueProjectName('Fremdes Projekt');
   await projectsPage.createProject(foreignProject, 'pwa');
+  await projectsPage.goto();
   await expect(projectsPage.cardByName(foreignProject)).toBeVisible();
   await projectsPage.logout();
 
@@ -66,6 +71,7 @@ test('löscht ein eigenes Projekt nach Bestätigung', async ({ page }) => {
   const name = uniqueProjectName('Wegwerf');
 
   await projectsPage.createProject(name, 'pwa');
+  await projectsPage.goto();
   await expect(projectsPage.cardByName(name)).toBeVisible();
 
   await projectsPage.deleteProject(name);

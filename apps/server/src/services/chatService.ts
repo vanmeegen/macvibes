@@ -37,6 +37,13 @@ interface ProjectChatState {
   queue: QueuedTurn[];
   pumpRunning: boolean;
   currentHandle: TurnHandle | null;
+  /**
+   * Stop/Interrupt kam an, BEVOR runAttempt den Handle gesetzt hat (Race: die UI
+   * zeigt den Stop-Button optimistisch, oft bevor `sendMessage` überhaupt beim
+   * Server ankommt). Ohne dieses Flag liefe `state.currentHandle?.abort()` ins
+   * Leere und der Turn liefe unbemerkt komplett durch.
+   */
+  abortRequested: boolean;
   subscribers: Set<(payload: ChatEventPayload) => void>;
 }
 
@@ -94,7 +101,13 @@ export class ChatService {
   private state(projectId: string): ProjectChatState {
     let state = this.states.get(projectId);
     if (!state) {
-      state = { queue: [], pumpRunning: false, currentHandle: null, subscribers: new Set() };
+      state = {
+        queue: [],
+        pumpRunning: false,
+        currentHandle: null,
+        abortRequested: false,
+        subscribers: new Set(),
+      };
       this.states.set(projectId, state);
     }
     return state;
@@ -156,9 +169,15 @@ export class ChatService {
     state.queue.push({ turnId, prompt: input.text, workspaceDir: input.workspaceDir });
     await this.insertMessage(input.projectId, turnId, 'user', input.text);
     // Mid-Turn-Steering (Phase C): laufenden Turn abbrechen, damit die Pump
-    // sofort zur neuen Nachricht springt. Die Queue bleibt erhalten.
+    // sofort zur neuen Nachricht springt. Die Queue bleibt erhalten. Existiert
+    // der Handle noch nicht (Race: der VORHERIGE Turn hat gerade erst gestartet),
+    // merkt abortRequested das für runAttempt vor — sonst liefe der Abbruch ins Leere.
     if (input.interrupt === true) {
-      state.currentHandle?.abort();
+      if (state.currentHandle) {
+        state.currentHandle.abort();
+      } else {
+        state.abortRequested = true;
+      }
     }
     void this.pump(input.projectId);
   }
@@ -172,11 +191,21 @@ export class ChatService {
     await this.insertMessage(projectId, crypto.randomUUID(), role, content);
   }
 
-  /** Bricht den laufenden Turn ab und leert die Warteschlange (Stop-Button, R6). */
+  /**
+   * Bricht den laufenden Turn ab und leert die Warteschlange (Stop-Button, R6).
+   * Existiert der Handle noch nicht (Race: die UI zeigt den Stop-Button
+   * optimistisch, oft bevor `sendMessage` beim Server ankommt — s. R6-Tests),
+   * merkt abortRequested das vor; runAttempt holt den Abbruch nach, sobald der
+   * Handle steht.
+   */
   stopTurn(projectId: string): void {
     const state = this.state(projectId);
     state.queue.length = 0;
-    state.currentHandle?.abort();
+    if (state.currentHandle) {
+      state.currentHandle.abort();
+    } else {
+      state.abortRequested = true;
+    }
   }
 
   /** Live-Stream aller Chat-Events eines Projekts (auch für Nur-Lese-Besucher, R10). */
@@ -367,6 +396,12 @@ export class ChatService {
       resumeSessionId: canResume ? projectRow.claudeSessionId : null,
     });
     state.currentHandle = handle;
+    // Abbruch nachholen, falls Stop/Interrupt schon VOR diesem Zeitpunkt kam
+    // (Race: s. ProjectChatState.abortRequested).
+    if (state.abortRequested) {
+      state.abortRequested = false;
+      handle.abort();
+    }
 
     let assistantRow: ChatMessageRow | null = null;
     let thinkingRow: ChatMessageRow | null = null;

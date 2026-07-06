@@ -1,5 +1,6 @@
 import { expect, request, type APIRequestContext, type Page } from '@playwright/test';
 import { E2E_WEB_PORT } from '../playwright.config';
+import { ADMIN_PASSWORD, ADMIN_USERNAME } from './globalSetup';
 import { LoginPage } from './pages/loginPage';
 import { ProjectsPage } from './pages/projectsPage';
 
@@ -19,10 +20,9 @@ export function uniqueProjectName(prefix: string): string {
   return `${prefix} ${Date.now().toString(36)}${counter}`;
 }
 
-const USER_FIELDS = 'id username role approved';
-const REGISTER = `mutation($u:String!,$p:String!){register(username:$u,password:$p){${USER_FIELDS}}}`;
 const USERS = `{users{id username approved}}`;
 const APPROVE = `mutation($id:ID!){approveUser(userId:$id){id approved}}`;
+const LOGIN = `mutation($u:String!,$p:String!){login(username:$u,password:$p){id role}}`;
 
 interface GqlUser {
   id: string;
@@ -43,41 +43,30 @@ async function gql<T>(
   return json.data;
 }
 
-// Der Admin ist der ALLERERSTE registrierte Nutzer des Laufs (frische E2E-DB).
-// Wir registrieren ihn per API-Kontext, damit sein Session-Cookie für spätere
-// Freischaltungen erhalten bleibt.
+// Der E2E-Admin (e2eadmin) wird im globalSetup als Erst-Nutzer angelegt. Hier
+// melden wir uns per API-Login als dieser Admin an — deterministisch und robust,
+// auch wenn Playwright die Fixture-Module pro Testdatei neu lädt (dann wird der
+// Kontext einfach neu aufgebaut, statt versehentlich einen zweiten Erst-Nutzer
+// zu registrieren, der gar keiner mehr wäre).
 let adminApi: APIRequestContext | null = null;
-let adminUsername: string | null = null;
 
-/**
- * Stellt sicher, dass ein Admin existiert (erster Nutzer des Laufs) und gibt
- * dessen API-Kontext zurück. Idempotent.
- */
 async function ensureAdminApi(): Promise<APIRequestContext> {
   if (adminApi) return adminApi;
   const ctx = await request.newContext({ baseURL: WEB_BASE });
-  const username = uniqueUsername();
-  const data = await gql<{ register: GqlUser & { role: string } }>(ctx, REGISTER, {
-    u: username,
-    p: PASSWORD,
-  });
-  if (!data.register.approved) {
-    throw new Error('E2E-Bootstrap: erster Nutzer wurde nicht automatisch Admin');
-  }
+  await gql(ctx, LOGIN, { u: ADMIN_USERNAME, p: ADMIN_PASSWORD });
   adminApi = ctx;
-  adminUsername = username;
   return ctx;
 }
 
-/** Sorgt dafür, dass der Bootstrap-Admin existiert (für Tests des pending-Flows). */
+/** Sorgt dafür, dass der Admin-Kontext bereitsteht (für Tests des pending-Flows). */
 export async function ensureAdminExists(): Promise<void> {
   await ensureAdminApi();
 }
 
-/** Zugangsdaten des Bootstrap-Admins (für UI-Login als Admin). */
+/** Zugangsdaten des E2E-Admins (für UI-Login als Admin). */
 export async function getAdminCredentials(): Promise<{ username: string; password: string }> {
   await ensureAdminApi();
-  return { username: adminUsername!, password: PASSWORD };
+  return { username: ADMIN_USERNAME, password: ADMIN_PASSWORD };
 }
 
 /** Schaltet einen (per Username bekannten) pending-Nutzer über den Admin frei. */

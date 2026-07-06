@@ -12,7 +12,6 @@ test('eigenes Projekt öffnet die Chat-Page mit Eingabebereich', async ({ page }
   const name = uniqueProjectName('Chat Projekt');
 
   await projectsPage.createProject(name, 'pwa');
-  await projectsPage.openProject(name);
 
   await expect(chatPage.backButton).toBeVisible();
   await expect(chatPage.chatInput).toBeVisible();
@@ -26,6 +25,7 @@ test('fremdes Projekt ist read-only (Hinweis statt Eingabefeld)', async ({ page 
   await registerNewUser(page);
   const name = uniqueProjectName('Fremder Chat');
   await projectsPage.createProject(name, 'pwa');
+  await projectsPage.goto(); // Anlegen führt in den Chat — zurück zur Liste zum Abmelden.
   await projectsPage.logout();
 
   await registerNewUser(page);
@@ -47,7 +47,6 @@ test('Nachricht senden: Antwort streamt in den Verlauf und übersteht einen Relo
   const name = uniqueProjectName('Echo Chat');
 
   await projectsPage.createProject(name, 'pwa');
-  await projectsPage.openProject(name);
 
   await chatPage.send('Hallo Sandbox');
   await expect(chatPage.messagesByRole('user').last()).toContainText('Hallo Sandbox');
@@ -68,7 +67,6 @@ test('Stop-Button bricht einen laufenden Turn ab', async ({ page }) => {
   const name = uniqueProjectName('Stopp Test');
 
   await projectsPage.createProject(name, 'pwa');
-  await projectsPage.openProject(name);
 
   await chatPage.send('Bitte LANGSAM arbeiten');
   await expect(chatPage.stopButton).toBeVisible({ timeout: 15_000 });
@@ -85,7 +83,6 @@ test('Mid-Turn-Steering: neue Nachricht während eines Turns unterbricht ihn', a
   const name = uniqueProjectName('Steering');
 
   await projectsPage.createProject(name, 'pwa');
-  await projectsPage.openProject(name);
 
   await chatPage.send('LANGSAM alte Aufgabe');
   await expect(chatPage.stopButton).toBeVisible({ timeout: 15_000 });
@@ -93,7 +90,10 @@ test('Mid-Turn-Steering: neue Nachricht während eines Turns unterbricht ihn', a
   await chatPage.send('Neue Aufgabe');
 
   await expect(chatPage.messagesByRole('system').last()).toBeVisible({ timeout: 15_000 });
-  await expect(chatPage.messagesByRole('assistant').last()).toContainText('Echo: Neue Aufgabe', {
+  // Der Retry läuft ohne Session-Resume und bettet den bisherigen Verlauf ein
+  // (Kontext-Recovery) — die Echo-Antwort enthält den Prompt daher nicht mehr
+  // isoliert, sondern eingebettet am Ende.
+  await expect(chatPage.messagesByRole('assistant').last()).toContainText('Neue Aufgabe', {
     timeout: 15_000,
   });
 });
@@ -105,7 +105,6 @@ test('Nur-Lese-Besucher sieht den Chat-Verlauf', async ({ page }) => {
   await registerNewUser(page);
   const name = uniqueProjectName('Zuschauer Chat');
   await projectsPage.createProject(name, 'pwa');
-  await projectsPage.openProject(name);
   await chatPage.send('Hallo Publikum');
   await expect(chatPage.messagesByRole('assistant').last()).toContainText('Echo: Hallo Publikum', {
     timeout: 15_000,
