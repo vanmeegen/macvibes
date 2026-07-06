@@ -150,11 +150,19 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     await waitForExecReady(name);
 
     // Watchdog: Dev-Server per `msb exec` starten + überwachen (host-seitig).
+    // `nice`/`ionice`: der Dev-Server-Boot (Vite/bun-Kompilierung) ist CPU-/IO-
+    // intensiv und würde einen gleichzeitigen ersten Agent-Turn in derselben VM
+    // massiv ausbremsen (~30s). Mit niedrigster Priorität bekommt der Agent
+    // (claude, Standard-Priorität) Vorrang; der Dev-Server bootet, wenn CPU frei ist.
     const supervisor = new PreviewSupervisor({
       spawn: () =>
         msbExec(
           name,
-          ['sh', '-c', context.devCommand],
+          [
+            'sh',
+            '-c',
+            `exec nice -n 19 ionice -c 3 sh -c '${context.devCommand.replaceAll("'", "'\\''")}'`,
+          ],
           { PORT: String(context.previewPort) },
           GUEST_WORKDIR,
         ),

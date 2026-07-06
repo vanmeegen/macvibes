@@ -82,7 +82,7 @@ export function loadConfig(): ServerConfig {
           ? Bun.env.MACVIBES_SANDBOX
           : 'auto',
       image: Bun.env.MACVIBES_SANDBOX_IMAGE ?? 'oven/bun',
-      cpus: Number(Bun.env.MACVIBES_SANDBOX_CPUS ?? 2),
+      cpus: Number(Bun.env.MACVIBES_SANDBOX_CPUS ?? 4),
       memoryMib: Number(Bun.env.MACVIBES_SANDBOX_MEMORY_MIB ?? 4096),
     },
     agent: {
