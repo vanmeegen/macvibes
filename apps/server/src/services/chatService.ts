@@ -268,7 +268,12 @@ export class ChatService {
     let lastRow: ChatMessageRow | null = null;
     let completed = false;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const result = await this.runAttempt(projectId, turn, attempt === maxAttempts);
+      // Der Retry startet bewusst OHNE Session-Resume: hing der erste Versuch an
+      // einer korrupten/abgebrochenen Session (z. B. nach Interrupt durch neuen
+      // Prompt), heilt der frische Start das — sonst resumt jeder Turn dieselbe
+      // kaputte Session und hängt endlos.
+      const allowResume = attempt === 1;
+      const result = await this.runAttempt(projectId, turn, attempt === maxAttempts, allowResume);
       if (result.lastRow !== null) lastRow = result.lastRow;
       completed = result.completed;
       if (result.completed || result.sawMeaningful) break;
@@ -296,6 +301,7 @@ export class ChatService {
     projectId: string,
     turn: QueuedTurn,
     isLastAttempt: boolean,
+    allowResume: boolean,
   ): Promise<{ completed: boolean; sawMeaningful: boolean; lastRow: ChatMessageRow | null }> {
     const state = this.state(projectId);
 
@@ -314,7 +320,9 @@ export class ChatService {
     // Sonst (anderes/kein Modell) frisch starten — ein --resume über einen
     // Modellwechsel hinweg bringt Claude Code zum Hängen ("Agent arbeitet" ewig).
     const canResume =
-      projectRow?.claudeSessionId != null && projectRow.claudeSessionModel === AGENT_MODEL;
+      allowResume &&
+      projectRow?.claudeSessionId != null &&
+      projectRow.claudeSessionModel === AGENT_MODEL;
     // Kaltstart: erster Turn dieser (frischen) VM — mehr Zeit bis zum ersten Event.
     const firstEventBudget = canResume ? this.firstEventTimeoutMs : this.coldStartTimeoutMs;
     const handle = this.runner.startTurn({

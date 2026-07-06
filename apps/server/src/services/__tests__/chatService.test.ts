@@ -285,6 +285,48 @@ describe('First-Event-Timeout: kaputter Start wird SCHNELL erkannt (nicht erst n
   });
 });
 
+describe('Retry ohne Session-Resume: hängender/korrupter Resume heilt sich selbst', () => {
+  test('Versuch 1 resumed (hängt), Versuch 2 startet FRISCH und liefert', async () => {
+    // Reproduziert den Live-Bug: ein per neuem Prompt unterbrochener Turn lässt
+    // die claude-Session korrupt zurück; --resume darauf hängt bei JEDEM Prompt.
+    let calls = 0;
+    const seenResume: (string | null)[] = [];
+    const runner: AgentRunner = {
+      startTurn(options: TurnOptions): TurnHandle {
+        calls += 1;
+        seenResume.push(options.resumeSessionId);
+        if (options.resumeSessionId != null) {
+          // Resume auf die korrupte Session hängt (kein Event).
+          const events: AsyncIterable<never> = {
+            [Symbol.asyncIterator]: () => ({ next: () => new Promise<never>(() => {}) }),
+          };
+          return { events, abort: () => {} };
+        }
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          yield { type: 'text-delta', text: 'frisch ok' };
+          yield { type: 'turn-completed', sessionId: 'neu' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    // firstEvent + coldStart klein, damit der hängende Versuch schnell abbricht.
+    const { db, service, projectId } = await setup(runner, 10_000, 40, 40, 40);
+    await db
+      .update(projects)
+      .set({ claudeSessionId: 'korrupt', claudeSessionModel: AGENT_MODEL })
+      .where(eq(projects.id, projectId));
+    await service.sendMessage(sendInput(projectId, 'weiter'));
+    await waitFor(() => !service.isTurnActive(projectId), 3000);
+
+    expect(calls).toBe(2);
+    // Versuch 1 mit Resume, Versuch 2 OHNE — das ist der Selbstheil-Kern.
+    expect(seenResume).toEqual(['korrupt', null]);
+    const msgs = await service.listMessages(projectId);
+    expect(msgs.some((m) => m.role === 'assistant' && m.content === 'frisch ok')).toBe(true);
+    expect(msgs.some((m) => m.role === 'error')).toBe(false);
+  });
+});
+
 describe('Auto-Retry: stummer Agent-Start wird einmal neu versucht (msb-Flakiness)', () => {
   test('Versuch 1 stirbt ohne Events, Versuch 2 liefert — Turn wird trotzdem fertig', async () => {
     let calls = 0;
