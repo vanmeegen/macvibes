@@ -10,8 +10,7 @@ import { PortAllocator } from './portService';
 import { MONIT_HTTPD_PORT, VM_BIN_DIR, VM_ETC_DIR, buildVmServices } from './vmServices';
 import type { PreviewStatus, SandboxContext, SandboxHandle, SandboxProvider } from './provider';
 
-export { MicrosandboxError, msbAvailable, waitForExecReady } from './msb';
-export type { WaitForExecReadyOptions } from './msb';
+export { msbAvailable } from './msb';
 
 /** Konfiguration des Agent-Daemons (einziger Transport in die VM). */
 export interface AgentDaemonProviderConfig {
