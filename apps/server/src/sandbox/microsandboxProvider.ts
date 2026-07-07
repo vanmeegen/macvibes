@@ -4,8 +4,7 @@ import { agentConfigDirFor, ensureWorkspace, projectVolumeDir } from '../service
 import { baselineExists, baselineSnapshotName } from './baselineService';
 import { httpProbe } from './httpProbe';
 import { gateReadyWithProbe, previewStatusFromMonitText } from './monitStatus';
-import { msbExec, runMsb } from './msb';
-import { PreviewSupervisor } from './previewSupervisor';
+import { MicrosandboxError, runMsb, waitForExecReady } from './msb';
 import { PreviewStatusPoller } from './previewStatusPoller';
 import { PortAllocator } from './portService';
 import { MONIT_HTTPD_PORT, VM_BIN_DIR, VM_ETC_DIR, buildVmServices } from './vmServices';
@@ -13,9 +12,8 @@ import type { PreviewStatus, SandboxContext, SandboxHandle, SandboxProvider } fr
 
 export { MicrosandboxError, msbAvailable, waitForExecReady } from './msb';
 export type { WaitForExecReadyOptions } from './msb';
-import { waitForExecReady } from './msb';
 
-/** Konfiguration des Daemon-Transports (Spike A+C) — undefined = exec-Pfad. */
+/** Konfiguration des Agent-Daemons (einziger Transport in die VM). */
 export interface AgentDaemonProviderConfig {
   /** Verzeichnis mit dem gebündelten Daemon (main.js), ro in die VM gemountet. */
   bundleDir: string;
@@ -30,11 +28,11 @@ export interface MicrosandboxProviderConfig {
   image: string;
   cpus: number;
   memoryMib: number;
-  /** Gesetzt = Agent-Daemon-Transport: Supervisor als PID 1 statt sleep infinity. */
-  agentDaemon?: AgentDaemonProviderConfig;
+  /** Agent-Daemon-Transport — Pflicht: die VM läuft immer unter tini+monit. */
+  agentDaemon: AgentDaemonProviderConfig;
 }
 
-/** Sandbox-Name eines Projekts — vom Provider und vom VM-Runner genutzt. */
+/** Sandbox-Name eines Projekts — vom Provider und vom Runner genutzt. */
 export function microsandboxSandboxName(projectId: string): string {
   return `macvibes-${projectId}`;
 }
@@ -51,14 +49,18 @@ export const AGENT_CONFIG_GUEST_DIR = '/agent-config';
 /**
  * Echter Sandbox-Provider auf microsandbox-MicroVMs (libkrun).
  *
- * Architektur (Watchdog-fähig): Die VM läuft als **stabiler Halter**
- * (`sleep infinity` als PID 1) und überlebt so einen Dev-Server-Crash — der
- * Agent (Claude Code, per `msb exec`) verliert seine Umgebung nicht. Der
- * Preview-/Dev-Server wird von einem **host-seitigen `PreviewSupervisor`**
- * per `msb exec` gestartet, überwacht und bei Ausfall neu gestartet.
+ * PID 1 der VM ist ein In-VM-Supervisor (tini + monit, siehe vmServices.ts),
+ * der Dev-Server UND Agent-Daemon startet, überwacht und bei Crash neu
+ * startet — kein host-seitiger Watchdog, kein msb exec im Agent-Pfad. Der
+ * Daemon wählt sich ausgehend ins Host-Gateway ein (architektur.md, A+C).
+ *
+ * Voraussetzung ist der Baseline-Snapshot des Templates (`bun run baselines`):
+ * er enthält node_modules, das Agent SDK und tini/monit. Ohne Baseline kann
+ * die VM nicht booten — das meldet start() als klaren Fehler.
  *
  * Schnittstelle zum Template (template-agnostisch): ausschließlich
- * `devCommand` + `previewPort` + PORT-Env aus templates.json.
+ * `devCommand` + `previewPort` + PORT-Env aus templates.json. Der
+ * Preview-Status wird nur noch GELESEN (monit-HTTP-API + HTTP-Probe).
  */
 export class MicrosandboxSandboxProvider implements SandboxProvider {
   // Geteilt über ALLE Sandboxen dieses Providers → kollisionsfreie Host-Ports
@@ -78,125 +80,24 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     const agentConfigDir = agentConfigDirFor(this.config.macvibesHome, context.projectId);
     mkdirSync(agentConfigDir, { recursive: true });
 
-    const hostPort = await this.ports.allocate(context.previewPort);
-    const name = microsandboxSandboxName(context.projectId);
-
-    // Baseline-Fork (B5b): node_modules kommt vorinstalliert aus dem Snapshot
-    // und wird in den gemounteten Workspace gelinkt — kein Install zur Laufzeit.
-    const useBaseline = await baselineExists(context.templateDir);
-    const bootstrap = useBaseline
-      ? `[ -e node_modules ] || ln -s /baseline/work/node_modules node_modules`
-      : `if [ -f package.json ] && [ ! -d node_modules ]; then bun install --silent; fi`;
-    const source = useBaseline
-      ? ['--snapshot', baselineSnapshotName(context.templateDir)]
-      : [this.config.image];
-
-    const commonRunArgs = [
-      'run',
-      '-d',
-      '--no-tty',
-      '--replace',
-      '-q',
-      '--name',
-      name,
-      '-v',
-      `${workspaceDir}:${GUEST_WORKDIR}`,
-      '-v',
-      `${agentConfigDir}:${AGENT_CONFIG_GUEST_DIR}`,
-      '-w',
-      GUEST_WORKDIR,
-      // 0.0.0.0: Preview ist im LAN erreichbar (R7/NFR).
-      '-p',
-      `0.0.0.0:${hostPort}:${context.previewPort}`,
-      // Egress: öffentliches Internet (bun/npm) + Host-Gateway für den
-      // Credential-Proxy (host.microsandbox.internal, B5c). Private Netze
-      // sonst gesperrt — der Agent kommt nicht ins LAN.
-      '--net-rule',
-      'allow@public,allow@172.16.0.0/12',
-      '-c',
-      String(this.config.cpus),
-      '-m',
-      `${this.config.memoryMib}M`,
-    ];
-
-    // Daemon-Transport (Spike A+C): In-VM-Supervisor als PID 1 übernimmt
-    // Dev-Server UND Agent-Daemon — kein sleep-infinity-Halter, kein
-    // host-seitiger Watchdog, kein Stagger (nur EINE msb-exec-Session je Boot).
-    const daemon = this.config.agentDaemon;
-    if (daemon !== undefined) {
-      return this.startWithDaemon({ context, name, hostPort, bootstrap, source, commonRunArgs });
+    // Baseline-Fork (B5b) ist Pflicht: der Snapshot enthält neben node_modules
+    // auch tini/monit (PID 1) und das Agent SDK — ohne ihn bootet die VM nicht.
+    if (!(await baselineExists(context.templateDir))) {
+      throw new MicrosandboxError(
+        `Keine Baseline für Template „${context.templateDir}" — bitte einmal ` +
+          '`bun run baselines` ausführen (Supervisor und Agent-SDK stecken im Snapshot).',
+      );
     }
 
-    // VM als stabiler Halter starten (Dev-Server läuft NICHT als PID 1).
-    await runMsb([
-      ...commonRunArgs,
-      ...source,
-      '--',
-      'sh',
-      '-c',
-      `${bootstrap}; exec sleep infinity`,
-    ]);
-
-    // `msb run -d` kehrt zurück, bevor der Gast-Agent-Endpunkt für `msb exec`
-    // bereit ist. Ohne dieses Warten scheitern die ersten Prompts/Dev-Server-
-    // Starts mit "no agent endpoint found" (Race, 2026-07-05).
-    await waitForExecReady(name);
-
-    // Watchdog: Dev-Server per `msb exec` starten + überwachen (host-seitig).
-    // `nice`/`ionice`: der Dev-Server-Boot (Vite/bun-Kompilierung) ist CPU-/IO-
-    // intensiv und würde einen gleichzeitigen ersten Agent-Turn in derselben VM
-    // massiv ausbremsen (~30s). Mit niedrigster Priorität bekommt der Agent
-    // (claude, Standard-Priorität) Vorrang; der Dev-Server bootet, wenn CPU frei ist.
-    const supervisor = new PreviewSupervisor({
-      spawn: () =>
-        msbExec(
-          name,
-          [
-            'sh',
-            '-c',
-            `exec nice -n 19 ionice -c 3 sh -c '${context.devCommand.replaceAll("'", "'\\''")}'`,
-          ],
-          { PORT: String(context.previewPort) },
-          GUEST_WORKDIR,
-        ),
-      probe: () => httpProbe(`http://localhost:${hostPort}/`),
-      onStatusChange: (status) => console.log(`Preview ${context.projectId}: ${status}`),
-    });
-    // GESTAFFELT starten: werden die Dev-Server-exec-Session und der erste
-    // claude-exec (Prompt direkt nach dem Öffnen) GLEICHZEITIG etabliert,
-    // verliert claudes Session in microsandbox deterministisch ihren Output
-    // (Session-Etablierungs-Race; erster Turn wirkt "stumm"). 1,5s Versatz
-    // lässt claudes Session zuerst stehen; die Preview braucht ohnehin Sekunden.
-    const supervisorDelay = setTimeout(() => supervisor.start(), 1_500);
-
-    return {
-      previewHostPort: hostPort,
-      previewStatus: (): PreviewStatus => supervisor.getStatus(),
-      stop: async () => {
-        clearTimeout(supervisorDelay);
-        this.ports.release(hostPort);
-        await supervisor.stop();
-        await this.stopVm(name);
-      },
-    };
-  }
-
-  /** Daemon-Transport: tini+monit als PID 1, Status wird nur gelesen. */
-  private async startWithDaemon(params: {
-    context: SandboxContext;
-    name: string;
-    hostPort: number;
-    bootstrap: string;
-    source: string[];
-    commonRunArgs: string[];
-  }): Promise<SandboxHandle> {
-    const { context, name, hostPort, bootstrap, source, commonRunArgs } = params;
-    const daemon = this.config.agentDaemon as AgentDaemonProviderConfig;
+    const name = microsandboxSandboxName(context.projectId);
+    const hostPort = await this.ports.allocate(context.previewPort);
+    // monit-Status-API — nur auf dem Host (127.0.0.1) gemappt, füttert previewStatus.
+    const statusHostPort = await this.ports.allocate(MONIT_HTTPD_PORT);
 
     const services = buildVmServices({
       devCommand: context.devCommand,
       previewPort: context.previewPort,
-      daemonEnv: daemon.envFor(name),
+      daemonEnv: this.config.agentDaemon.envFor(name),
     });
 
     // Service-Konfiguration pro Projekt aufs Volume schreiben (ro-Mount).
@@ -211,23 +112,51 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       writeFileSync(filePath, content, { mode: 0o600 });
     }
 
-    // monit-Status-API — nur auf dem Host (127.0.0.1) gemappt, füttert previewStatus.
-    const statusHostPort = await this.ports.allocate(MONIT_HTTPD_PORT);
+    // node_modules kommt vorinstalliert aus dem Snapshot und wird in den
+    // gemounteten Workspace gelinkt — kein Install zur Laufzeit.
+    const bootstrap = `[ -e node_modules ] || ln -s /baseline/work/node_modules node_modules`;
 
     await runMsb([
-      ...commonRunArgs,
+      'run',
+      '-d',
+      '--no-tty',
+      '--replace',
+      '-q',
+      '--name',
+      name,
+      '-v',
+      `${workspaceDir}:${GUEST_WORKDIR}`,
+      '-v',
+      `${agentConfigDir}:${AGENT_CONFIG_GUEST_DIR}`,
       '-v',
       `${etcDir}:${VM_ETC_DIR}:ro`,
       '-v',
-      `${daemon.bundleDir}:${VM_BIN_DIR}:ro`,
+      `${this.config.agentDaemon.bundleDir}:${VM_BIN_DIR}:ro`,
+      '-w',
+      GUEST_WORKDIR,
+      // 0.0.0.0: Preview ist im LAN erreichbar (R7/NFR).
+      '-p',
+      `0.0.0.0:${hostPort}:${context.previewPort}`,
       '-p',
       `127.0.0.1:${statusHostPort}:${MONIT_HTTPD_PORT}`,
-      ...source,
+      // Egress: öffentliches Internet (bun/npm) + Host-Gateway für den
+      // Credential-Proxy (host.microsandbox.internal, B5c). Private Netze
+      // sonst gesperrt — der Agent kommt nicht ins LAN.
+      '--net-rule',
+      'allow@public,allow@172.16.0.0/12',
+      '-c',
+      String(this.config.cpus),
+      '-m',
+      `${this.config.memoryMib}M`,
+      '--snapshot',
+      baselineSnapshotName(context.templateDir),
       '--',
       'sh',
       '-c',
       `${bootstrap}; ${services.pid1Command}`,
     ]);
+    // `msb run -d` kehrt zurück, bevor der Gast-Agent-Endpunkt bereit ist —
+    // ohne dieses Warten scheitern frühe execs ("no agent endpoint found").
     await waitForExecReady(name);
 
     const poller = new PreviewStatusPoller({

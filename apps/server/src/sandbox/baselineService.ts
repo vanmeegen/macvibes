@@ -2,9 +2,10 @@ import { MicrosandboxError, runMsb, waitForExecReady } from './msb';
 
 /**
  * Template-Baselines (R9/PRD „Template-Baselines"): pro Template wird einmal
- * eine MicroVM mit fertig installierten node_modules eingefroren
- * (Disk-Snapshot, „local fork-by-copy"). Neue Projekte forken die Baseline —
- * kein `bun install` mehr zur Laufzeit, Preview in Sekunden.
+ * eine MicroVM eingefroren (Disk-Snapshot, „local fork-by-copy") mit fertig
+ * installierten node_modules, dem Agent SDK (/opt/macvibes) und tini+monit
+ * (In-VM-Supervisor). Neue Projekte forken die Baseline — kein Install zur
+ * Laufzeit, Preview in Sekunden. Ohne Baseline bootet keine Projekt-VM.
  */
 
 const BUILDER_SANDBOX = 'macvibes-baseline-builder';
@@ -47,12 +48,6 @@ export interface BuildBaselineOptions {
    * echte Produktions-Baseline (die dann leere node_modules hätte).
    */
   snapshotName?: string;
-  /**
-   * Agent-SDK + In-VM-Supervisor (tini/monit) mit einbacken —
-   * Voraussetzung für den Daemon-Transport (Spike A+C). Default: true.
-   * Tests, die nur den Workspace-Fork brauchen, sparen sich damit apt & Co.
-   */
-  withAgentDaemon?: boolean;
 }
 
 /**
@@ -97,44 +92,30 @@ export async function buildTemplateBaseline(options: BuildBaselineOptions): Prom
 
   // Ein exec pro Schritt statt eines Mega-Befehls: kurze exec-Sessions sind
   // bei msb deutlich robuster, und ein Fehler ist dem Schritt zuordenbar.
+  // Alle Schritte sind PFLICHT: ohne SDK/tini/monit bootet keine Projekt-VM
+  // (Daemon-Transport ist der einzige Agent-Pfad, architektur.md).
   const steps: { beschreibung: string; script: string }[] = [
     {
-      beschreibung: 'Claude Code global installieren (Agent läuft in der VM, B5c)',
-      script: 'bun add -g @anthropic-ai/claude-code >/dev/null 2>&1',
+      // Das gemountete Daemon-Bundle (/opt/macvibes/bin/main.js) löst das SDK
+      // von /opt/macvibes auf; die Claude-CLI bringt das SDK selbst mit.
+      beschreibung: 'Agent SDK nach /opt/macvibes',
+      script:
+        'mkdir -p /opt/macvibes && cd /opt/macvibes && printf %s "{}" > package.json && ' +
+        'bun add @anthropic-ai/claude-agent-sdk >/dev/null 2>&1',
+    },
+    {
+      beschreibung: 'tini + monit (In-VM-Supervisor, PID 1) installieren',
+      script:
+        'apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq tini monit >/dev/null 2>&1',
+    },
+    {
+      // node_modules vom Host ausschließen — die VM installiert selbst (Linux-Artefakte).
+      beschreibung: 'Template kopieren + Dependencies installieren',
+      script:
+        'mkdir -p /baseline/work && cp -r /src/. /baseline/work && rm -rf /baseline/work/node_modules && ' +
+        'cd /baseline/work && bun install --silent && mkdir -p node_modules',
     },
   ];
-
-  if (options.withAgentDaemon !== false) {
-    // Agent SDK für den In-VM-Daemon (Spike A+C): liegt unter /opt/macvibes,
-    // das gemountete Daemon-Bundle (/opt/macvibes/bin/main.js) löst es von dort
-    // auf. Dazu tini+monit als In-VM-Supervisor (Entscheidung: architektur.md).
-    // Alles fehlertolerant — ohne diese Teile funktioniert nur der Daemon-
-    // Transport nicht, der exec-Pfad bleibt intakt.
-    steps.push(
-      {
-        beschreibung: 'Agent SDK nach /opt/macvibes',
-        script:
-          'mkdir -p /opt/macvibes && cd /opt/macvibes && printf %s "{}" > package.json && ' +
-          'bun add @anthropic-ai/claude-agent-sdk >/dev/null 2>&1 ' +
-          '|| echo "WARNUNG: Agent-SDK-Install fehlgeschlagen (Daemon-Transport ohne Funktion)"',
-      },
-      {
-        beschreibung: 'tini + monit (Supervisor) installieren',
-        script:
-          'apt-get update -qq >/dev/null 2>&1 && ' +
-          'apt-get install -y -qq tini monit >/dev/null 2>&1 ' +
-          '|| echo "WARNUNG: tini/monit-Install fehlgeschlagen (Daemon-Transport ohne Funktion)"',
-      },
-    );
-  }
-
-  steps.push({
-    // node_modules vom Host ausschließen — die VM installiert selbst (Linux-Artefakte).
-    beschreibung: 'Template kopieren + Dependencies installieren',
-    script:
-      'mkdir -p /baseline/work && cp -r /src/. /baseline/work && rm -rf /baseline/work/node_modules && ' +
-      'cd /baseline/work && bun install --silent && mkdir -p node_modules',
-  });
 
   try {
     for (const step of steps) {

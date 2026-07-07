@@ -1,28 +1,8 @@
 import type { AgentEvent } from './events';
 
 /**
- * Übersetzt eine einzelne stream-json-Zeile des Claude-Code-CLI
- * (`--output-format stream-json`) in AgentEvents. Unbekannte/leere Zeilen
- * ergeben ein leeres Array. Wird sowohl vom VM-Runner (msb exec) als auch
- * in Tests genutzt.
- */
-export function parseStreamJsonLine(line: string): AgentEvent[] {
-  const trimmed = line.trim();
-  if (trimmed.length === 0) return [];
-
-  let message: unknown;
-  try {
-    message = JSON.parse(trimmed);
-  } catch {
-    return [];
-  }
-  return agentEventsFromMessage(message);
-}
-
-/**
- * Mapping auf Objekt-Ebene: eine Agent-Message (CLI-stream-json-Zeile ODER
- * SDK-Message aus `query()` — beide haben dieselbe Form) → AgentEvents.
- * Wird vom Zeilen-Parser (VM-Runner) und vom Agent-Daemon (SDK) geteilt.
+ * Mapping SDK-Message (`query()`-Stream, formgleich mit den früheren
+ * CLI-stream-json-Zeilen) → AgentEvents. Genutzt vom Agent-Daemon in der VM.
  */
 export function agentEventsFromMessage(message: unknown): AgentEvent[] {
   if (typeof message !== 'object' || message === null) return [];

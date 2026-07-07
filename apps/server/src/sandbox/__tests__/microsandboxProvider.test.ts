@@ -1,12 +1,8 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import {
-  baselineExists,
-  baselineSnapshotName,
-  buildTemplateBaseline,
-  removeSnapshot,
-} from '../baselineService';
+import { buildDaemonBundle } from '../../agent/daemonBundle';
+import { baselineExists, buildTemplateBaseline } from '../baselineService';
 import {
   createTempDir,
   createTemplatesFixture,
@@ -21,11 +17,42 @@ import {
 } from '../microsandboxProvider';
 import { runMsb } from '../msb';
 import type { SandboxHandle } from '../provider';
+import type { MicrosandboxProviderConfig } from '../microsandboxProvider';
 
 const available = await msbAvailable();
 
+/**
+ * Stabiler Fixture-Template-Name → Snapshot `macvibes-tpl-msbtest-v2` bleibt
+ * zwischen Testläufen bestehen (apt/SDK-Install nur beim ersten Lauf, CI
+ * bleibt schnell). Die VERSION HOCHZÄHLEN, wenn sich das Fixture ändert
+ * (createTemplatesFixture, z. B. server.ts) — sonst testet der Lauf den alten
+ * Snapshot-Stand.
+ */
+const FIXTURE_TEMPLATE_DIR = 'msbtest-v2';
+
 const tempDirs: string[] = [];
 let activeHandle: SandboxHandle | null = null;
+let bundleDir = '';
+
+beforeAll(async () => {
+  if (!available) return;
+  bundleDir = await createTempDir('macvibes-bundle-');
+  await buildDaemonBundle(bundleDir);
+  if (!(await baselineExists(FIXTURE_TEMPLATE_DIR))) {
+    const templates = await createTemplatesFixture(FIXTURE_TEMPLATE_DIR);
+    try {
+      // Mit Daemon-Zubehör (tini/monit/SDK): der Provider setzt es voraus.
+      // Dauert Minuten (apt + bun add) — daher der großzügige Hook-Timeout.
+      await buildTemplateBaseline({
+        templatesDir: templates,
+        templateDir: FIXTURE_TEMPLATE_DIR,
+        image: 'oven/bun',
+      });
+    } finally {
+      await removeDir(templates);
+    }
+  }
+}, 900_000);
 
 afterEach(async () => {
   await activeHandle?.stop();
@@ -34,7 +61,40 @@ afterEach(async () => {
     const dir = tempDirs.pop();
     if (dir) await removeDir(dir);
   }
+}, 60_000);
+
+afterAll(async () => {
+  if (bundleDir.length > 0) await removeDir(bundleDir);
 });
+
+/** Provider-Konfiguration mit totem Gateway — der Daemon idlet nur (Reconnects). */
+function providerConfig(home: string, bare: string): MicrosandboxProviderConfig {
+  return {
+    macvibesHome: home,
+    bareRepoPath: bare,
+    image: 'oven/bun',
+    cpus: 1,
+    memoryMib: 512,
+    agentDaemon: {
+      bundleDir,
+      envFor: (sandboxName) => ({
+        MACVIBES_AGENT_GATEWAY_URL: `ws://host.microsandbox.internal:9/agent?sandbox=${sandboxName}&token=test`,
+        MACVIBES_AGENT_CWD: '/work',
+      }),
+    },
+  };
+}
+
+async function projectSetup(projectId: string): Promise<{ home: string; bare: string }> {
+  const home = await createTempDir('macvibes-home-');
+  tempDirs.push(home);
+  const templates = await createTemplatesFixture(FIXTURE_TEMPLATE_DIR);
+  tempDirs.push(templates);
+  const bare = join(home, 'macvibes-apps.git');
+  await ensureBareRepo(bare);
+  await createProjectBranch(bare, `marco/${projectId}`, join(templates, FIXTURE_TEMPLATE_DIR));
+  return { home, bare };
+}
 
 async function waitForHttp(url: string, timeoutMs = 60_000): Promise<string> {
   const start = Date.now();
@@ -52,29 +112,17 @@ async function waitForHttp(url: string, timeoutMs = 60_000): Promise<string> {
 
 describe.skipIf(!available)('MicrosandboxSandboxProvider (R7/R9, echte MicroVM)', () => {
   test(
-    'startet devCommand in der VM, mappt den Preview-Port und stoppt sauber',
+    'startet devCommand unter monit, mappt den Preview-Port und stoppt sauber',
     async () => {
-      const home = await createTempDir('macvibes-home-');
-      tempDirs.push(home);
-      const templates = await createTemplatesFixture();
-      tempDirs.push(templates);
-      const bare = join(home, 'macvibes-apps.git');
-      await ensureBareRepo(bare);
-      await createProjectBranch(bare, 'marco/vm-projekt', join(templates, 'pwa'));
+      const { home, bare } = await projectSetup('vm-projekt');
+      const provider = new MicrosandboxSandboxProvider(providerConfig(home, bare));
 
-      const provider = new MicrosandboxSandboxProvider({
-        macvibesHome: home,
-        bareRepoPath: bare,
-        image: 'oven/bun',
-        cpus: 1,
-        memoryMib: 512,
-      });
-
+      const workspaceDir = workspaceDirFor(home, 'vm-projekt');
       const handle = await provider.start({
         projectId: 'vm-projekt',
         branchName: 'marco/vm-projekt',
-        workspaceDir: workspaceDirFor(home, 'vm-projekt'),
-        templateDir: 'pwa',
+        workspaceDir,
+        templateDir: FIXTURE_TEMPLATE_DIR,
         devCommand: 'bun server.ts',
         previewPort: 5199,
       });
@@ -83,6 +131,10 @@ describe.skipIf(!available)('MicrosandboxSandboxProvider (R7/R9, echte MicroVM)'
       expect(handle.previewHostPort).not.toBeNull();
       const body = await waitForHttp(`http://localhost:${handle.previewHostPort}/`);
       expect(body).toBe('hallo-preview');
+
+      // node_modules ist ein Symlink in den Snapshot — kein Install zur Laufzeit (B5b).
+      const stat = lstatSync(join(workspaceDir, 'node_modules'), { throwIfNoEntry: false });
+      expect(stat?.isSymbolicLink()).toBe(true);
 
       // Host-Gateway (Credential-Proxy-Pfad, B5c): die VM erreicht den Host
       // über host.microsandbox.internal — die net-rule des Providers muss das erlauben.
@@ -126,32 +178,34 @@ describe.skipIf(!available)('MicrosandboxSandboxProvider (R7/R9, echte MicroVM)'
     },
     { timeout: 120_000 },
   );
+
+  test('ohne Baseline-Snapshot scheitert der Start mit klarer Anweisung', async () => {
+    const { home, bare } = await projectSetup('ohne-baseline');
+    const provider = new MicrosandboxSandboxProvider(providerConfig(home, bare));
+    expect(
+      provider.start({
+        projectId: 'ohne-baseline',
+        branchName: 'marco/ohne-baseline',
+        workspaceDir: workspaceDirFor(home, 'ohne-baseline'),
+        templateDir: `fehlt-${crypto.randomUUID().slice(0, 8)}`,
+        devCommand: 'bun server.ts',
+        previewPort: 5199,
+      }),
+    ).rejects.toThrow(/Baseline/);
+  });
 });
 
-describe.skipIf(!available)('Agent-Config-Persistenz (R9, --resume über VM-Neustart)', () => {
+describe.skipIf(!available)('Agent-Config-Persistenz (R9, resume über VM-Neustart)', () => {
   test(
     'CLAUDE_CONFIG_DIR liegt auf einem Volume, das einen VM-Neustart übersteht',
     async () => {
-      const home = await createTempDir('macvibes-home-');
-      tempDirs.push(home);
-      const templates = await createTemplatesFixture();
-      tempDirs.push(templates);
-      const bare = join(home, 'macvibes-apps.git');
-      await ensureBareRepo(bare);
-      await createProjectBranch(bare, 'marco/cfg', join(templates, 'pwa'));
-
-      const provider = new MicrosandboxSandboxProvider({
-        macvibesHome: home,
-        bareRepoPath: bare,
-        image: 'oven/bun',
-        cpus: 1,
-        memoryMib: 512,
-      });
+      const { home, bare } = await projectSetup('cfg');
+      const provider = new MicrosandboxSandboxProvider(providerConfig(home, bare));
       const ctx = {
         projectId: 'cfg',
         branchName: 'marco/cfg',
         workspaceDir: workspaceDirFor(home, 'cfg'),
-        templateDir: 'pwa',
+        templateDir: FIXTURE_TEMPLATE_DIR,
         devCommand: 'bun server.ts',
         previewPort: 5199,
       };
@@ -190,30 +244,17 @@ describe.skipIf(!available)('Agent-Config-Persistenz (R9, --resume über VM-Neus
   );
 });
 
-describe.skipIf(!available)('Watchdog in echter VM (R7, Crash-Recovery)', () => {
+describe.skipIf(!available)('In-VM-Supervision (R7, Crash-Recovery durch monit)', () => {
   test(
-    'stirbt der Dev-Server in der VM, startet der Watchdog ihn neu — VM überlebt',
+    'stirbt der Dev-Server in der VM, startet monit ihn neu — VM überlebt',
     async () => {
-      const home = await createTempDir('macvibes-home-');
-      tempDirs.push(home);
-      const templates = await createTemplatesFixture();
-      tempDirs.push(templates);
-      const bare = join(home, 'macvibes-apps.git');
-      await ensureBareRepo(bare);
-      await createProjectBranch(bare, 'marco/wd', join(templates, 'pwa'));
-
-      const provider = new MicrosandboxSandboxProvider({
-        macvibesHome: home,
-        bareRepoPath: bare,
-        image: 'oven/bun',
-        cpus: 1,
-        memoryMib: 512,
-      });
+      const { home, bare } = await projectSetup('wd');
+      const provider = new MicrosandboxSandboxProvider(providerConfig(home, bare));
       const handle = await provider.start({
         projectId: 'wd',
         branchName: 'marco/wd',
         workspaceDir: workspaceDirFor(home, 'wd'),
-        templateDir: 'pwa',
+        templateDir: FIXTURE_TEMPLATE_DIR,
         devCommand: 'bun server.ts',
         previewPort: 5199,
       });
@@ -228,23 +269,19 @@ describe.skipIf(!available)('Watchdog in echter VM (R7, Crash-Recovery)', () => 
       const before = startCount();
       expect(before).toBe(1);
 
-      // Dev-Server in der VM hart killen (die VM selbst bleibt: sleep infinity).
-      // oven/bun hat kein pkill — portabel über /proc den server.ts-Prozess finden.
-      // Eigene PID ausschließen — das Script selbst hat "server.ts" im cmdline.
-      const killScript =
-        'self=$$; for p in /proc/[0-9]*; do pid=${p#/proc/}; ' +
-        '[ "$pid" = "$self" ] && continue; ' +
-        'tr "\\0" " " < "$p/cmdline" 2>/dev/null | grep -q server.ts && kill "$pid"; ' +
-        'done; true';
-      await runMsb(['exec', 'macvibes-wd', '--', 'sh', '-c', killScript]);
+      // Dev-Server von INNEN crashen (/crash → process.exit(1)): eine
+      // msb-exec-Session kann Prozesse im PID-1-Baum nicht killen
+      // (eigene PID-Namespaces, Spike-Befund 2026-07-06).
+      const crashResponse = await fetch(`${url}crash`, { signal: AbortSignal.timeout(3000) });
+      expect(await crashResponse.text()).toBe('crash');
 
-      // Der Watchdog muss ihn neu starten → Preview wieder erreichbar UND eine
+      // monit muss ihn neu starten → Preview wieder erreichbar UND eine
       // zusätzliche Startzeile (= echte neue Instanz, nicht bloß weitergelaufen).
       const start = Date.now();
       while (Date.now() - start < 40_000) {
         if (
           startCount() > before &&
-          (await fetch(url)
+          (await fetch(url, { signal: AbortSignal.timeout(1500) })
             .then((r) => r.ok)
             .catch(() => false))
         )
@@ -270,67 +307,4 @@ describe('msbAvailable', () => {
     // Auf diesem Entwicklungsrechner ist msb installiert (B5-Voraussetzung).
     expect(await msbAvailable()).toBe(true);
   });
-});
-
-describe.skipIf(!available)('Template-Baselines (B5b, Snapshot-Fork)', () => {
-  test(
-    'Projekt startet aus der Baseline: node_modules kommt als Symlink aus dem Snapshot',
-    async () => {
-      // ISOLIERTER Template-Name — NIE 'pwa'/'fullstack', sonst würde der Test
-      // die Produktions-Baseline macvibes-tpl-pwa überschreiben (leeres node_modules).
-      const templateDir = `bltest-${crypto.randomUUID().slice(0, 8)}`;
-      const snapshotName = baselineSnapshotName(templateDir);
-
-      const home = await createTempDir('macvibes-home-');
-      tempDirs.push(home);
-      const templates = await createTemplatesFixture(templateDir);
-      tempDirs.push(templates);
-      const bare = join(home, 'macvibes-apps.git');
-      await ensureBareRepo(bare);
-      await createProjectBranch(bare, 'marco/baseline-projekt', join(templates, templateDir));
-
-      try {
-        // Baseline für das isolierte Fixture-Template backen (bun install in der VM).
-        // Ohne Daemon-Zubehör (apt/SDK) — hier zählt nur der Workspace-Fork.
-        await buildTemplateBaseline({
-          templatesDir: templates,
-          templateDir,
-          image: 'oven/bun',
-          withAgentDaemon: false,
-        });
-        expect(await baselineExists(templateDir)).toBe(true);
-
-        const provider = new MicrosandboxSandboxProvider({
-          macvibesHome: home,
-          bareRepoPath: bare,
-          image: 'oven/bun',
-          cpus: 1,
-          memoryMib: 512,
-        });
-        const workspaceDir = workspaceDirFor(home, 'baseline-projekt');
-        const handle = await provider.start({
-          projectId: 'baseline-projekt',
-          branchName: 'marco/baseline-projekt',
-          workspaceDir,
-          templateDir,
-          devCommand: 'bun server.ts',
-          previewPort: 5199,
-        });
-        activeHandle = handle;
-
-        const body = await waitForHttp(`http://localhost:${handle.previewHostPort}/`);
-        expect(body).toBe('hallo-preview');
-
-        // node_modules ist ein Symlink in den Snapshot — kein Install zur Laufzeit.
-        const stat = lstatSync(join(workspaceDir, 'node_modules'), { throwIfNoEntry: false });
-        expect(stat?.isSymbolicLink()).toBe(true);
-
-        await handle.stop();
-        activeHandle = null;
-      } finally {
-        await removeSnapshot(snapshotName);
-      }
-    },
-    { timeout: 180_000 },
-  );
 });

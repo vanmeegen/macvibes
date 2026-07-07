@@ -15,8 +15,6 @@ import { ClaudeAgentRunner } from './agent/claudeRunner';
 import { buildDaemonBundle } from './agent/daemonBundle';
 import { DaemonAgentRunner } from './agent/daemonRunner';
 import { FakeAgentRunner } from './agent/fakeRunner';
-import { msbExecSpawner } from './agent/msbExecSpawner';
-import { VmAgentRunner } from './agent/vmRunner';
 import { buildVmAgentEnv } from './agent/vmAgentEnv';
 import {
   MicrosandboxSandboxProvider,
@@ -66,13 +64,12 @@ const useMicrosandbox =
   config.sandbox.backend === 'microsandbox' ||
   (config.sandbox.backend === 'auto' && (await msbAvailable()));
 
-// Agent-Daemon-Transport (Spike A+C): Gateway für die eingehenden Daemon-
-// Verbindungen + gebündelter Daemon, den der Provider in die VMs mountet.
+// Agent-Transport in die VM: persistenter SDK-Daemon (architektur.md, A+C).
+// Gateway für die eingehenden Daemon-Verbindungen + gebündelter Daemon,
+// den der Provider read-only in jede VM mountet.
 const agentGateway = new AgentGateway({ token: proxyToken });
-const useDaemonTransport =
-  config.agent.transport === 'daemon' && useMicrosandbox && config.agent.backend !== 'fake';
 const daemonBundleDir = join(config.macvibesHome, 'agent-daemon');
-if (useDaemonTransport) {
+if (useMicrosandbox) {
   await buildDaemonBundle(daemonBundleDir);
 }
 
@@ -83,20 +80,16 @@ const sandboxProvider = useMicrosandbox
       image: config.sandbox.image,
       cpus: config.sandbox.cpus,
       memoryMib: config.sandbox.memoryMib,
-      ...(useDaemonTransport
-        ? {
-            agentDaemon: {
-              bundleDir: daemonBundleDir,
-              envFor: (sandboxName: string) => ({
-                ...buildVmAgentEnv({ serverPort: config.port, proxyToken, egressPort }),
-                MACVIBES_AGENT_GATEWAY_URL:
-                  `ws://host.microsandbox.internal:${config.port}${AGENT_GATEWAY_PATH}` +
-                  `?sandbox=${encodeURIComponent(sandboxName)}&token=${encodeURIComponent(proxyToken)}`,
-                MACVIBES_AGENT_CWD: '/work',
-              }),
-            },
-          }
-        : {}),
+      agentDaemon: {
+        bundleDir: daemonBundleDir,
+        envFor: (sandboxName: string) => ({
+          ...buildVmAgentEnv({ serverPort: config.port, proxyToken, egressPort }),
+          MACVIBES_AGENT_GATEWAY_URL:
+            `ws://host.microsandbox.internal:${config.port}${AGENT_GATEWAY_PATH}` +
+            `?sandbox=${encodeURIComponent(sandboxName)}&token=${encodeURIComponent(proxyToken)}`,
+          MACVIBES_AGENT_CWD: '/work',
+        }),
+      },
     })
   : new ProcessSandboxProvider({
       macvibesHome: config.macvibesHome,
@@ -136,25 +129,15 @@ function selectAgentRunner() {
     console.log('Agent-Backend: fake (MACVIBES_AGENT=fake)');
     return new FakeAgentRunner(config.agent.fakeDelayMs);
   }
-  if (useDaemonTransport) {
-    // Spike A+C: persistenter SDK-Daemon in der VM, Kommandos über das
-    // WS-Gateway — kein msb exec im Agent-Pfad (chatproblems.md).
+  if (useMicrosandbox) {
+    // Persistenter SDK-Daemon in der VM, Kommandos über das WS-Gateway —
+    // kein msb exec im Agent-Pfad (architektur.md, chatproblems.md).
     console.log('Agent-Backend: claude-Daemon in VM (WS-Gateway, Supervisor: tini+monit)');
     return new DaemonAgentRunner({
       gateway: agentGateway,
       sandboxNameFor: microsandboxSandboxName,
       model: AGENT_MODEL,
       connectTimeoutMs: 60_000,
-    });
-  }
-  if (useMicrosandbox) {
-    // Agent läuft in der VM (B5c); Credentials nur über den Host-Proxy.
-    console.log('Agent-Backend: claude in VM (msb exec, Credential-Proxy)');
-    return new VmAgentRunner({
-      sandboxNameFor: microsandboxSandboxName,
-      agentEnv: () => buildVmAgentEnv({ serverPort: config.port, proxyToken, egressPort }),
-      spawn: msbExecSpawner,
-      guestWorkdir: '/work',
     });
   }
   console.log('Agent-Backend: claude als Host-Prozess (kein VM-Isolat!)');
