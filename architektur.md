@@ -26,9 +26,10 @@
    brechen); `interrupt()`/`setModel()` nur im Streaming-Modus; Sessions
    weiter auf Platte (`CLAUDE_CONFIG_DIR` bleibt), `resume`/`forkSession`
    als Recovery-Hebel.
-2. **Vorgehen: Spike hinter Flag**, alter exec-Pfad bleibt intakt:
-   `MACVIBES_AGENT_TRANSPORT=daemon|exec` (Default `exec`). Umstellung des
-   Defaults erst nach grünem Härtetest (chatproblems.md §Empfehlung).
+2. **Vorgehen: Spike hinter Flag, dann Rückbau.** Der Härtetest (Browser,
+   mehrere Projekte, Interrupts) ist grün → der Daemon ist seit 2026-07-07 der
+   **einzige** VM-Transport; das Flag `MACVIBES_AGENT_TRANSPORT` und der
+   exec-Pfad (vmRunner/msbExecSpawner) sind **entfernt** (Phase 2, s. u.).
 3. **Supervision: Fertiges statt Eigenbau** (Marcos Leitplanke): PID 1 der VM
    ist ein echter Supervisor statt `sleep infinity`; der host-seitige
    PreviewSupervisor-Watchdog entfällt in diesem Pfad (Host LIEST nur noch
@@ -49,7 +50,8 @@
   `chatService` unverändert (der `AgentRunner`-Seam trägt)
 - `apps/server/src/sandbox/vmServices.ts` — monit-Konfiguration (monitrc +
   Run-Wrapper); `monitStatus.ts` + `previewStatusPoller.ts` für
-  `previewStatus` (nur lesen); Provider-Zweig `startWithDaemon`
+  `previewStatus` (nur lesen); `microsandboxProvider.start` bootet die VM unter
+  tini+monit
 - Baseline backt Agent SDK (`/opt/macvibes`) + tini/monit ein —
   `bun run baselines` nach dem Umstellen nötig
 - Integrationstest gegen echtes msb (gated):
@@ -75,14 +77,35 @@ Integrationstest ist grün inkl. Turn/Interrupt/Kontext):**
 - **Baseline-Builder brauchte `waitForExecReady`** + kurze exec-Schritte statt
   eines Mega-Befehls (sonst „exec session ended without exit event").
 
-**Offen (nächste Schritte):**
+**Härtetest-Befunde (2026-07-07, im Browser über mehrere Projekte, behoben):**
 
-- Härtetest aus chatproblems.md gegen `MACVIBES_AGENT_TRANSPORT=daemon`
-  (Browser, 8–10 Turns, 2–3 Projekte, kalt+warm, Interrupt-Szenario)
-  → dann Default umstellen
-- Phase 2 (Rückbau): msbExecSpawner/KILL_ORPHANS, 1,5s-Stagger, vmRunner,
-  CLI-Install im Baseline; chatService-Timeouts/Retry entschärfen;
-  optional launchd für den Produktionsbetrieb
+- **Projekt-Trennung im Frontend war undicht**: `ChatStore.connect()` awaitete
+  die Historie, bevor die SSE-Subscription entstand — die verspätete Antwort
+  eines alten Projekts überschrieb das neue, und pro Projektwechsel/StrictMode-
+  Doppelmount leakte eine EventSource. Ab ~6 offenen SSE-Streams blockiert der
+  Browser alle weiteren Requests an den Origin (Chat leer, Status-Polling tot).
+  Gegenmittel: `connectEpoch` entwertet veraltete connects, `applyEvent`
+  verwirft Fremd-`projectId`s, `disconnect()` bricht laufende connects ab.
+- **Preview meldete zu früh `ready`**: monit sieht nur den Prozess, Vite/bun
+  antworten HTTP erst Sekunden später → das iframe lud ins Leere. Gate:
+  `ready` erst mit echter HTTP-Probe auf den Preview-Port (`gateReadyWithProbe`).
+
+**Phase 2 — erledigt (2026-07-07, Daemon ist der einzige VM-Pfad):**
+
+- Entfernt: `vmRunner.ts`, `msbExecSpawner.ts` (+`KILL_ORPHANS`), der 1,5s-
+  Stagger, das Flag `MACVIBES_AGENT_TRANSPORT`, `msbExec`, der CLI-Zeilenparser
+  (`parseStreamJsonLine`), der globale claude-CLI-Install im Baseline.
+- `microsandboxProvider` vereinheitlicht: PID 1 = tini+monit, Preview-Status
+  wird nur gelesen; Baseline (SDK + tini/monit + node_modules) ist Pflicht.
+- `chatService`-Timeouts + Auto-Retry **bewusst behalten**: ACK-Watchdog und
+  der Turn-1-Retry haben sich im Härtetest gegen die msb-NAT-Halbtot-
+  Verbindung bewährt (nicht entschärfen).
+
+**Offen (optional, später):**
+
+- Host-seitig `launchd`-Plist für den Produktionsbetrieb (`bun run start`).
+- monit-Basic-Auth, falls die Status-API je über `127.0.0.1` hinaus exponiert
+  wird (aktuell nur host-lokal gemappt).
 
 ---
 
