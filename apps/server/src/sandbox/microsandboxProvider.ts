@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { agentConfigDirFor, ensureWorkspace, projectVolumeDir } from '../services/workspaceService';
 import { baselineExists, baselineSnapshotName } from './baselineService';
 import { httpProbe } from './httpProbe';
-import { previewStatusFromMonitText } from './monitStatus';
+import { gateReadyWithProbe, previewStatusFromMonitText } from './monitStatus';
 import { msbExec, runMsb } from './msb';
 import { PreviewSupervisor } from './previewSupervisor';
 import { PreviewStatusPoller } from './previewStatusPoller';
@@ -236,7 +236,11 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
           signal: AbortSignal.timeout(1500),
         });
         if (!response.ok) throw new Error(`monit-Status ${response.status}`);
-        return previewStatusFromMonitText(await response.text());
+        // 'ready' erst, wenn der Dev-Server WIRKLICH HTTP beantwortet — monit
+        // sieht nur den Prozess (siehe gateReadyWithProbe).
+        return gateReadyWithProbe(previewStatusFromMonitText(await response.text()), () =>
+          httpProbe(`http://localhost:${hostPort}/`),
+        );
       },
       onStatusChange: (status) => console.log(`Preview ${context.projectId}: ${status}`),
     });

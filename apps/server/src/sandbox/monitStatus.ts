@@ -30,6 +30,24 @@ export function previewStatusFromMonitText(text: string, service = 'devserver'):
   return 'starting';
 }
 
+/**
+ * Gate für 'ready': monit meldet "Running", sobald der Dev-Server-PROZESS lebt
+ * — HTTP beantwortet er (Vite/bun-Boot) aber erst Sekunden später. Meldeten wir
+ * 'ready' schon auf den Prozess, lüde das Preview-iframe zu früh ins Leere und
+ * lüde nie nach (Härtetest-Befund 2026-07-07). Deshalb zählt 'ready' erst mit
+ * echter HTTP-Antwort; sonst wirft die Funktion — der PreviewStatusPoller
+ * übersetzt das in starting (vor dem ersten ready) bzw. restarting (danach).
+ * Andere Status (starting/restarting/failed) passieren ungeprobt.
+ */
+export async function gateReadyWithProbe(
+  status: PreviewStatus,
+  probe: () => Promise<boolean>,
+): Promise<PreviewStatus> {
+  if (status !== 'ready') return status;
+  if (await probe()) return 'ready';
+  throw new Error('Dev-Server-Prozess läuft, antwortet noch nicht auf HTTP');
+}
+
 /** Findet die status-Zeile im Abschnitt `Process '<service>'`. */
 function serviceStatusLine(text: string, service: string): string | null {
   const lines = text.split('\n');

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { previewStatusFromMonitText } from '../monitStatus';
+import { gateReadyWithProbe, previewStatusFromMonitText } from '../monitStatus';
 
 function monitText(devserverStatus: string): string {
   return [
@@ -51,6 +51,27 @@ describe('previewStatusFromMonitText', () => {
     // devserver kaputt, agent-daemon läuft — es zählt devserver.
     expect(previewStatusFromMonitText(monitText('Not monitored'), 'devserver')).toBe('failed');
     expect(previewStatusFromMonitText(monitText('Not monitored'), 'agent-daemon')).toBe('ready');
+  });
+
+  test('gateReadyWithProbe: ready gilt erst, wenn der Dev-Server WIRKLICH HTTP beantwortet', async () => {
+    // monit meldet "Running", sobald der PROZESS lebt — Vite/bun brauchen aber
+    // noch Sekunden bis zur ersten HTTP-Antwort. Ohne Gate lädt das iframe zu
+    // früh ins Leere und lädt nie nach (Härtetest-Befund 2026-07-07).
+    expect(await gateReadyWithProbe('ready', () => Promise.resolve(true))).toBe('ready');
+    await expect(gateReadyWithProbe('ready', () => Promise.resolve(false))).rejects.toThrow(
+      /antwortet noch nicht/,
+    );
+  });
+
+  test('gateReadyWithProbe: andere Status passieren ungeprobt (failed bleibt failed)', async () => {
+    let probed = false;
+    const probe = (): Promise<boolean> => {
+      probed = true;
+      return Promise.resolve(true);
+    };
+    expect(await gateReadyWithProbe('starting', probe)).toBe('starting');
+    expect(await gateReadyWithProbe('failed', probe)).toBe('failed');
+    expect(probed).toBe(false);
   });
 
   test('echte monit-Ausgabe mit ANSI-Farbcodes wird geparst (Live-Befund 2026-07-06)', () => {
