@@ -87,7 +87,6 @@ const sandboxProvider = useMicrosandbox
         ? {
             agentDaemon: {
               bundleDir: daemonBundleDir,
-              supervisor: config.agent.vmSupervisor,
               envFor: (sandboxName: string) => ({
                 ...buildVmAgentEnv({ serverPort: config.port, proxyToken, egressPort }),
                 MACVIBES_AGENT_GATEWAY_URL:
@@ -140,9 +139,7 @@ function selectAgentRunner() {
   if (useDaemonTransport) {
     // Spike A+C: persistenter SDK-Daemon in der VM, Kommandos über das
     // WS-Gateway — kein msb exec im Agent-Pfad (chatproblems.md).
-    console.log(
-      `Agent-Backend: claude-Daemon in VM (WS-Gateway, Supervisor: ${config.agent.vmSupervisor})`,
-    );
+    console.log('Agent-Backend: claude-Daemon in VM (WS-Gateway, Supervisor: tini+monit)');
     return new DaemonAgentRunner({
       gateway: agentGateway,
       sandboxNameFor: microsandboxSandboxName,

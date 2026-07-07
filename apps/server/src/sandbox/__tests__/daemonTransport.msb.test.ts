@@ -135,7 +135,6 @@ beforeAll(async () => {
     memoryMib: 1024,
     agentDaemon: {
       bundleDir,
-      supervisor: 'monit',
       envFor: (sandboxName) => ({
         ...buildVmAgentEnv({ serverPort, proxyToken: TOKEN, egressPort }),
         MACVIBES_AGENT_GATEWAY_URL:

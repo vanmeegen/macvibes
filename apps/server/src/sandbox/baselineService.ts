@@ -48,7 +48,7 @@ export interface BuildBaselineOptions {
    */
   snapshotName?: string;
   /**
-   * Agent-SDK + Supervisor-Kandidaten (tini/monit/horust) mit einbacken —
+   * Agent-SDK + In-VM-Supervisor (tini/monit) mit einbacken —
    * Voraussetzung für den Daemon-Transport (Spike A+C). Default: true.
    * Tests, die nur den Workspace-Fork brauchen, sparen sich damit apt & Co.
    */
@@ -107,8 +107,7 @@ export async function buildTemplateBaseline(options: BuildBaselineOptions): Prom
   if (options.withAgentDaemon !== false) {
     // Agent SDK für den In-VM-Daemon (Spike A+C): liegt unter /opt/macvibes,
     // das gemountete Daemon-Bundle (/opt/macvibes/bin/main.js) löst es von dort
-    // auf. Dazu die Supervisor-Kandidaten fürs Duell (architektur.md): tini+monit
-    // aus Debian, horust (optional) als statisches Binary vom GitHub-Release.
+    // auf. Dazu tini+monit als In-VM-Supervisor (Entscheidung: architektur.md).
     // Alles fehlertolerant — ohne diese Teile funktioniert nur der Daemon-
     // Transport nicht, der exec-Pfad bleibt intakt.
     steps.push(
@@ -123,16 +122,8 @@ export async function buildTemplateBaseline(options: BuildBaselineOptions): Prom
         beschreibung: 'tini + monit (Supervisor) installieren',
         script:
           'apt-get update -qq >/dev/null 2>&1 && ' +
-          'apt-get install -y -qq tini monit curl >/dev/null 2>&1 ' +
+          'apt-get install -y -qq tini monit >/dev/null 2>&1 ' +
           '|| echo "WARNUNG: tini/monit-Install fehlgeschlagen (Daemon-Transport ohne Funktion)"',
-      },
-      {
-        beschreibung: 'horust (optionaler Supervisor-Kandidat) installieren',
-        script:
-          'a="$(uname -m)" && curl -fsSL ' +
-          '"https://github.com/FedericoPonzi/Horust/releases/latest/download/horust-$a-unknown-linux-musl.tar.gz" ' +
-          '| tar -xz -C /usr/local/bin 2>/dev/null && chmod +x /usr/local/bin/horust ' +
-          '|| echo "WARNUNG: horust nicht installiert (optionaler Supervisor-Kandidat)"',
       },
     );
   }

@@ -11,7 +11,7 @@ const SPEC = {
 };
 
 describe('buildVmServices (monit)', () => {
-  const services = buildVmServices({ ...SPEC, supervisor: 'monit' });
+  const services = buildVmServices(SPEC);
 
   test('PID 1 kopiert die monitrc mit Mode 600 und exec-t tini (Subreaper) → monit', () => {
     expect(services.pid1Command).toContain('install -m 600 /opt/macvibes/etc/monitrc');
@@ -64,31 +64,5 @@ describe('buildVmServices (monit)', () => {
     expect(services.files['devserver-stop.sh']).toContain('kill');
     expect(services.files['daemon-start.sh']).toContain('/run/macvibes/agent-daemon.pid');
     expect(services.files['daemon-stop.sh']).toContain('kill');
-  });
-});
-
-describe('buildVmServices (horust)', () => {
-  const services = buildVmServices({ ...SPEC, supervisor: 'horust' });
-
-  test('PID 1 exec-t horust mit dem Service-Verzeichnis', () => {
-    expect(services.pid1Command).toContain('exec horust');
-    expect(services.pid1Command).toContain('/opt/macvibes/etc/horust');
-  });
-
-  test('Service-TOMLs: devserver mit HTTP-Health-Check, Daemon mit Always-Restart', () => {
-    const devserver = services.files['horust/devserver.toml']!;
-    expect(devserver).toContain('devserver-run.sh');
-    expect(devserver).toContain(`http://localhost:${SPEC.previewPort}/`);
-    expect(devserver).toContain('strategy = "always"');
-
-    const daemon = services.files['horust/agent-daemon.toml']!;
-    expect(daemon).toContain('daemon-run.sh');
-    expect(daemon).toContain('strategy = "always"');
-  });
-
-  test('nutzt dieselben Run-Wrapper wie monit (ein Satz Scripte für beide Kandidaten)', () => {
-    expect(services.files['devserver-run.sh']).toBeDefined();
-    expect(services.files['daemon-run.sh']).toBeDefined();
-    expect(services.files['daemon.env.sh']).toBeDefined();
   });
 });

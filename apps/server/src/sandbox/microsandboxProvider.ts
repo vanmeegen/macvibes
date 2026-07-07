@@ -9,7 +9,6 @@ import { PreviewSupervisor } from './previewSupervisor';
 import { PreviewStatusPoller } from './previewStatusPoller';
 import { PortAllocator } from './portService';
 import { MONIT_HTTPD_PORT, VM_BIN_DIR, VM_ETC_DIR, buildVmServices } from './vmServices';
-import type { VmSupervisorKind } from './vmServices';
 import type { PreviewStatus, SandboxContext, SandboxHandle, SandboxProvider } from './provider';
 
 export { MicrosandboxError, msbAvailable, waitForExecReady } from './msb';
@@ -20,8 +19,6 @@ import { waitForExecReady } from './msb';
 export interface AgentDaemonProviderConfig {
   /** Verzeichnis mit dem gebündelten Daemon (main.js), ro in die VM gemountet. */
   bundleDir: string;
-  /** In-VM-Supervisor-Kandidat (Duell monit vs. horust, architektur.md). */
-  supervisor: VmSupervisorKind;
   /** Env für den Daemon der jeweiligen Sandbox (Gateway-URL enthält den Namen). */
   envFor: (sandboxName: string) => Record<string, string>;
 }
@@ -184,7 +181,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     };
   }
 
-  /** Daemon-Transport: Supervisor (monit/horust) als PID 1, Status wird nur gelesen. */
+  /** Daemon-Transport: tini+monit als PID 1, Status wird nur gelesen. */
   private async startWithDaemon(params: {
     context: SandboxContext;
     name: string;
@@ -197,7 +194,6 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     const daemon = this.config.agentDaemon as AgentDaemonProviderConfig;
 
     const services = buildVmServices({
-      supervisor: daemon.supervisor,
       devCommand: context.devCommand,
       previewPort: context.previewPort,
       daemonEnv: daemon.envFor(name),
@@ -215,9 +211,8 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       writeFileSync(filePath, content, { mode: 0o600 });
     }
 
-    // monit hat eine HTTP-Status-API — nur auf dem Host (127.0.0.1) gemappt.
-    const statusHostPort =
-      daemon.supervisor === 'monit' ? await this.ports.allocate(MONIT_HTTPD_PORT) : null;
+    // monit-Status-API — nur auf dem Host (127.0.0.1) gemappt, füttert previewStatus.
+    const statusHostPort = await this.ports.allocate(MONIT_HTTPD_PORT);
 
     await runMsb([
       ...commonRunArgs,
@@ -225,7 +220,8 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       `${etcDir}:${VM_ETC_DIR}:ro`,
       '-v',
       `${daemon.bundleDir}:${VM_BIN_DIR}:ro`,
-      ...(statusHostPort !== null ? ['-p', `127.0.0.1:${statusHostPort}:${MONIT_HTTPD_PORT}`] : []),
+      '-p',
+      `127.0.0.1:${statusHostPort}:${MONIT_HTTPD_PORT}`,
       ...source,
       '--',
       'sh',
@@ -235,22 +231,13 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     await waitForExecReady(name);
 
     const poller = new PreviewStatusPoller({
-      fetchStatus:
-        statusHostPort !== null
-          ? async (): Promise<PreviewStatus> => {
-              const response = await fetch(
-                `http://127.0.0.1:${statusHostPort}/_status?format=text`,
-                { signal: AbortSignal.timeout(1500) },
-              );
-              if (!response.ok) throw new Error(`monit-Status ${response.status}`);
-              return previewStatusFromMonitText(await response.text());
-            }
-          : async (): Promise<PreviewStatus> => {
-              // horust hat keine Status-API — passiver Probe des Dev-Servers
-              // (Restart-/Crash-Loop-Details sieht nur horust selbst).
-              if (await httpProbe(`http://localhost:${hostPort}/`)) return 'ready';
-              throw new Error('Preview nicht erreichbar');
-            },
+      fetchStatus: async (): Promise<PreviewStatus> => {
+        const response = await fetch(`http://127.0.0.1:${statusHostPort}/_status?format=text`, {
+          signal: AbortSignal.timeout(1500),
+        });
+        if (!response.ok) throw new Error(`monit-Status ${response.status}`);
+        return previewStatusFromMonitText(await response.text());
+      },
       onStatusChange: (status) => console.log(`Preview ${context.projectId}: ${status}`),
     });
     poller.start();
@@ -261,7 +248,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       stop: async () => {
         poller.stop();
         this.ports.release(hostPort);
-        if (statusHostPort !== null) this.ports.release(statusHostPort);
+        this.ports.release(statusHostPort);
         await this.stopVm(name);
       },
     };

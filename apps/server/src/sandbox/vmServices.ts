@@ -1,6 +1,6 @@
 /**
- * Erzeugt die Service-Konfiguration für den In-VM-Supervisor (Spike:
- * Supervisor-Duell monit vs. horust, architektur.md). Statt des bisherigen
+ * Erzeugt die Service-Konfiguration für den In-VM-Supervisor (tini + monit,
+ * Entscheidung siehe architektur.md). Statt des bisherigen
  * `sleep infinity`-Halters läuft PID 1 als echter Supervisor, der Dev-Server
  * und Agent-Daemon startet, überwacht und neu startet — Health-Check,
  * Crash-Loop-Schutz und Restart sind Konfiguration statt Eigenbau
@@ -11,8 +11,6 @@
  * `/opt/macvibes/bin`.
  */
 
-export type VmSupervisorKind = 'monit' | 'horust';
-
 /** Mountpunkt der Supervisor-/Service-Konfiguration in der VM. */
 export const VM_ETC_DIR = '/opt/macvibes/etc';
 /** Mountpunkt des Agent-Daemon-Bundles in der VM. */
@@ -21,7 +19,6 @@ export const VM_BIN_DIR = '/opt/macvibes/bin';
 export const MONIT_HTTPD_PORT = 2812;
 
 export interface VmServicesSpec {
-  supervisor: VmSupervisorKind;
   /** devCommand aus templates.json — einziger Vertrag zum Template. */
   devCommand: string;
   previewPort: number;
@@ -45,8 +42,8 @@ const RUN_DIR = '/run/macvibes';
 const DEVSERVER_PIDFILE = `${RUN_DIR}/devserver.pid`;
 const DAEMON_PIDFILE = `${RUN_DIR}/agent-daemon.pid`;
 
-/** Gemeinsame Run-Wrapper — ein Satz Scripte für beide Supervisor-Kandidaten. */
-function buildSharedFiles(spec: VmServicesSpec): Record<string, string> {
+/** Run-Wrapper: führen die Services im Vordergrund aus (von monit abgelöst). */
+function buildRunWrappers(spec: VmServicesSpec): Record<string, string> {
   const envLines = Object.entries(spec.daemonEnv)
     .map(([key, value]) => `export ${key}=${shQuote(value)}`)
     .join('\n');
@@ -133,50 +130,14 @@ function buildMonitFiles(spec: VmServicesSpec): Record<string, string> {
   };
 }
 
-function buildHorustFiles(spec: VmServicesSpec): Record<string, string> {
-  // horust supervidiert Kinder direkt (kein Pidfile-Tanz) und bringt
-  // HTTP-Health-Checks und Restart-Strategien mit.
-  return {
-    'horust/devserver.toml': [
-      `command = "/bin/sh ${VM_ETC_DIR}/devserver-run.sh"`,
-      '',
-      '[restart]',
-      'strategy = "always"',
-      'backoff = "1s"',
-      'attempts = 5',
-      '',
-      '[healthiness]',
-      `http-endpoint = "http://localhost:${spec.previewPort}/"`,
-      '',
-    ].join('\n'),
-    'horust/agent-daemon.toml': [
-      `command = "/bin/sh ${VM_ETC_DIR}/daemon-run.sh"`,
-      '',
-      '[restart]',
-      'strategy = "always"',
-      'backoff = "1s"',
-      '',
-    ].join('\n'),
-  };
-}
-
 export function buildVmServices(spec: VmServicesSpec): VmServices {
-  const shared = buildSharedFiles(spec);
-
-  if (spec.supervisor === 'monit') {
-    return {
-      files: { ...shared, ...buildMonitFiles(spec) },
-      // monit verlangt Mode 600 auf der Config — der ro-Mount garantiert das
-      // nicht, deshalb wird sie beim Boot nach /etc kopiert. tini reapt Zombies;
-      // -s (Subreaper) ist Pflicht: in der msb-VM ist tini NICHT das echte PID 1,
-      // ohne -s bleiben tote Services als Zombies stehen und monit startet sie
-      // nie neu ("process is a zombie", Live-Befund 2026-07-06).
-      pid1Command: `install -m 600 ${VM_ETC_DIR}/monitrc /etc/monitrc && exec tini -s -- monit -I -c /etc/monitrc`,
-    };
-  }
-
   return {
-    files: { ...shared, ...buildHorustFiles(spec) },
-    pid1Command: `exec horust --services-path ${VM_ETC_DIR}/horust`,
+    files: { ...buildRunWrappers(spec), ...buildMonitFiles(spec) },
+    // monit verlangt Mode 600 auf der Config — der ro-Mount garantiert das
+    // nicht, deshalb wird sie beim Boot nach /etc kopiert. tini reapt Zombies;
+    // -s (Subreaper) ist Pflicht: in der msb-VM ist tini NICHT das echte PID 1,
+    // ohne -s bleiben tote Services als Zombies stehen und monit startet sie
+    // nie neu ("process is a zombie", Live-Befund 2026-07-06).
+    pid1Command: `install -m 600 ${VM_ETC_DIR}/monitrc /etc/monitrc && exec tini -s -- monit -I -c /etc/monitrc`,
   };
 }

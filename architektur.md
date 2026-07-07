@@ -32,10 +32,14 @@
 3. **Supervision: Fertiges statt Eigenbau** (Marcos Leitplanke): PID 1 der VM
    ist ein echter Supervisor statt `sleep infinity`; der host-seitige
    PreviewSupervisor-Watchdog entfällt in diesem Pfad (Host LIEST nur noch
-   Status). Kein Python im Image → **Duell im Härtetest: tini+monit vs.
-   horust** (`MACVIBES_VM_SUPERVISOR=monit|horust`, Default monit — monit hat
-   Health-Check-Restart, Crash-Loop→Endzustand und Status-HTTP-API eingebaut;
-   horust ist der leichtere, aber junge Kandidat).
+   Status). Kein Python im Image → **entschieden für tini + monit**
+   (2026-07-07): monit hat den echten msb-Härtetest bestanden (Restart,
+   Crash-Loop→Endzustand, Status-HTTP-API) und kommt als Debian-Paket;
+   der Duell-Kandidat horust wurde verworfen — sein aarch64-Release-Asset
+   (`-gnu` statt `-musl`) wurde vom Baseline-Install nie getroffen, d. h. er
+   lief bei uns nachweislich nie, ist prä-1.0/Nische und hat keine
+   Status-API (previewStatus verlöre den failed-Zustand). Der horust-Pfad
+   ist vollständig entfernt.
 
 **Implementiert (Branch `architektur`):**
 
@@ -43,11 +47,11 @@
   Interrupt-Semantik, Modellwechsel-Guard), `main.ts` (WS-Client, Reconnect)
 - `apps/server/src/agent/agentGateway.ts` + `daemonRunner.ts` — Host-Seite;
   `chatService` unverändert (der `AgentRunner`-Seam trägt)
-- `apps/server/src/sandbox/vmServices.ts` — monit-/horust-Konfiguration aus
-  einem Satz Run-Wrapper; `monitStatus.ts` + `previewStatusPoller.ts` für
+- `apps/server/src/sandbox/vmServices.ts` — monit-Konfiguration (monitrc +
+  Run-Wrapper); `monitStatus.ts` + `previewStatusPoller.ts` für
   `previewStatus` (nur lesen); Provider-Zweig `startWithDaemon`
-- Baseline backt Agent SDK (`/opt/macvibes`) + tini/monit (+ horust
-  best-effort) ein — `bun run baselines` nach dem Umstellen nötig
+- Baseline backt Agent SDK (`/opt/macvibes`) + tini/monit ein —
+  `bun run baselines` nach dem Umstellen nötig
 - Integrationstest gegen echtes msb (gated):
   `MACVIBES_TEST_MSB=1 bun test daemonTransport.msb` — Daemon-Connect,
   monit-Restart-Heilung, mit Credentials auch Turn/Interrupt/Kontext
@@ -74,8 +78,8 @@ Integrationstest ist grün inkl. Turn/Interrupt/Kontext):**
 **Offen (nächste Schritte):**
 
 - Härtetest aus chatproblems.md gegen `MACVIBES_AGENT_TRANSPORT=daemon`
-  (Browser, 8–10 Turns, 2–3 Projekte, kalt+warm, Interrupt-Szenario) +
-  Supervisor-Duell → dann Default umstellen
+  (Browser, 8–10 Turns, 2–3 Projekte, kalt+warm, Interrupt-Szenario)
+  → dann Default umstellen
 - Phase 2 (Rückbau): msbExecSpawner/KILL_ORPHANS, 1,5s-Stagger, vmRunner,
   CLI-Install im Baseline; chatService-Timeouts/Retry entschärfen;
   optional launchd für den Produktionsbetrieb

@@ -39,11 +39,10 @@ export interface ServerConfig {
     /**
      * Transport zum Agenten in der VM (Spike A+C, architektur.md):
      * "exec" = claude-CLI pro Turn über msb exec (bisheriger Pfad, Default),
-     * "daemon" = persistenter SDK-Daemon in der VM über das WS-Gateway.
+     * "daemon" = persistenter SDK-Daemon in der VM über das WS-Gateway
+     * (In-VM-Supervision: tini + monit).
      */
     transport: 'exec' | 'daemon';
-    /** In-VM-Supervisor beim Daemon-Transport (Duell monit vs. horust). */
-    vmSupervisor: 'monit' | 'horust';
   };
   anthropic: {
     upstreamUrl: string;
@@ -97,7 +96,6 @@ export function loadConfig(): ServerConfig {
       backend: Bun.env.MACVIBES_AGENT === 'fake' ? 'fake' : 'claude',
       fakeDelayMs: Number(Bun.env.MACVIBES_FAKE_DELAY_MS ?? 25),
       transport: Bun.env.MACVIBES_AGENT_TRANSPORT === 'daemon' ? 'daemon' : 'exec',
-      vmSupervisor: Bun.env.MACVIBES_VM_SUPERVISOR === 'horust' ? 'horust' : 'monit',
     },
     anthropic: {
       upstreamUrl: Bun.env.ANTHROPIC_UPSTREAM_URL ?? 'https://api.anthropic.com',
