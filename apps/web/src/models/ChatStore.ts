@@ -78,9 +78,22 @@ export class ChatStore {
   eventSource: EventSource | null = null;
   /** Reconcile-Timer gegen verpasste Turn-Ende-Events — nicht observable. */
   reconcileTimer: ReturnType<typeof setInterval> | null = null;
+  /**
+   * Verbindungs-Generation — nicht observable. Jeder connect()/disconnect()
+   * zählt hoch; ein laufender connect() prüft nach jedem await, ob er noch der
+   * aktuelle ist. Ohne das überschreibt die verspätete History-Antwort eines
+   * alten Projekts das neue und leakt SSE-Verbindungen (Projektwechsel,
+   * StrictMode-Doppelmount) — ab ~6 offenen SSE-Streams blockiert der Browser
+   * dann ALLE weiteren Requests an den Origin.
+   */
+  connectEpoch = 0;
 
   constructor() {
-    makeAutoObservable(this, { eventSource: false, reconcileTimer: false }, { autoBind: true });
+    makeAutoObservable(
+      this,
+      { eventSource: false, reconcileTimer: false, connectEpoch: false },
+      { autoBind: true },
+    );
   }
 
   setDraft(value: string): void {
@@ -107,6 +120,9 @@ export class ChatStore {
 
   /** Upsert per Message-ID — Streaming-Deltas ersetzen die bestehende Zeile. */
   applyEvent(payload: ChatEventPayload): void {
+    // Projekt-Trennung: Events fremder Projekte (z. B. aus einer noch nicht
+    // abgeräumten alten Subscription) dürfen hier nie landen.
+    if (payload.message.projectId !== this.projectId) return;
     // Ist es die serverseitige Fassung unserer optimistischen User-Bubble,
     // die eigene Bubble durch das echte Event ersetzen (kein Duplikat).
     if (payload.message.role === 'user') {
@@ -129,31 +145,40 @@ export class ChatStore {
   /** Lädt die Historie und abonniert Live-Events (auch read-only, R10). */
   async connect(projectId: string): Promise<void> {
     this.disconnect();
+    const epoch = ++this.connectEpoch;
     this.projectId = projectId;
     this.messages = [];
     this.error = null;
+    this.turnActive = false;
 
     try {
       const data = await gqlRequest<{ chatMessages: ChatMessage[]; turnActive: boolean }>(
         CHAT_STATE_QUERY,
         { projectId },
       );
+      // Veraltet? Inzwischen lief ein neuer connect()/disconnect() — dessen
+      // Zustand gilt, diese Antwort gehört zu einem verlassenen Projekt.
+      if (epoch !== this.connectEpoch) return;
       runInAction(() => {
         this.messages = data.chatMessages;
         this.turnActive = data.turnActive;
       });
     } catch (err) {
+      if (epoch !== this.connectEpoch) return;
       console.error('ChatStore.connect fehlgeschlagen', err);
       runInAction(() => {
         this.error = toErrorMessage(err);
       });
       return;
     }
+    if (epoch !== this.connectEpoch) return;
 
     const url = `/graphql?query=${encodeURIComponent(CHAT_EVENTS_SUBSCRIPTION(projectId))}`;
     const eventSource = new EventSource(url);
     // GraphQL Yoga sendet benannte SSE-Events ("event: next"), nicht "message".
     eventSource.addEventListener('next', (event: MessageEvent<string>) => {
+      // Nachzügler einer bereits ersetzten Verbindung ignorieren.
+      if (epoch !== this.connectEpoch) return;
       try {
         const parsed = JSON.parse(event.data) as { data?: { chatEvents?: ChatEventPayload } };
         const payload = parsed.data?.chatEvents;
@@ -175,6 +200,8 @@ export class ChatStore {
   }
 
   disconnect(): void {
+    // Entwertet auch einen noch laufenden connect() (siehe connectEpoch).
+    this.connectEpoch++;
     this.eventSource?.close();
     this.eventSource = null;
     if (this.reconcileTimer !== null) {
