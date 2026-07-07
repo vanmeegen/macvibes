@@ -3,11 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDb, type Db } from '../../db/client';
 import { runMigrations } from '../../db/migrate';
-import { register, type AuthConfig } from '../authService';
+import { approveUser, register, type AuthConfig } from '../authService';
 import type { UserRow } from '../../db/schema';
 
 export const TEST_AUTH_CONFIG: AuthConfig = {
-  inviteCode: 'test-code',
   sessionTtlMs: 3 * 24 * 60 * 60 * 1000,
 };
 
@@ -67,11 +66,18 @@ export async function createTemplatesFixture(templateDir = 'pwa'): Promise<strin
   return dir;
 }
 
+/**
+ * Legt einen freigeschalteten Testnutzer an. Der erste User wird ohnehin
+ * Admin+approved; jeder weitere ist zunächst pending — für Tests, die einen
+ * benutzbaren Owner brauchen, schalten wir ihn direkt frei.
+ */
 export async function createUser(db: Db, username = 'marco'): Promise<UserRow> {
   const result = await register(db, TEST_AUTH_CONFIG, {
     username,
     password: 'sicheres-passwort',
-    inviteCode: TEST_AUTH_CONFIG.inviteCode,
   });
-  return result.user;
+  if (result.user.approved) {
+    return result.user;
+  }
+  return approveUser(db, result.user.id);
 }

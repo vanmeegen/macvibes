@@ -11,8 +11,12 @@ export interface ServerConfig {
   bareRepoPath: string;
   /** Ordner mit den Projekt-Templates (templates.json + Unterordner). */
   templatesDir: string;
-  /** Registrierungscode — ohne ihn kann sich niemand registrieren. */
-  inviteCode: string;
+  /**
+   * Optionaler Bootstrap-Admin: dieser Username wird beim Start zum Admin
+   * befördert und freigeschaltet. Ohne Wert wird der erste registrierte Nutzer
+   * automatisch Admin.
+   */
+  adminUsername?: string | undefined;
   dbPath: string;
   /** Login-Session: 3 Tage, rollierend verlängert. */
   sessionTtlMs: number;
@@ -69,7 +73,7 @@ export function loadConfig(): ServerConfig {
     macvibesHome,
     bareRepoPath: join(macvibesHome, 'macvibes-apps.git'),
     templatesDir: Bun.env.MACVIBES_TEMPLATES_DIR ?? DEFAULT_TEMPLATES_DIR,
-    inviteCode: Bun.env.MACVIBES_INVITE_CODE ?? 'macvibes',
+    adminUsername: Bun.env.MACVIBES_ADMIN_USERNAME || undefined,
     dbPath: resolveDbPath(),
     sessionTtlMs: 3 * 24 * 60 * 60 * 1000,
     webDistDir: Bun.env.MACVIBES_WEB_DIST ?? DEFAULT_WEB_DIST_DIR,

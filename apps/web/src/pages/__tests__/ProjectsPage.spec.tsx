@@ -21,7 +21,7 @@ const projects: Project[] = [
     name: 'Mein Vibe-Projekt',
     branchName: 'vibe/mein-vibe-projekt',
     templateDir: 'react-starter',
-    owner: { id: 'u1', username: 'alice' },
+    owner: { id: 'u1', username: 'alice', role: 'admin', approved: true, createdAt: 't0' },
     createdAt: '2026-07-01T10:00:00.000Z',
     lastActivityAt: '2026-07-02T12:00:00.000Z',
     sandboxStatus: 'stopped',
@@ -33,7 +33,7 @@ const projects: Project[] = [
     name: 'Bobs Projekt',
     branchName: 'vibe/bobs-projekt',
     templateDir: 'react-starter',
-    owner: { id: 'u2', username: 'bob' },
+    owner: { id: 'u2', username: 'bob', role: 'user', approved: true, createdAt: 't1' },
     createdAt: '2026-07-01T10:00:00.000Z',
     lastActivityAt: '2026-07-02T12:00:00.000Z',
     sandboxStatus: 'stopped',
@@ -64,7 +64,13 @@ describe('ProjectsPage', () => {
 
     const authStore = new AuthStore();
     runInAction(() => {
-      authStore.currentUser = { id: 'u1', username: 'alice' };
+      authStore.currentUser = {
+        id: 'u1',
+        username: 'alice',
+        role: 'admin',
+        approved: true,
+        createdAt: 't0',
+      };
       authStore.initialized = true;
     });
     const projectsStore = new ProjectsStore(authStore);
@@ -91,7 +97,13 @@ describe('ProjectsPage', () => {
 
     const authStore = new AuthStore();
     runInAction(() => {
-      authStore.currentUser = { id: 'u1', username: 'alice' };
+      authStore.currentUser = {
+        id: 'u1',
+        username: 'alice',
+        role: 'admin',
+        approved: true,
+        createdAt: 't0',
+      };
       authStore.initialized = true;
     });
     const projectsStore = new ProjectsStore(authStore);

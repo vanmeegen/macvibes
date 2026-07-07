@@ -11,7 +11,6 @@ import { join } from 'node:path';
 const E2E_HOME = mkdtempSync(join(tmpdir(), 'macvibes-e2e-'));
 export const E2E_API_PORT = 4600;
 export const E2E_WEB_PORT = 5175;
-export const E2E_INVITE_CODE = 'e2e-code';
 
 export default defineConfig({
   testDir: './e2e',
@@ -20,6 +19,7 @@ export default defineConfig({
   retries: 0,
   timeout: 30_000,
   reporter: [['list']],
+  globalSetup: './e2e/globalSetup.ts',
   use: {
     baseURL: `http://localhost:${E2E_WEB_PORT}`,
     testIdAttribute: 'data-testselector',
@@ -37,7 +37,6 @@ export default defineConfig({
         HOST: '127.0.0.1',
         MACVIBES_HOME: E2E_HOME,
         DB_PATH: join(E2E_HOME, 'app.db'),
-        MACVIBES_INVITE_CODE: E2E_INVITE_CODE,
         // Kurze Grace-Period, damit der R9-Lifecycle im E2E beobachtbar ist.
         MACVIBES_GRACE_MS: '1500',
         MACVIBES_IDLE_MS: '600000',

@@ -12,7 +12,6 @@ export class LoginModel {
   mode: LoginMode = 'login';
   username = '';
   password = '';
-  inviteCode = '';
 
   constructor(private readonly authStore: AuthStore) {
     makeAutoObservable(this, {}, { autoBind: true });
@@ -31,40 +30,46 @@ export class LoginModel {
     this.password = value;
   }
 
-  setInviteCode(value: string): void {
-    this.inviteCode = value;
-  }
-
   get canSubmit(): boolean {
     if (this.username.trim().length === 0 || this.password.length === 0) {
-      return false;
-    }
-    if (this.mode === 'register' && this.inviteCode.trim().length === 0) {
       return false;
     }
     return !this.authStore.pending;
   }
 
-  /** Meldet an bzw. registriert; bei Erfolg werden die Felder geleert. */
+  /**
+   * Meldet an bzw. registriert. Bei erfolgreichem Login werden die Felder
+   * geleert (die App leitet dann weiter). Eine Registrierung, die auf
+   * Freischaltung wartet, wechselt zurück in den Login-Modus — der Hinweis
+   * dazu steht im AuthStore (`notice`).
+   */
   async submit(): Promise<boolean> {
-    const success =
-      this.mode === 'login'
-        ? await this.authStore.login(this.username.trim(), this.password)
-        : await this.authStore.register(
-            this.username.trim(),
-            this.password,
-            this.inviteCode.trim(),
-          );
-    if (success) {
-      this.reset();
+    if (this.mode === 'login') {
+      const ok = await this.authStore.login(this.username.trim(), this.password);
+      if (ok) {
+        this.reset();
+      }
+      return ok;
     }
-    return success;
+
+    const outcome = await this.authStore.register(this.username.trim(), this.password);
+    if (outcome === 'loggedIn') {
+      this.reset();
+      return true;
+    }
+    if (outcome === 'pending') {
+      // Zurück in den Login-Modus, damit der Nutzer sich nach der Freischaltung
+      // anmelden kann; der Hinweistext bleibt sichtbar.
+      this.password = '';
+      this.mode = 'login';
+      return true;
+    }
+    return false;
   }
 
   reset(): void {
     this.username = '';
     this.password = '';
-    this.inviteCode = '';
     this.mode = 'login';
   }
 }

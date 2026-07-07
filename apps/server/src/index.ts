@@ -26,7 +26,7 @@ import { SandboxManager } from './sandbox/sandboxManager';
 import { schema } from './schema';
 import type { GraphQLContext } from './schema/builder';
 import { autoCommit, createTurnEndAutoCommit } from './services/autoCommitService';
-import { resolveSession } from './services/authService';
+import { ensureAdmin, resolveSession } from './services/authService';
 import { ChatService } from './services/chatService';
 import { ensureBareRepo } from './services/gitService';
 import { startMirrorScheduler } from './services/mirrorService';
@@ -35,6 +35,8 @@ import { workspaceDirFor } from './services/workspaceService';
 const config = loadConfig();
 const db = createDb(config.dbPath);
 runMigrations(db);
+// Bootstrap-Admin (optional per MACVIBES_ADMIN_USERNAME) freischalten/befördern.
+await ensureAdmin(db, config);
 await ensureBareRepo(config.bareRepoPath);
 
 // Shared Secret VM → Credential-Proxy, pro Serverstart neu (B5c).

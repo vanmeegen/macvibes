@@ -137,3 +137,21 @@ export async function buildTemplateBaseline(options: BuildBaselineOptions): Prom
     }
   }
 }
+
+/**
+ * Bootstrap-Script des Baseline-Forks: verlinkt ALLE `node_modules` der
+ * Baseline an ihre relativen Pfade im Workspace — nicht nur das Root.
+ * Workspaces-Templates (z. B. fullstack) haben zusätzlich `apps/<x>/node_modules`
+ * (dort liegen u. a. die .bin-Einträge wie `vite`); ohne diese Links scheitert
+ * der Dev-Server mit "command not found" in einer Restart-Schleife.
+ * Innere node_modules (z. B. node_modules/.bun/node_modules) werden übersprungen
+ * — sie sind über den Root-Link erreichbar. Template-agnostisch; Basis-Pfad per
+ * MV_BASELINE übersteuerbar (Tests).
+ */
+export const baselineBootstrapScript =
+  `BASE="\${MV_BASELINE:-/baseline/work}"; ` +
+  `find "$BASE" -maxdepth 3 -name node_modules -type d 2>/dev/null | while IFS= read -r d; do ` +
+  `rel="\${d#"$BASE"/}"; ` +
+  `case "$rel" in *node_modules/*) continue;; esac; ` +
+  `if [ ! -e "$rel" ]; then mkdir -p "$(dirname "$rel")" 2>/dev/null; ln -s "$d" "$rel"; fi; ` +
+  `done; true`;

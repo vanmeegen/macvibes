@@ -76,6 +76,17 @@ export const LoginPage = observer(function LoginPage({
                 {authStore.error}
               </Alert>
             )}
+            {authStore.notice !== null && (
+              <Alert severity="success" data-testselector="login-notice">
+                {authStore.notice}
+              </Alert>
+            )}
+            {loginModel.mode === 'register' && (
+              <Alert severity="info" data-testselector="login-register-hint">
+                Nach der Registrierung schaltet ein Admin dein Konto frei — danach kannst du dich
+                anmelden.
+              </Alert>
+            )}
 
             <TextField
               label="Benutzername"
@@ -93,15 +104,6 @@ export const LoginPage = observer(function LoginPage({
               autoComplete={loginModel.mode === 'login' ? 'current-password' : 'new-password'}
               inputProps={{ 'data-testselector': 'login-password' }}
             />
-            {loginModel.mode === 'register' && (
-              <TextField
-                label="Invite-Code"
-                value={loginModel.inviteCode}
-                onChange={(e) => loginModel.setInviteCode(e.target.value)}
-                inputProps={{ 'data-testselector': 'login-invite-code' }}
-              />
-            )}
-
             <Button
               type="submit"
               variant="contained"

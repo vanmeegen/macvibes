@@ -1,7 +1,7 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { agentConfigDirFor, ensureWorkspace, projectVolumeDir } from '../services/workspaceService';
-import { baselineExists, baselineSnapshotName } from './baselineService';
+import { baselineBootstrapScript, baselineExists, baselineSnapshotName } from './baselineService';
 import { httpProbe } from './httpProbe';
 import { gateReadyWithProbe, previewStatusFromMonitText } from './monitStatus';
 import { MicrosandboxError, runMsb, waitForExecReady } from './msb';
@@ -113,8 +113,10 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     }
 
     // node_modules kommt vorinstalliert aus dem Snapshot und wird in den
-    // gemounteten Workspace gelinkt — kein Install zur Laufzeit.
-    const bootstrap = `[ -e node_modules ] || ln -s /baseline/work/node_modules node_modules`;
+    // gemounteten Workspace gelinkt — kein Install zur Laufzeit. Verlinkt ALLE
+    // node_modules (auch apps/<x>/node_modules bei Workspace-Templates wie
+    // fullstack), nicht nur das Root — sonst fehlt z. B. vite in .bin.
+    const bootstrap = baselineBootstrapScript;
 
     await runMsb([
       'run',
