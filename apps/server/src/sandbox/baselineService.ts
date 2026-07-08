@@ -1,10 +1,11 @@
-import { MicrosandboxError, runMsb } from './msb';
+import { MicrosandboxError, runMsb, waitForExecReady } from './msb';
 
 /**
  * Template-Baselines (R9/PRD „Template-Baselines"): pro Template wird einmal
- * eine MicroVM mit fertig installierten node_modules eingefroren
- * (Disk-Snapshot, „local fork-by-copy"). Neue Projekte forken die Baseline —
- * kein `bun install` mehr zur Laufzeit, Preview in Sekunden.
+ * eine MicroVM eingefroren (Disk-Snapshot, „local fork-by-copy") mit fertig
+ * installierten node_modules, dem Agent SDK (/opt/macvibes) und tini+monit
+ * (In-VM-Supervisor). Neue Projekte forken die Baseline — kein Install zur
+ * Laufzeit, Preview in Sekunden. Ohne Baseline bootet keine Projekt-VM.
  */
 
 const BUILDER_SANDBOX = 'macvibes-baseline-builder';
@@ -83,19 +84,49 @@ export async function buildTemplateBaseline(options: BuildBaselineOptions): Prom
     'infinity',
   ]);
 
-  try {
-    await runMsb([
-      'exec',
-      BUILDER_SANDBOX,
-      '--',
-      'sh',
-      '-c',
+  // Der Builder braucht dieselbe Ready-Wartezeit wie Projekt-VMs: `msb run -d`
+  // kehrt zurück, bevor der Gast-exec-Endpunkt steht — ein sofortiges exec
+  // stirbt sonst intermittierend mit "exec session ended without exit event"
+  // (live getroffen beim Daemon-Integrationstest, 2026-07-06).
+  await waitForExecReady(BUILDER_SANDBOX);
+
+  // Ein exec pro Schritt statt eines Mega-Befehls: kurze exec-Sessions sind
+  // bei msb deutlich robuster, und ein Fehler ist dem Schritt zuordenbar.
+  // Alle Schritte sind PFLICHT: ohne SDK/tini/monit bootet keine Projekt-VM
+  // (Daemon-Transport ist der einzige Agent-Pfad, architektur.md).
+  const steps: { beschreibung: string; script: string }[] = [
+    {
+      // Das gemountete Daemon-Bundle (/opt/macvibes/bin/main.js) löst das SDK
+      // von /opt/macvibes auf; die Claude-CLI bringt das SDK selbst mit.
+      beschreibung: 'Agent SDK nach /opt/macvibes',
+      script:
+        'mkdir -p /opt/macvibes && cd /opt/macvibes && printf %s "{}" > package.json && ' +
+        'bun add @anthropic-ai/claude-agent-sdk >/dev/null 2>&1',
+    },
+    {
+      beschreibung: 'tini + monit (In-VM-Supervisor, PID 1) installieren',
+      script:
+        'apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq tini monit >/dev/null 2>&1',
+    },
+    {
       // node_modules vom Host ausschließen — die VM installiert selbst (Linux-Artefakte).
-      // Claude Code global installieren (Agent läuft in der VM, B5c).
-      'bun add -g @anthropic-ai/claude-code >/dev/null 2>&1 && ' +
+      beschreibung: 'Template kopieren + Dependencies installieren',
+      script:
         'mkdir -p /baseline/work && cp -r /src/. /baseline/work && rm -rf /baseline/work/node_modules && ' +
         'cd /baseline/work && bun install --silent && mkdir -p node_modules',
-    ]);
+    },
+  ];
+
+  try {
+    for (const step of steps) {
+      try {
+        await runMsb(['exec', BUILDER_SANDBOX, '--', 'sh', '-c', step.script]);
+      } catch (error) {
+        throw new MicrosandboxError(
+          `Baseline-Schritt „${step.beschreibung}" fehlgeschlagen: ${String(error)}`,
+        );
+      }
+    }
     await runMsb(['stop', BUILDER_SANDBOX]);
     await runMsb(['snapshot', 'create', '--force', '-q', '--from', BUILDER_SANDBOX, snapshotName]);
   } finally {

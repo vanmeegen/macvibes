@@ -1,13 +1,24 @@
-import { mkdirSync } from 'node:fs';
-import { agentConfigDirFor, ensureWorkspace } from '../services/workspaceService';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { agentConfigDirFor, ensureWorkspace, projectVolumeDir } from '../services/workspaceService';
 import { baselineBootstrapScript, baselineExists, baselineSnapshotName } from './baselineService';
 import { httpProbe } from './httpProbe';
-import { MicrosandboxError, msbExec, runMsb } from './msb';
-import { PreviewSupervisor } from './previewSupervisor';
+import { gateReadyWithProbe, previewStatusFromMonitText } from './monitStatus';
+import { MicrosandboxError, runMsb, waitForExecReady } from './msb';
+import { PreviewStatusPoller } from './previewStatusPoller';
 import { PortAllocator } from './portService';
+import { MONIT_HTTPD_PORT, VM_BIN_DIR, VM_ETC_DIR, buildVmServices } from './vmServices';
 import type { PreviewStatus, SandboxContext, SandboxHandle, SandboxProvider } from './provider';
 
-export { MicrosandboxError, msbAvailable } from './msb';
+export { msbAvailable } from './msb';
+
+/** Konfiguration des Agent-Daemons (einziger Transport in die VM). */
+export interface AgentDaemonProviderConfig {
+  /** Verzeichnis mit dem gebündelten Daemon (main.js), ro in die VM gemountet. */
+  bundleDir: string;
+  /** Env für den Daemon der jeweiligen Sandbox (Gateway-URL enthält den Namen). */
+  envFor: (sandboxName: string) => Record<string, string>;
+}
 
 export interface MicrosandboxProviderConfig {
   macvibesHome: string;
@@ -16,46 +27,13 @@ export interface MicrosandboxProviderConfig {
   image: string;
   cpus: number;
   memoryMib: number;
+  /** Agent-Daemon-Transport — Pflicht: die VM läuft immer unter tini+monit. */
+  agentDaemon: AgentDaemonProviderConfig;
 }
 
-/** Sandbox-Name eines Projekts — vom Provider und vom VM-Runner genutzt. */
+/** Sandbox-Name eines Projekts — vom Provider und vom Runner genutzt. */
 export function microsandboxSandboxName(projectId: string): string {
   return `macvibes-${projectId}`;
-}
-
-export interface WaitForExecReadyOptions {
-  timeoutMs?: number;
-  intervalMs?: number;
-  /** Exec-Probe (injizierbar für Tests). Wirft, solange die VM nicht bereit ist. */
-  probe?: (name: string) => Promise<unknown>;
-}
-
-/**
- * Wartet, bis `msb exec` in der Sandbox funktioniert (Gast-Agent-Endpunkt
- * bereit). Verhindert die "no agent endpoint found"-Race beim ersten Prompt.
- */
-export async function waitForExecReady(
-  name: string,
-  options: WaitForExecReadyOptions = {},
-): Promise<void> {
-  const timeoutMs = options.timeoutMs ?? 30_000;
-  const intervalMs = options.intervalMs ?? 250;
-  const probe = options.probe ?? ((n: string) => runMsb(['exec', n, '--', 'true']));
-
-  const start = Date.now();
-  let lastError: unknown = null;
-  for (;;) {
-    try {
-      await probe(name);
-      return;
-    } catch (error) {
-      lastError = error;
-    }
-    if (Date.now() - start >= timeoutMs) {
-      throw new MicrosandboxError(`Sandbox ${name} wurde nicht exec-bereit: ${String(lastError)}`);
-    }
-    await new Promise((r) => setTimeout(r, intervalMs));
-  }
 }
 
 /** Arbeitsverzeichnis in der VM — Mountpunkt des Projekt-Workspace. */
@@ -70,14 +48,18 @@ export const AGENT_CONFIG_GUEST_DIR = '/agent-config';
 /**
  * Echter Sandbox-Provider auf microsandbox-MicroVMs (libkrun).
  *
- * Architektur (Watchdog-fähig): Die VM läuft als **stabiler Halter**
- * (`sleep infinity` als PID 1) und überlebt so einen Dev-Server-Crash — der
- * Agent (Claude Code, per `msb exec`) verliert seine Umgebung nicht. Der
- * Preview-/Dev-Server wird von einem **host-seitigen `PreviewSupervisor`**
- * per `msb exec` gestartet, überwacht und bei Ausfall neu gestartet.
+ * PID 1 der VM ist ein In-VM-Supervisor (tini + monit, siehe vmServices.ts),
+ * der Dev-Server UND Agent-Daemon startet, überwacht und bei Crash neu
+ * startet — kein host-seitiger Watchdog, kein msb exec im Agent-Pfad. Der
+ * Daemon wählt sich ausgehend ins Host-Gateway ein (architektur.md, A+C).
+ *
+ * Voraussetzung ist der Baseline-Snapshot des Templates (`bun run baselines`):
+ * er enthält node_modules, das Agent SDK und tini/monit. Ohne Baseline kann
+ * die VM nicht booten — das meldet start() als klaren Fehler.
  *
  * Schnittstelle zum Template (template-agnostisch): ausschließlich
- * `devCommand` + `previewPort` + PORT-Env aus templates.json.
+ * `devCommand` + `previewPort` + PORT-Env aus templates.json. Der
+ * Preview-Status wird nur noch GELESEN (monit-HTTP-API + HTTP-Probe).
  */
 export class MicrosandboxSandboxProvider implements SandboxProvider {
   // Geteilt über ALLE Sandboxen dieses Providers → kollisionsfreie Host-Ports
@@ -97,20 +79,44 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     const agentConfigDir = agentConfigDirFor(this.config.macvibesHome, context.projectId);
     mkdirSync(agentConfigDir, { recursive: true });
 
-    const hostPort = await this.ports.allocate(context.previewPort);
+    // Baseline-Fork (B5b) ist Pflicht: der Snapshot enthält neben node_modules
+    // auch tini/monit (PID 1) und das Agent SDK — ohne ihn bootet die VM nicht.
+    if (!(await baselineExists(context.templateDir))) {
+      throw new MicrosandboxError(
+        `Keine Baseline für Template „${context.templateDir}" — bitte einmal ` +
+          '`bun run baselines` ausführen (Supervisor und Agent-SDK stecken im Snapshot).',
+      );
+    }
+
     const name = microsandboxSandboxName(context.projectId);
+    const hostPort = await this.ports.allocate(context.previewPort);
+    // monit-Status-API — nur auf dem Host (127.0.0.1) gemappt, füttert previewStatus.
+    const statusHostPort = await this.ports.allocate(MONIT_HTTPD_PORT);
 
-    // Baseline-Fork (B5b): node_modules kommt vorinstalliert aus dem Snapshot
-    // und wird in den gemounteten Workspace gelinkt — kein Install zur Laufzeit.
-    const useBaseline = await baselineExists(context.templateDir);
-    const bootstrap = useBaseline
-      ? baselineBootstrapScript
-      : `if [ -f package.json ] && [ ! -d node_modules ]; then bun install --silent; fi`;
-    const source = useBaseline
-      ? ['--snapshot', baselineSnapshotName(context.templateDir)]
-      : [this.config.image];
+    const services = buildVmServices({
+      devCommand: context.devCommand,
+      previewPort: context.previewPort,
+      daemonEnv: this.config.agentDaemon.envFor(name),
+    });
 
-    // VM als stabiler Halter starten (Dev-Server läuft NICHT als PID 1).
+    // Service-Konfiguration pro Projekt aufs Volume schreiben (ro-Mount).
+    // Owner-only (0700/0600): daemon.env.sh enthält das Proxy-Token — andere
+    // Host-Nutzer haben darauf nichts zu suchen (nicht auf die umask verlassen).
+    const etcDir = join(projectVolumeDir(this.config.macvibesHome, context.projectId), 'vm-etc');
+    rmSync(etcDir, { recursive: true, force: true });
+    mkdirSync(etcDir, { recursive: true, mode: 0o700 });
+    for (const [relativePath, content] of Object.entries(services.files)) {
+      const filePath = join(etcDir, relativePath);
+      mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
+      writeFileSync(filePath, content, { mode: 0o600 });
+    }
+
+    // node_modules kommt vorinstalliert aus dem Snapshot und wird in den
+    // gemounteten Workspace gelinkt — kein Install zur Laufzeit. Verlinkt ALLE
+    // node_modules (auch apps/<x>/node_modules bei Workspace-Templates wie
+    // fullstack), nicht nur das Root — sonst fehlt z. B. vite in .bin.
+    const bootstrap = baselineBootstrapScript;
+
     await runMsb([
       'run',
       '-d',
@@ -123,11 +129,17 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       `${workspaceDir}:${GUEST_WORKDIR}`,
       '-v',
       `${agentConfigDir}:${AGENT_CONFIG_GUEST_DIR}`,
+      '-v',
+      `${etcDir}:${VM_ETC_DIR}:ro`,
+      '-v',
+      `${this.config.agentDaemon.bundleDir}:${VM_BIN_DIR}:ro`,
       '-w',
       GUEST_WORKDIR,
       // 0.0.0.0: Preview ist im LAN erreichbar (R7/NFR).
       '-p',
       `0.0.0.0:${hostPort}:${context.previewPort}`,
+      '-p',
+      `127.0.0.1:${statusHostPort}:${MONIT_HTTPD_PORT}`,
       // Egress: öffentliches Internet (bun/npm) + Host-Gateway für den
       // Credential-Proxy (host.microsandbox.internal, B5c). Private Netze
       // sonst gesperrt — der Agent kommt nicht ins LAN.
@@ -137,63 +149,55 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       String(this.config.cpus),
       '-m',
       `${this.config.memoryMib}M`,
-      ...source,
+      '--snapshot',
+      baselineSnapshotName(context.templateDir),
       '--',
       'sh',
       '-c',
-      `${bootstrap}; exec sleep infinity`,
+      `${bootstrap}; ${services.pid1Command}`,
     ]);
-
-    // `msb run -d` kehrt zurück, bevor der Gast-Agent-Endpunkt für `msb exec`
-    // bereit ist. Ohne dieses Warten scheitern die ersten Prompts/Dev-Server-
-    // Starts mit "no agent endpoint found" (Race, 2026-07-05).
+    // `msb run -d` kehrt zurück, bevor der Gast-Agent-Endpunkt bereit ist —
+    // ohne dieses Warten scheitern frühe execs ("no agent endpoint found").
     await waitForExecReady(name);
 
-    // Watchdog: Dev-Server per `msb exec` starten + überwachen (host-seitig).
-    // `nice`/`ionice`: der Dev-Server-Boot (Vite/bun-Kompilierung) ist CPU-/IO-
-    // intensiv und würde einen gleichzeitigen ersten Agent-Turn in derselben VM
-    // massiv ausbremsen (~30s). Mit niedrigster Priorität bekommt der Agent
-    // (claude, Standard-Priorität) Vorrang; der Dev-Server bootet, wenn CPU frei ist.
-    const supervisor = new PreviewSupervisor({
-      spawn: () =>
-        msbExec(
-          name,
-          [
-            'sh',
-            '-c',
-            `exec nice -n 19 ionice -c 3 sh -c '${context.devCommand.replaceAll("'", "'\\''")}'`,
-          ],
-          { PORT: String(context.previewPort) },
-          GUEST_WORKDIR,
-        ),
-      probe: () => httpProbe(`http://localhost:${hostPort}/`),
+    const poller = new PreviewStatusPoller({
+      fetchStatus: async (): Promise<PreviewStatus> => {
+        const response = await fetch(`http://127.0.0.1:${statusHostPort}/_status?format=text`, {
+          signal: AbortSignal.timeout(1500),
+        });
+        if (!response.ok) throw new Error(`monit-Status ${response.status}`);
+        // 'ready' erst, wenn der Dev-Server WIRKLICH HTTP beantwortet — monit
+        // sieht nur den Prozess (siehe gateReadyWithProbe).
+        return gateReadyWithProbe(previewStatusFromMonitText(await response.text()), () =>
+          httpProbe(`http://localhost:${hostPort}/`),
+        );
+      },
       onStatusChange: (status) => console.log(`Preview ${context.projectId}: ${status}`),
     });
-    // GESTAFFELT starten: werden die Dev-Server-exec-Session und der erste
-    // claude-exec (Prompt direkt nach dem Öffnen) GLEICHZEITIG etabliert,
-    // verliert claudes Session in microsandbox deterministisch ihren Output
-    // (Session-Etablierungs-Race; erster Turn wirkt "stumm"). 1,5s Versatz
-    // lässt claudes Session zuerst stehen; die Preview braucht ohnehin Sekunden.
-    const supervisorDelay = setTimeout(() => supervisor.start(), 1_500);
+    poller.start();
 
     return {
       previewHostPort: hostPort,
-      previewStatus: (): PreviewStatus => supervisor.getStatus(),
+      previewStatus: (): PreviewStatus => poller.getStatus(),
       stop: async () => {
-        clearTimeout(supervisorDelay);
+        poller.stop();
         this.ports.release(hostPort);
-        await supervisor.stop();
-        try {
-          await runMsb(['stop', name]);
-        } catch (error) {
-          console.error(`msb stop ${name}:`, error);
-        }
-        try {
-          await runMsb(['rm', name]);
-        } catch (error) {
-          console.error(`msb rm ${name}:`, error);
-        }
+        this.ports.release(statusHostPort);
+        await this.stopVm(name);
       },
     };
+  }
+
+  private async stopVm(name: string): Promise<void> {
+    try {
+      await runMsb(['stop', name]);
+    } catch (error) {
+      console.error(`msb stop ${name}:`, error);
+    }
+    try {
+      await runMsb(['rm', name]);
+    } catch (error) {
+      console.error(`msb rm ${name}:`, error);
+    }
   }
 }

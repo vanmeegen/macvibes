@@ -15,24 +15,51 @@ Bun-Workspaces-Monorepo:
   - `sandbox/` — `SandboxManager` (Lifecycle: Grace/Idle/LRU), `SandboxProvider`
     (Interface) mit `ProcessSandboxProvider` (Host, für Dev/Tests) und
     `MicrosandboxSandboxProvider` (echte MicroVMs). `baselineService` friert
-    Template-Snapshots ein, `portService` mappt Preview-Ports,
-    `previewSupervisor` ist der host-seitige Watchdog für den Dev-Server.
+    Template-Snapshots ein, `portService` mappt Preview-Ports.
+    `vmServices` erzeugt die In-VM-Supervisor-Konfiguration (tini + monit),
+    `monitStatus`/`previewStatusPoller` lesen den Preview-Status aus der
+    monit-HTTP-API. (`previewSupervisor` lebt nur noch im `ProcessSandboxProvider`.)
 
-  **Sandbox-/Preview-Schnittstelle (sauber gekapselt):** Die MicroVM läuft als
-  **stabiler Halter** (`sleep infinity` als PID 1) und überlebt einen
-  Dev-Server-Crash — der Agent (per `msb exec`) verliert seine Umgebung nicht.
-  Der Preview-/Dev-Server wird vom host-seitigen `PreviewSupervisor` per
-  `msb exec` gestartet und überwacht: geduldige **Startphase** (Status
-  `starting`, kein voreiliger Neustart, während der Server hochfährt),
-  **Laufphase** mit Health-Check und Crash-Recovery (Neustart mit Backoff),
-  **Crash-Loop-Schutz** (nach `maxRestarts` → `failed`). Der einzige Vertrag
-  zum Template ist `devCommand` + `previewPort` + PORT-Env aus `templates.json`
-  — kein template-spezifischer Code in der Plattform. Der Preview-Status
+  **Sandbox-/Preview-Schnittstelle (sauber gekapselt):** PID 1 der MicroVM ist
+  ein **In-VM-Supervisor** (`tini -s` als Reaper + `monit`, Konfiguration aus
+  `vmServices.ts`), der **zwei Services** startet, überwacht und bei Crash neu
+  startet: den **Dev-Server** und den **Agent-Daemon**. Kein host-seitiger
+  Watchdog, kein `msb exec` im Agent-Pfad. monit macht die geduldige
+  **Startphase** (Port-Health-Check erst nach `30 cycles`), **Crash-Recovery**
+  (Neustart) und **Crash-Loop-Schutz** (`5 restarts within 40 cycles →
+unmonitor` ≙ `failed`). Der Host **liest** den Status nur: über die
+  monit-HTTP-API (auf `127.0.0.1` gemappt) plus eine HTTP-Probe auf den
+  Preview-Port — `ready` gilt erst, wenn der Dev-Server wirklich HTTP
+  beantwortet (monit sieht nur den Prozess). Der einzige Vertrag zum Template
+  ist `devCommand` + `previewPort` + PORT-Env aus `templates.json` — kein
+  template-spezifischer Code in der Plattform. Der Preview-Status
   (`starting`/`ready`/`restarting`/`failed`/`stopped`) fließt über GraphQL
   (`Project.previewStatus`) ins UI-Overlay.
-  - `agent/` — `AgentRunner`-Interface: `ClaudeAgentRunner` (Host),
-    `VmAgentRunner` (`msb exec` in der VM), `FakeAgentRunner` (Tests).
-    `claudeStreamJson` parst die CLI-Ausgabe.
+
+  **Preview-Gateway (`http/previewGateway.ts`):** Jede Preview läuft auf einem
+  dynamisch allokierten hohen VM-Port — für Remote-/VPN-Zugriff nicht
+  erreichbar (der Tunnel reicht nur bekannte feste Ports durch). Deshalb
+  reverse-proxied ein **Gateway auf einem festen Port** (`MACVIBES_PREVIEW_GATEWAY_PORT`,
+  Default 4173) alle Previews. Die iframe-URL ist `http://<host>:4173/p/<projectId>/`;
+  das Gateway routet per **Referer** (parallelfest), sonst **Cookie**, zur
+  richtigen VM (HTTP + HMR-WebSocket). Die Preview behält ihre eigene Origin →
+  keine kaputten absoluten Asset-Pfade, kein Template-Eingriff. Für Remote muss
+  nur dieser eine Port geforwardet werden.
+
+  **Agent-Transport (Daemon in der VM):** Der Agent-Daemon (`agent/daemon/`,
+  gebündelt und ro in die VM gemountet) hält **eine langlebige Agent-SDK-
+  `query()`** im Streaming-Input-Modus (Konversationszustand lebt im Prozess,
+  kein `--resume` pro Turn). Er **wählt sich ausgehend** über
+  `host.microsandbox.internal` ins Host-`AgentGateway` (WebSocket, Token-Auth
+  wie der Credential-Proxy) — kein Port-Forwarding in die VM. Turn-Kommandos
+  gehen über die stehende Verbindung; Abbruch ist ein sauberer SDK-`interrupt()`
+  (kein Prozess-Kill, Session bleibt intakt). Ein `turn-started`-ACK +
+  Ping/Pong-Heartbeat härten gegen msb-NAT (verschluckt FIN/RST).
+  - `agent/` — `AgentRunner`-Interface: `DaemonAgentRunner` (VM-Daemon über das
+    WS-Gateway, der Produktivpfad), `ClaudeAgentRunner` (Host, Dev ohne msb),
+    `FakeAgentRunner` (Tests). `agent/daemon/` ist der In-VM-Daemon,
+    `agentGateway` die Host-Gegenstelle, `claudeStreamJson`
+    (`agentEventsFromMessage`) mappt SDK-Messages auf `AgentEvent`s.
   - `services/` — `chatService` (Turn-Queue, Streaming, Historie, Steering),
     `projectsService`, `gitService` (Orphan-Branch pro Projekt im Bare-Repo),
     `workspaceService`, `authService`, `autoCommitService`, `mirrorService`.
@@ -46,8 +73,10 @@ Bun-Workspaces-Monorepo:
 
 Datenfluss: Projekt anlegen → Orphan-Branch `<user>/<slug>` im lokalen
 Bare-Repo `~/macvibes/macvibes-apps.git` → beim Öffnen forkt die VM den
-Template-Baseline-Snapshot → Agent (Claude Code) arbeitet in der VM, API über
-den Host-Proxy → jeder Turn wird auto-committet → optional GitHub-Mirror.
+Template-Baseline-Snapshot (bootet unter tini+monit) → der Agent-Daemon in der
+VM wählt sich ins Host-Gateway ein → Agent (Claude Code via Agent SDK) arbeitet
+in der VM, API über den Host-Proxy → jeder Turn wird auto-committet → optional
+GitHub-Mirror.
 
 ## Konventionen (verbindlich)
 
@@ -79,10 +108,12 @@ bun run start              # Produktion: Web bauen + Server (liefert dist aus, L
 - `msb` muss installiert sein (`brew install superradcompany/tap/microsandbox`).
   Ohne `msb` fällt der Server automatisch auf den Prozess-Provider zurück
   (kein VM-Isolat — nur Dev). Erzwingen: `MACVIBES_SANDBOX=microsandbox|process`.
-- **Baselines nach jeder Template-Änderung neu bauen** (`bun run baselines`):
-  installiert `bun install` + Claude Code global in einer Builder-VM und friert
-  sie als `macvibes-tpl-<dir>`-Snapshot ein. Neue Projekte forken diesen
-  Snapshot (Preview in ~2 s statt Install zur Laufzeit).
+- **Baselines sind Pflicht** und nach jeder Template-Änderung neu bauen
+  (`bun run baselines`): eine Builder-VM installiert `bun install`, das
+  **Agent SDK** (`/opt/macvibes`) und **tini + monit** (In-VM-Supervisor) und
+  friert das als `macvibes-tpl-<dir>`-Snapshot ein. Neue Projekte forken diesen
+  Snapshot (Preview in ~2 s statt Install zur Laufzeit) — **ohne Baseline
+  bootet keine Projekt-VM** (der Provider meldet das als klaren Fehler).
 - VM-Netz: nur `allow@public` (bun/npm) + `allow@172.16.0.0/12` (Host-Gateway
   `host.microsandbox.internal` für den Credential-Proxy).
 

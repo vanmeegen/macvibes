@@ -4,6 +4,8 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import SendIcon from '@mui/icons-material/Send';
 import StopIcon from '@mui/icons-material/Stop';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import Alert from '@mui/material/Alert';
 import AppBar from '@mui/material/AppBar';
 import Box from '@mui/material/Box';
@@ -166,12 +168,14 @@ export const ChatPage = observer(function ChatPage({
   }, [chatStore, projectId]);
 
   // Live-Preview: aus dem autoritativen Watchdog-Status des Backends abgeleitet
-  // (starting/ready/restarting/failed) — kein eigenes Polling mehr (R7).
-  const previewHostPort = project?.sandboxStatus === 'running' ? project.previewHostPort : null;
+  // (starting/ready/restarting/failed) — kein eigenes Polling mehr (R7). Die
+  // iframe-URL zeigt aufs Preview-Gateway (fester Port, /p/<projectId>/), nicht
+  // auf den dynamischen VM-Port — nur so ist die Preview über Remote/VPN erreichbar.
   const preview = derivePreviewView(
     project?.previewStatus ?? 'stopped',
     typeof window !== 'undefined' ? window.location.hostname : 'localhost',
-    previewHostPort ?? null,
+    project?.sandboxStatus === 'running' ? projectsStore.previewGatewayPort : null,
+    projectId,
   );
 
   // Immer ans Ende scrollen, wenn neue Events eintreffen.
@@ -209,7 +213,13 @@ export const ChatPage = observer(function ChatPage({
             />
           )}
           {project !== null && (
-            <Typography variant="body2" color="text.secondary">
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              // Auf schmalen Screens ausblenden, damit die Toggle-Icons rechts
+              // sichtbar bleiben (Toolbar-Überlauf, Phone).
+              sx={{ display: { xs: 'none', sm: 'block' } }}
+            >
               von {project.owner.username}
             </Typography>
           )}
@@ -226,6 +236,14 @@ export const ChatPage = observer(function ChatPage({
               <OpenInNewIcon />
             </IconButton>
           )}
+          <IconButton
+            onClick={chatStore.togglePreviewCollapsed}
+            aria-label={chatStore.previewCollapsed ? 'Preview anzeigen' : 'Preview ausblenden'}
+            sx={{ ml: 1 }}
+            data-testselector="chat-preview-toggle"
+          >
+            {chatStore.previewCollapsed ? <VisibilityIcon /> : <VisibilityOffIcon />}
+          </IconButton>
           <IconButton
             onClick={chatStore.toggleChatCollapsed}
             aria-label={chatStore.chatCollapsed ? 'Chat einblenden' : 'Chat ausblenden'}
@@ -248,7 +266,14 @@ export const ChatPage = observer(function ChatPage({
         </Alert>
       )}
 
-      <Stack direction="row" spacing={2} sx={{ flexGrow: 1, minHeight: 0, p: 2 }}>
+      {/* Schmal (Phone/gefaltet): vertikal stapeln — column-reverse legt die
+          Preview OBEN und den Chat UNTEN (Eingabe in Daumenreichweite). Breit:
+          nebeneinander (Chat links, Preview rechts). */}
+      <Stack
+        direction={{ xs: 'column-reverse', md: 'row' }}
+        spacing={2}
+        sx={{ flexGrow: 1, minHeight: 0, p: 2 }}
+      >
         <Paper
           variant="outlined"
           sx={{
@@ -256,6 +281,7 @@ export const ChatPage = observer(function ChatPage({
             display: chatStore.chatCollapsed ? 'none' : 'flex',
             flexDirection: 'column',
             minWidth: 0,
+            minHeight: 0,
           }}
           data-testselector="chat-column"
         >
@@ -355,11 +381,15 @@ export const ChatPage = observer(function ChatPage({
           variant="outlined"
           sx={{
             flex: 1,
-            display: { xs: 'none', md: 'flex' },
+            // Auf allen Größen sichtbar (früher xs:none → auf dem Phone nie zu
+            // sehen); nur der Preview-Toggle blendet sie aus.
+            display: chatStore.previewCollapsed ? 'none' : 'flex',
             flexDirection: 'column',
             minWidth: 0,
+            minHeight: 0,
             overflow: 'hidden',
           }}
+          data-testselector="preview-column"
         >
           {preview.showIframe && preview.url !== null ? (
             <Box

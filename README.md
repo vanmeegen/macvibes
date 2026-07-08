@@ -71,6 +71,11 @@ daneben, jeder Turn wird automatisch committet.
 Für den LAN-Betrieb (andere greifen über `http://<mac>.local:4000` zu):
 `bun run start` (baut das Web-UI und lässt es vom Server ausliefern).
 
+**Remote-/VPN-Zugriff (z. B. WireGuard):** Die Live-Preview läuft über ein
+Gateway auf einem festen Port (`MACVIBES_PREVIEW_GATEWAY_PORT`, Default **4173**).
+Damit die Preview von unterwegs sichtbar ist, muss neben der UI (5173 bzw. prod 4000) **einmalig auch Port 4173** im Router/WireGuard geforwardet werden — die
+dynamischen VM-Ports müssen dann nicht mehr freigegeben werden.
+
 ## Requirements
 
 Die detaillierten Anforderungen mit Akzeptanzkriterien stehen in

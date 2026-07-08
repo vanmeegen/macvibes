@@ -2,7 +2,7 @@
 export type PreviewStatus = 'starting' | 'ready' | 'restarting' | 'failed' | 'stopped';
 
 export interface PreviewView {
-  /** iframe anzeigen? Nur wenn der Dev-Server läuft und ein Port da ist. */
+  /** iframe anzeigen? Nur wenn der Dev-Server läuft und der Gateway-Port da ist. */
   showIframe: boolean;
   url: string | null;
   /** Fortschrittsbalken im Overlay (Start-/Neustartphase). */
@@ -13,16 +13,24 @@ export interface PreviewView {
 
 /**
  * Reine Ableitung der Preview-Darstellung aus dem autoritativen Backend-Status
- * (R7). Kein eigenes Polling mehr — der host-seitige Watchdog ist die Wahrheit;
- * das UI zeigt „Startet…"/„Wird neu gestartet…"/Fehler entsprechend an.
+ * (R7). Die iframe-URL zeigt auf das **Preview-Gateway** (fester Port) mit
+ * `/p/<projectId>/`, NICHT auf den dynamischen VM-Port — nur so ist die Preview
+ * über Remote/VPN erreichbar (nur der Gateway-Port wird geforwardet). Das
+ * Gateway routet über Referer/Cookie zur richtigen VM.
  */
 export function derivePreviewView(
   status: PreviewStatus | string,
   host: string,
-  hostPort: number | null,
+  gatewayPort: number | null,
+  projectId: string | null,
 ): PreviewView {
-  if (status === 'ready' && hostPort !== null) {
-    return { showIframe: true, url: `http://${host}:${hostPort}/`, spinner: false, message: '' };
+  if (status === 'ready' && gatewayPort !== null && projectId !== null) {
+    return {
+      showIframe: true,
+      url: `http://${host}:${gatewayPort}/p/${encodeURIComponent(projectId)}/`,
+      spinner: false,
+      message: '',
+    };
   }
   switch (status) {
     case 'starting':

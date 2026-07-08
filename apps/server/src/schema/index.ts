@@ -135,6 +135,12 @@ builder.queryType({
       type: [TemplateRef],
       resolve: (_root, _args, ctx) => loadTemplates(ctx.config.templatesDir),
     }),
+    // Fester Port des Preview-Gateways — das Frontend baut daraus die iframe-URL
+    // (`http://<host>:<port>/p/<projectId>/`) statt den dynamischen VM-Port zu
+    // nutzen (Remote-/VPN-Erreichbarkeit).
+    previewGatewayPort: t.int({
+      resolve: (_root, _args, ctx) => ctx.config.sandbox.previewGatewayPort,
+    }),
     users: t.field({
       type: [UserRef],
       resolve: (_root, _args, ctx) => {

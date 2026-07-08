@@ -10,10 +10,15 @@ import { gqlRequest } from '../../api/graphqlClient';
 
 const gqlRequestMock = vi.mocked(gqlRequest);
 
-function message(id: string, role: ChatMessage['role'], content: string): ChatMessage {
+function message(
+  id: string,
+  role: ChatMessage['role'],
+  content: string,
+  projectId = 'p1',
+): ChatMessage {
   return {
     id,
-    projectId: 'p1',
+    projectId,
     turnId: 't1',
     role,
     content,
@@ -21,14 +26,38 @@ function message(id: string, role: ChatMessage['role'], content: string): ChatMe
   };
 }
 
+/** Kontrollierbarer EventSource-Ersatz — zeichnet Instanzen und close() auf. */
+class FakeEventSource {
+  static instances: FakeEventSource[] = [];
+  closed = false;
+  onerror: ((err: unknown) => void) | null = null;
+
+  constructor(public readonly url: string) {
+    FakeEventSource.instances.push(this);
+  }
+
+  addEventListener(): void {}
+
+  close(): void {
+    this.closed = true;
+  }
+
+  static open(): FakeEventSource[] {
+    return FakeEventSource.instances.filter((es) => !es.closed);
+  }
+}
+
 describe('ChatStore', () => {
   beforeEach(() => {
     gqlRequestMock.mockReset();
+    FakeEventSource.instances = [];
+    vi.stubGlobal('EventSource', FakeEventSource);
   });
 
   describe('applyEvent', () => {
     it('hängt neue Nachrichten an und übernimmt turnActive', () => {
       const store = new ChatStore();
+      store.projectId = 'p1';
       store.applyEvent({ message: message('m1', 'user', 'Hallo'), turnActive: true });
       expect(store.messages).toHaveLength(1);
       expect(store.turnActive).toBe(true);
@@ -36,11 +65,102 @@ describe('ChatStore', () => {
 
     it('ersetzt bestehende Nachrichten anhand der ID (Streaming-Deltas)', () => {
       const store = new ChatStore();
+      store.projectId = 'p1';
       store.applyEvent({ message: message('m1', 'assistant', 'Ec'), turnActive: true });
       store.applyEvent({ message: message('m1', 'assistant', 'Echo: Hallo'), turnActive: false });
       expect(store.messages).toHaveLength(1);
       expect(store.messages[0]?.content).toBe('Echo: Hallo');
       expect(store.turnActive).toBe(false);
+    });
+
+    it('ignoriert Events fremder Projekte (Projekt-Trennung)', () => {
+      const store = new ChatStore();
+      store.projectId = 'p1';
+      store.applyEvent({
+        message: message('fremd-1', 'assistant', 'anderes Projekt', 'p2'),
+        turnActive: true,
+      });
+      expect(store.messages).toHaveLength(0);
+      expect(store.turnActive).toBe(false);
+    });
+  });
+
+  describe('connect — saubere Projekt-Trennung (Race beim Projektwechsel)', () => {
+    it('eine verspätete History-Antwort eines alten connect() überschreibt das neue Projekt nicht', async () => {
+      // Projekt A: History-Query hängt (Server langsam).
+      let resolveA: (v: unknown) => void = () => {};
+      gqlRequestMock.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveA = resolve;
+          }),
+      );
+      const store = new ChatStore();
+      const connectA = store.connect('projekt-a');
+
+      // Nutzer wechselt zu Projekt B — dessen History kommt sofort.
+      gqlRequestMock.mockResolvedValueOnce({
+        chatMessages: [message('b-1', 'assistant', 'Hallo aus B', 'projekt-b')],
+        turnActive: false,
+      });
+      await store.connect('projekt-b');
+
+      // Jetzt trudelt As Antwort ein — sie darf B nicht überschreiben.
+      resolveA({
+        chatMessages: [message('a-1', 'assistant', 'Hallo aus A', 'projekt-a')],
+        turnActive: true,
+      });
+      await connectA;
+
+      expect(store.projectId).toBe('projekt-b');
+      expect(store.messages.map((m) => m.id)).toEqual(['b-1']);
+      expect(store.turnActive).toBe(false);
+    });
+
+    it('ein veralteter connect() hinterlässt keine offene EventSource (SSE-Leak)', async () => {
+      let resolveA: (v: unknown) => void = () => {};
+      gqlRequestMock.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveA = resolve;
+          }),
+      );
+      const store = new ChatStore();
+      const connectA = store.connect('projekt-a');
+
+      gqlRequestMock.mockResolvedValueOnce({ chatMessages: [], turnActive: false });
+      await store.connect('projekt-b');
+
+      resolveA({ chatMessages: [], turnActive: false });
+      await connectA;
+
+      // Genau EINE offene Verbindung — die von Projekt B.
+      const open = FakeEventSource.open();
+      expect(open).toHaveLength(1);
+      expect(open[0]?.url).toContain('projekt-b');
+    });
+
+    it('disconnect() entwertet einen laufenden connect() (StrictMode-Doppelmount)', async () => {
+      let resolveA: (v: unknown) => void = () => {};
+      gqlRequestMock.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveA = resolve;
+          }),
+      );
+      const store = new ChatStore();
+      const connectA = store.connect('projekt-a');
+      store.disconnect();
+
+      resolveA({
+        chatMessages: [message('a-1', 'assistant', 'Hallo aus A', 'projekt-a')],
+        turnActive: true,
+      });
+      await connectA;
+
+      expect(store.messages).toHaveLength(0);
+      expect(store.turnActive).toBe(false);
+      expect(FakeEventSource.open()).toHaveLength(0);
     });
   });
 
@@ -198,7 +318,30 @@ describe('Chat ausblendbar (Preview im Vollbild)', () => {
     expect(store.chatCollapsed).toBe(false);
   });
 
-  it('connect() eines Projekts blendet den Chat wieder ein (kein versteckter Chat beim Projektwechsel)', async () => {
+  it('previewCollapsed startet sichtbar und lässt sich togglen (Preview ein/ausblenden)', () => {
+    const store = new ChatStore();
+    expect(store.previewCollapsed).toBe(false);
+    store.togglePreviewCollapsed();
+    expect(store.previewCollapsed).toBe(true);
+    store.togglePreviewCollapsed();
+    expect(store.previewCollapsed).toBe(false);
+  });
+
+  it('Chat und Preview sind wechselseitig exklusiv — nie beide ausgeblendet (leerer Screen)', () => {
+    const store = new ChatStore();
+    store.toggleChatCollapsed();
+    expect(store.chatCollapsed).toBe(true);
+    // Preview ausblenden hebt das Chat-Ausblenden auf.
+    store.togglePreviewCollapsed();
+    expect(store.previewCollapsed).toBe(true);
+    expect(store.chatCollapsed).toBe(false);
+    // Und umgekehrt.
+    store.toggleChatCollapsed();
+    expect(store.chatCollapsed).toBe(true);
+    expect(store.previewCollapsed).toBe(false);
+  });
+
+  it('connect() eines Projekts blendet Chat UND Preview wieder ein (kein versteckter Chat/Preview beim Projektwechsel)', async () => {
     const store = new ChatStore();
     store.toggleChatCollapsed();
     expect(store.chatCollapsed).toBe(true);
@@ -215,5 +358,6 @@ describe('Chat ausblendbar (Preview im Vollbild)', () => {
     await store.connect('p1');
     vi.unstubAllGlobals();
     expect(store.chatCollapsed).toBe(false);
+    expect(store.previewCollapsed).toBe(false);
   });
 });

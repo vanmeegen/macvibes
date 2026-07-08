@@ -5,7 +5,107 @@
 > Datei das **Zukunfts- und Entscheidungsdokument**: welche Architektur-Fragen
 > müssen wir bewusst entscheiden, bevor wir weiter Pflaster stapeln.
 >
-> Status: Diskussionsgrundlage, noch **keine** Entscheidungen getroffen.
+> Status: **Entschieden am 2026-07-06 (Session mit Marco), Spike implementiert**
+> — siehe „Entscheidungen + Spike-Stand" direkt hier drunter. Der Rest der
+> Datei ist die ursprüngliche Diskussionsgrundlage.
+
+---
+
+## Entscheidungen + Spike-Stand (2026-07-06)
+
+**Entschieden:**
+
+1. **A+C kombiniert**: persistenter **Agent-Daemon in der VM** (Bun), der das
+   **Agent SDK im Streaming-Input-Modus** nutzt — EINE langlebige `query()`
+   über alle Turns, `interrupt()` statt Kill (behebt #13 ursächlich), kein
+   `--resume` pro Turn. Transport: der Daemon wählt sich **ausgehend** per
+   WebSocket beim Host-Gateway ein (`/agent`, gleicher Weg wie der
+   Credential-Proxy). msb nur noch für VM-Lifecycle.
+   Verifizierte SDK-Fakten dazu: das SDK spawnt die CLI als Subprozess (Tools
+   laufen, wo das SDK läuft → „C pur" auf dem Host würde die Isolation
+   brechen); `interrupt()`/`setModel()` nur im Streaming-Modus; Sessions
+   weiter auf Platte (`CLAUDE_CONFIG_DIR` bleibt), `resume`/`forkSession`
+   als Recovery-Hebel.
+2. **Vorgehen: Spike hinter Flag, dann Rückbau.** Der Härtetest (Browser,
+   mehrere Projekte, Interrupts) ist grün → der Daemon ist seit 2026-07-07 der
+   **einzige** VM-Transport; das Flag `MACVIBES_AGENT_TRANSPORT` und der
+   exec-Pfad (vmRunner/msbExecSpawner) sind **entfernt** (Phase 2, s. u.).
+3. **Supervision: Fertiges statt Eigenbau** (Marcos Leitplanke): PID 1 der VM
+   ist ein echter Supervisor statt `sleep infinity`; der host-seitige
+   PreviewSupervisor-Watchdog entfällt in diesem Pfad (Host LIEST nur noch
+   Status). Kein Python im Image → **entschieden für tini + monit**
+   (2026-07-07): monit hat den echten msb-Härtetest bestanden (Restart,
+   Crash-Loop→Endzustand, Status-HTTP-API) und kommt als Debian-Paket;
+   der Duell-Kandidat horust wurde verworfen — sein aarch64-Release-Asset
+   (`-gnu` statt `-musl`) wurde vom Baseline-Install nie getroffen, d. h. er
+   lief bei uns nachweislich nie, ist prä-1.0/Nische und hat keine
+   Status-API (previewStatus verlöre den failed-Zustand). Der horust-Pfad
+   ist vollständig entfernt.
+
+**Implementiert (Branch `architektur`):**
+
+- `apps/server/src/agent/daemon/` — Protokoll, `DaemonSession` (SDK-Streaming,
+  Interrupt-Semantik, Modellwechsel-Guard), `main.ts` (WS-Client, Reconnect)
+- `apps/server/src/agent/agentGateway.ts` + `daemonRunner.ts` — Host-Seite;
+  `chatService` unverändert (der `AgentRunner`-Seam trägt)
+- `apps/server/src/sandbox/vmServices.ts` — monit-Konfiguration (monitrc +
+  Run-Wrapper); `monitStatus.ts` + `previewStatusPoller.ts` für
+  `previewStatus` (nur lesen); `microsandboxProvider.start` bootet die VM unter
+  tini+monit
+- Baseline backt Agent SDK (`/opt/macvibes`) + tini/monit ein —
+  `bun run baselines` nach dem Umstellen nötig
+- Integrationstest gegen echtes msb (gated):
+  `MACVIBES_TEST_MSB=1 bun test daemonTransport.msb` — Daemon-Connect,
+  monit-Restart-Heilung, mit Credentials auch Turn/Interrupt/Kontext
+
+**Spike-Befunde aus dem echten msb-Lauf (2026-07-06, alle behoben — der
+Integrationstest ist grün inkl. Turn/Interrupt/Kontext):**
+
+- **msb-NAT lässt Verbindungen halbtot zurück**: FIN/RST der VM-Seite kommen
+  nicht immer am Host an — der Gateway-Socket bleibt scheinbar offen, Sends
+  verschwinden spurlos. Gegenmittel: `turn-started`-**Quittung** pro Turn
+  (bleibt sie 5s aus → Abbruch + Verbindung verwerfen; der chatService-Retry
+  trifft die frische Verbindung) plus **Heartbeat** (ping/pong alle 15s hält
+  den NAT-Flow in beide Richtungen warm).
+- **tini braucht `-s` (Subreaper)**: In der msb-VM ist unser PID-1-Kommando
+  nicht das echte Init — ohne `-s` bleiben tote Services **Zombies** und monit
+  startet nie neu („process is a zombie" im 2s-Takt).
+- **msb-exec-Sessions haben eigene PID-Namespaces**: Sie können den PID-1-Baum
+  nicht killen (Pidfile-PIDs laufen ins Leere). Daher `shutdown`-Kommando im
+  Protokoll — nur der Daemon selbst kann sich zuverlässig beenden.
+- **monit färbt seine Status-API mit ANSI-Codes** — der Parser strippt sie.
+- **Baseline-Builder brauchte `waitForExecReady`** + kurze exec-Schritte statt
+  eines Mega-Befehls (sonst „exec session ended without exit event").
+
+**Härtetest-Befunde (2026-07-07, im Browser über mehrere Projekte, behoben):**
+
+- **Projekt-Trennung im Frontend war undicht**: `ChatStore.connect()` awaitete
+  die Historie, bevor die SSE-Subscription entstand — die verspätete Antwort
+  eines alten Projekts überschrieb das neue, und pro Projektwechsel/StrictMode-
+  Doppelmount leakte eine EventSource. Ab ~6 offenen SSE-Streams blockiert der
+  Browser alle weiteren Requests an den Origin (Chat leer, Status-Polling tot).
+  Gegenmittel: `connectEpoch` entwertet veraltete connects, `applyEvent`
+  verwirft Fremd-`projectId`s, `disconnect()` bricht laufende connects ab.
+- **Preview meldete zu früh `ready`**: monit sieht nur den Prozess, Vite/bun
+  antworten HTTP erst Sekunden später → das iframe lud ins Leere. Gate:
+  `ready` erst mit echter HTTP-Probe auf den Preview-Port (`gateReadyWithProbe`).
+
+**Phase 2 — erledigt (2026-07-07, Daemon ist der einzige VM-Pfad):**
+
+- Entfernt: `vmRunner.ts`, `msbExecSpawner.ts` (+`KILL_ORPHANS`), der 1,5s-
+  Stagger, das Flag `MACVIBES_AGENT_TRANSPORT`, `msbExec`, der CLI-Zeilenparser
+  (`parseStreamJsonLine`), der globale claude-CLI-Install im Baseline.
+- `microsandboxProvider` vereinheitlicht: PID 1 = tini+monit, Preview-Status
+  wird nur gelesen; Baseline (SDK + tini/monit + node_modules) ist Pflicht.
+- `chatService`-Timeouts + Auto-Retry **bewusst behalten**: ACK-Watchdog und
+  der Turn-1-Retry haben sich im Härtetest gegen die msb-NAT-Halbtot-
+  Verbindung bewährt (nicht entschärfen).
+
+**Offen (optional, später):**
+
+- Host-seitig `launchd`-Plist für den Produktionsbetrieb (`bun run start`).
+- monit-Basic-Auth, falls die Status-API je über `127.0.0.1` hinaus exponiert
+  wird (aktuell nur host-lokal gemappt).
 
 ---
 

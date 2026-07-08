@@ -9,6 +9,7 @@ export const PROJECT_FILTER_STORAGE_KEY = 'macvibes.projectFilter';
 
 const PROJECTS_AND_TEMPLATES_QUERY = /* GraphQL */ `
   query ProjectsAndTemplates {
+    previewGatewayPort
     projects {
       id
       name
@@ -125,6 +126,8 @@ export function sandboxStatusLabel(status: string): string {
 export class ProjectsStore {
   projects: Project[] = [];
   templates: Template[] = [];
+  /** Fester Port des Preview-Gateways — Basis der iframe-URL (Remote/VPN). */
+  previewGatewayPort: number | null = null;
   filter: ProjectFilter = readFilterFromStorage();
   error: string | null = null;
   loading = false;
@@ -187,12 +190,15 @@ export class ProjectsStore {
     this.loading = true;
     this.error = null;
     try {
-      const data = await gqlRequest<{ projects: Project[]; templates: Template[] }>(
-        PROJECTS_AND_TEMPLATES_QUERY,
-      );
+      const data = await gqlRequest<{
+        projects: Project[];
+        templates: Template[];
+        previewGatewayPort: number;
+      }>(PROJECTS_AND_TEMPLATES_QUERY);
       runInAction(() => {
         this.projects = data.projects;
         this.templates = data.templates;
+        this.previewGatewayPort = data.previewGatewayPort;
       });
     } catch (err) {
       console.error('ProjectsStore.load fehlgeschlagen', err);
@@ -209,12 +215,15 @@ export class ProjectsStore {
   /** Stilles Nachladen fürs Status-Polling — ohne Lade-Spinner, Fehler nur geloggt. */
   async refresh(): Promise<void> {
     try {
-      const data = await gqlRequest<{ projects: Project[]; templates: Template[] }>(
-        PROJECTS_AND_TEMPLATES_QUERY,
-      );
+      const data = await gqlRequest<{
+        projects: Project[];
+        templates: Template[];
+        previewGatewayPort: number;
+      }>(PROJECTS_AND_TEMPLATES_QUERY);
       runInAction(() => {
         this.projects = data.projects;
         this.templates = data.templates;
+        this.previewGatewayPort = data.previewGatewayPort;
       });
     } catch (err) {
       console.error('ProjectsStore.refresh fehlgeschlagen', err);

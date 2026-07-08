@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { MicrosandboxError } from '../msb';
-import { waitForExecReady } from '../microsandboxProvider';
+import { MicrosandboxError, waitForExecReady } from '../msb';
 
 describe('waitForExecReady (no-agent-endpoint-Race)', () => {
   test('kehrt sofort zurück, wenn die VM direkt exec-bereit ist', async () => {

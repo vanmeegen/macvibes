@@ -5,14 +5,17 @@ import { createDb } from './db/client';
 import { runMigrations } from './db/migrate';
 import { createAnthropicProxy } from './http/anthropicProxy';
 import { startEgressProxy } from './http/egressProxy';
+import { startPreviewGateway } from './http/previewGateway';
 import { readSessionToken } from './http/cookies';
 import { serveWebUi } from './http/staticFiles';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { AGENT_GATEWAY_PATH, AgentGateway } from './agent/agentGateway';
+import { AGENT_MODEL } from './agent/agentModel';
 import { ClaudeAgentRunner } from './agent/claudeRunner';
+import { buildDaemonBundle } from './agent/daemonBundle';
+import { DaemonAgentRunner } from './agent/daemonRunner';
 import { FakeAgentRunner } from './agent/fakeRunner';
-import { msbExecSpawner } from './agent/msbExecSpawner';
-import { VmAgentRunner } from './agent/vmRunner';
 import { buildVmAgentEnv } from './agent/vmAgentEnv';
 import {
   MicrosandboxSandboxProvider,
@@ -63,6 +66,16 @@ let chatServiceRef: ChatService | null = null;
 const useMicrosandbox =
   config.sandbox.backend === 'microsandbox' ||
   (config.sandbox.backend === 'auto' && (await msbAvailable()));
+
+// Agent-Transport in die VM: persistenter SDK-Daemon (architektur.md, A+C).
+// Gateway für die eingehenden Daemon-Verbindungen + gebündelter Daemon,
+// den der Provider read-only in jede VM mountet.
+const agentGateway = new AgentGateway({ token: proxyToken });
+const daemonBundleDir = join(config.macvibesHome, 'agent-daemon');
+if (useMicrosandbox) {
+  await buildDaemonBundle(daemonBundleDir);
+}
+
 const sandboxProvider = useMicrosandbox
   ? new MicrosandboxSandboxProvider({
       macvibesHome: config.macvibesHome,
@@ -70,6 +83,16 @@ const sandboxProvider = useMicrosandbox
       image: config.sandbox.image,
       cpus: config.sandbox.cpus,
       memoryMib: config.sandbox.memoryMib,
+      agentDaemon: {
+        bundleDir: daemonBundleDir,
+        envFor: (sandboxName: string) => ({
+          ...buildVmAgentEnv({ serverPort: config.port, proxyToken, egressPort }),
+          MACVIBES_AGENT_GATEWAY_URL:
+            `ws://host.microsandbox.internal:${config.port}${AGENT_GATEWAY_PATH}` +
+            `?sandbox=${encodeURIComponent(sandboxName)}&token=${encodeURIComponent(proxyToken)}`,
+          MACVIBES_AGENT_CWD: '/work',
+        }),
+      },
     })
   : new ProcessSandboxProvider({
       macvibesHome: config.macvibesHome,
@@ -104,19 +127,30 @@ const sandboxManager = new SandboxManager({
   },
 });
 
+// Preview-Gateway: EIN fester Port, der jede Preview auf ihren dynamischen
+// VM-Port reverse-proxied — nur dieser Port muss für Remote-/VPN-Zugriff
+// geforwardet werden (die zufälligen hohen VM-Ports kommen nicht durch).
+const previewGateway = startPreviewGateway({
+  port: config.sandbox.previewGatewayPort,
+  hostname: config.hostname,
+  previewPortFor: (projectId) => sandboxManager.previewHostPort(projectId),
+});
+console.log(`Preview-Gateway auf http://${config.hostname}:${previewGateway.port}`);
+
 function selectAgentRunner() {
   if (config.agent.backend === 'fake') {
     console.log('Agent-Backend: fake (MACVIBES_AGENT=fake)');
     return new FakeAgentRunner(config.agent.fakeDelayMs);
   }
   if (useMicrosandbox) {
-    // Agent läuft in der VM (B5c); Credentials nur über den Host-Proxy.
-    console.log('Agent-Backend: claude in VM (msb exec, Credential-Proxy)');
-    return new VmAgentRunner({
+    // Persistenter SDK-Daemon in der VM, Kommandos über das WS-Gateway —
+    // kein msb exec im Agent-Pfad (architektur.md, chatproblems.md).
+    console.log('Agent-Backend: claude-Daemon in VM (WS-Gateway, Supervisor: tini+monit)');
+    return new DaemonAgentRunner({
+      gateway: agentGateway,
       sandboxNameFor: microsandboxSandboxName,
-      agentEnv: () => buildVmAgentEnv({ serverPort: config.port, proxyToken, egressPort }),
-      spawn: msbExecSpawner,
-      guestWorkdir: '/work',
+      model: AGENT_MODEL,
+      connectTimeoutMs: 60_000,
     });
   }
   console.log('Agent-Backend: claude als Host-Prozess (kein VM-Isolat!)');
@@ -176,8 +210,13 @@ const server = Bun.serve({
   // Thinking) >10s bis zum ersten Byte braucht → der Agent hängt, und (b) die
   // SSE-Chat-Subscription. Maximum (255s) deckt beides großzügig ab.
   idleTimeout: 255,
-  fetch: async (request) => {
+  // Agent-Gateway: die Daemons in den VMs halten hierüber ihre WS-Verbindung.
+  websocket: agentGateway.websocket,
+  fetch: async (request, server) => {
     const url = new URL(request.url);
+    if (url.pathname === AGENT_GATEWAY_PATH) {
+      return agentGateway.handleUpgrade(request, server);
+    }
     if (url.pathname === '/graphql') {
       return yoga.fetch(request);
     }
@@ -217,6 +256,7 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   console.log(`${signal} empfangen — stoppe alle Sandboxes…`);
   mirror.stop();
+  previewGateway.stop();
   try {
     await sandboxManager.stopAll();
   } catch (error) {

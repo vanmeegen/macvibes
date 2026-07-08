@@ -36,12 +36,18 @@ export async function createTemplatesFixture(templateDir = 'pwa'): Promise<strin
   await writeFile(join(dir, templateDir, 'package.json'), JSON.stringify({ name: 'app' }));
   // Mini-Dev-Server für Preview-Tests: respektiert die PORT-Env (Template-Kontrakt).
   // Zählt bei jedem Start eine Zeile in .starts hoch — so lässt sich ein echter
-  // Watchdog-Neustart (neue Instanz) vom bloßen Weiterlaufen unterscheiden.
+  // Supervisor-Neustart (neue Instanz) vom bloßen Weiterlaufen unterscheiden.
+  // /crash lässt den Server sich selbst beenden: msb-exec-Sessions können den
+  // PID-1-Baum der VM nicht killen (eigene PID-Namespaces), ein Crash-Test muss
+  // deshalb von INNEN ausgelöst werden.
   await writeFile(
     join(dir, templateDir, 'server.ts'),
     "import { appendFileSync } from 'node:fs';\n" +
       "appendFileSync('.starts', 'x\\n');\n" +
-      "Bun.serve({ port: Number(process.env.PORT ?? 5199), fetch: () => new Response('hallo-preview') });\n",
+      'Bun.serve({ port: Number(process.env.PORT ?? 5199), fetch: (req) => {\n' +
+      "  if (new URL(req.url).pathname === '/crash') { setTimeout(() => process.exit(1), 20); return new Response('crash'); }\n" +
+      "  return new Response('hallo-preview');\n" +
+      '} });\n',
   );
   await writeFile(
     join(dir, 'templates.json'),

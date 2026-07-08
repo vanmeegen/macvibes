@@ -183,7 +183,8 @@ describe('Watchdog: stiller Hänger wird als Fehler sichtbar', () => {
   });
 
   test('liefert der abgebrochene Prozess noch eine Fehlermeldung, hängt sie an', async () => {
-    // Nach dem Abort meldet der Runner (wie VmAgentRunner) noch einen stderr-Fehler.
+    // Nach dem Abort liefert der Runner noch einen späten Fehler nach (z. B. der
+    // Daemon-Runner beim ACK-Timeout/Reconnect) — der muss angehängt werden.
     const runner: AgentRunner = {
       startTurn(): TurnHandle {
         let release: (() => void) | null = null;
@@ -377,14 +378,15 @@ describe('Retry ohne Session-Resume: hängender/korrupter Resume heilt sich selb
   });
 });
 
-describe('Auto-Retry: stummer Agent-Start wird einmal neu versucht (msb-Flakiness)', () => {
+describe('Auto-Retry: stummer Agent-Start wird einmal neu versucht (Transport-Flakiness)', () => {
   test('Versuch 1 stirbt ohne Events, Versuch 2 liefert — Turn wird trotzdem fertig', async () => {
     let calls = 0;
     const flakyRunner: AgentRunner = {
       startTurn(): TurnHandle {
         calls += 1;
         if (calls === 1) {
-          // msb-Flake: Prozess stirbt sofort, ohne je ein Event zu liefern.
+          // Transport-Flake: der Turn stirbt sofort, ohne je ein Event zu liefern
+          // (z. B. veraltete Daemon-Verbindung → turn-aborted ohne Quittung).
           const events = (async function* (): AsyncGenerator<AgentEvent> {
             yield { type: 'turn-aborted' };
           })();
