@@ -36,6 +36,16 @@ unmonitor` ≙ `failed`). Der Host **liest** den Status nur: über die
   (`starting`/`ready`/`restarting`/`failed`/`stopped`) fließt über GraphQL
   (`Project.previewStatus`) ins UI-Overlay.
 
+  **Preview-Gateway (`http/previewGateway.ts`):** Jede Preview läuft auf einem
+  dynamisch allokierten hohen VM-Port — für Remote-/VPN-Zugriff nicht
+  erreichbar (der Tunnel reicht nur bekannte feste Ports durch). Deshalb
+  reverse-proxied ein **Gateway auf einem festen Port** (`MACVIBES_PREVIEW_GATEWAY_PORT`,
+  Default 4173) alle Previews. Die iframe-URL ist `http://<host>:4173/p/<projectId>/`;
+  das Gateway routet per **Referer** (parallelfest), sonst **Cookie**, zur
+  richtigen VM (HTTP + HMR-WebSocket). Die Preview behält ihre eigene Origin →
+  keine kaputten absoluten Asset-Pfade, kein Template-Eingriff. Für Remote muss
+  nur dieser eine Port geforwardet werden.
+
   **Agent-Transport (Daemon in der VM):** Der Agent-Daemon (`agent/daemon/`,
   gebündelt und ro in die VM gemountet) hält **eine langlebige Agent-SDK-
   `query()`** im Streaming-Input-Modus (Konversationszustand lebt im Prozess,

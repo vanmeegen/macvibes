@@ -5,6 +5,7 @@ import { createDb } from './db/client';
 import { runMigrations } from './db/migrate';
 import { createAnthropicProxy } from './http/anthropicProxy';
 import { startEgressProxy } from './http/egressProxy';
+import { startPreviewGateway } from './http/previewGateway';
 import { readSessionToken } from './http/cookies';
 import { serveWebUi } from './http/staticFiles';
 import { existsSync } from 'node:fs';
@@ -126,6 +127,16 @@ const sandboxManager = new SandboxManager({
   },
 });
 
+// Preview-Gateway: EIN fester Port, der jede Preview auf ihren dynamischen
+// VM-Port reverse-proxied — nur dieser Port muss für Remote-/VPN-Zugriff
+// geforwardet werden (die zufälligen hohen VM-Ports kommen nicht durch).
+const previewGateway = startPreviewGateway({
+  port: config.sandbox.previewGatewayPort,
+  hostname: config.hostname,
+  previewPortFor: (projectId) => sandboxManager.previewHostPort(projectId),
+});
+console.log(`Preview-Gateway auf http://${config.hostname}:${previewGateway.port}`);
+
 function selectAgentRunner() {
   if (config.agent.backend === 'fake') {
     console.log('Agent-Backend: fake (MACVIBES_AGENT=fake)');
@@ -245,6 +256,7 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   console.log(`${signal} empfangen — stoppe alle Sandboxes…`);
   mirror.stop();
+  previewGateway.stop();
   try {
     await sandboxManager.stopAll();
   } catch (error) {

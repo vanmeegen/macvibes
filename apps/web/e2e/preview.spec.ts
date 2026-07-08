@@ -17,12 +17,14 @@ test('Preview: Dev-Server der Sandbox wird im iframe erreichbar', async ({ page,
   const iframe = page.getByTestId('chat-preview');
   await expect(iframe).toBeVisible({ timeout: 120_000 });
 
+  // Neu: die iframe-URL zeigt aufs Preview-Gateway (fester Port) mit /p/<id>/,
+  // nicht mehr direkt auf den dynamischen VM-Port.
   const src = await iframe.getAttribute('src');
-  expect(src).toMatch(/^http:\/\/localhost:\d+\/$/);
+  expect(src).toMatch(/^http:\/\/localhost:\d+\/p\/[^/]+\/$/);
 
-  // Der Dev-Server antwortet wirklich (Template-agnostisch: nur Status zählt).
-  // 127.0.0.1 statt localhost: der Dev-Server bindet IPv4, node-fetch würde
-  // localhost sonst zu ::1 auflösen.
+  // Der Dev-Server antwortet wirklich — über das Gateway durchgereicht
+  // (Template-agnostisch: nur Status zählt). 127.0.0.1 statt localhost: der
+  // Dev-Server bindet IPv4, node-fetch würde localhost sonst zu ::1 auflösen.
   const response = await request.get((src ?? '').replace('localhost', '127.0.0.1'));
   expect(response.ok()).toBeTruthy();
 });

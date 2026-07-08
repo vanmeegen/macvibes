@@ -168,12 +168,14 @@ export const ChatPage = observer(function ChatPage({
   }, [chatStore, projectId]);
 
   // Live-Preview: aus dem autoritativen Watchdog-Status des Backends abgeleitet
-  // (starting/ready/restarting/failed) — kein eigenes Polling mehr (R7).
-  const previewHostPort = project?.sandboxStatus === 'running' ? project.previewHostPort : null;
+  // (starting/ready/restarting/failed) — kein eigenes Polling mehr (R7). Die
+  // iframe-URL zeigt aufs Preview-Gateway (fester Port, /p/<projectId>/), nicht
+  // auf den dynamischen VM-Port — nur so ist die Preview über Remote/VPN erreichbar.
   const preview = derivePreviewView(
     project?.previewStatus ?? 'stopped',
     typeof window !== 'undefined' ? window.location.hostname : 'localhost',
-    previewHostPort ?? null,
+    project?.sandboxStatus === 'running' ? projectsStore.previewGatewayPort : null,
+    projectId,
   );
 
   // Immer ans Ende scrollen, wenn neue Events eintreffen.

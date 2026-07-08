@@ -35,6 +35,12 @@ export interface ServerConfig {
     image: string;
     cpus: number;
     memoryMib: number;
+    /**
+     * Fester Port des Preview-Gateways (R7, Remote-/VPN-Zugriff). Alle Previews
+     * werden über diesen einen Port reverse-proxied — der Nutzer forwardet nur
+     * ihn, statt der zufälligen hohen VM-Ports (Default 4173).
+     */
+    previewGatewayPort: number;
   };
   agent: {
     /** "claude" (Agent SDK) oder "fake" (deterministisch, für Tests/E2E). */
@@ -88,6 +94,7 @@ export function loadConfig(): ServerConfig {
       image: Bun.env.MACVIBES_SANDBOX_IMAGE ?? 'oven/bun',
       cpus: Number(Bun.env.MACVIBES_SANDBOX_CPUS ?? 4),
       memoryMib: Number(Bun.env.MACVIBES_SANDBOX_MEMORY_MIB ?? 4096),
+      previewGatewayPort: Number(Bun.env.MACVIBES_PREVIEW_GATEWAY_PORT ?? 4173),
     },
     agent: {
       backend: Bun.env.MACVIBES_AGENT === 'fake' ? 'fake' : 'claude',
