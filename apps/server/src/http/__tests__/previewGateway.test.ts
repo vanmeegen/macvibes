@@ -99,4 +99,32 @@ describe('startPreviewGateway (Integration mit Fake-Upstream)', () => {
     const res = await fetch(`http://127.0.0.1:${gw.port}/@vite/client`);
     expect(res.status).toBe(503);
   });
+
+  test('HMR-WebSocket wird bidirektional zum VM-Dev-Server gebrückt', async () => {
+    // Fake-Upstream mit WS-Echo (steht für den HMR-Endpunkt des Dev-Servers).
+    upstream = Bun.serve({
+      port: 0,
+      fetch: (req, srv) => (srv.upgrade(req) ? undefined : new Response('nope')),
+      websocket: { message: (ws, msg) => ws.send(`echo:${msg as string}`) },
+    });
+    const vmPort = upstream.port ?? null;
+    const gw = startPreviewGateway({ port: 0, previewPortFor: () => vmPort });
+    started.push(gw);
+
+    const client = new WebSocket(`ws://127.0.0.1:${gw.port}/p/proj-1/`);
+    const reply = await new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('WS-Timeout')), 5000);
+      client.addEventListener('open', () => client.send('ping'));
+      client.addEventListener('message', (e) => {
+        clearTimeout(timer);
+        resolve(String((e as MessageEvent).data));
+      });
+      client.addEventListener('error', () => {
+        clearTimeout(timer);
+        reject(new Error('WS-Fehler'));
+      });
+    });
+    client.close();
+    expect(reply).toBe('echo:ping');
+  });
 });
