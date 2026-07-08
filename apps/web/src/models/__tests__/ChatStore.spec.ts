@@ -318,7 +318,30 @@ describe('Chat ausblendbar (Preview im Vollbild)', () => {
     expect(store.chatCollapsed).toBe(false);
   });
 
-  it('connect() eines Projekts blendet den Chat wieder ein (kein versteckter Chat beim Projektwechsel)', async () => {
+  it('previewCollapsed startet sichtbar und lässt sich togglen (Preview ein/ausblenden)', () => {
+    const store = new ChatStore();
+    expect(store.previewCollapsed).toBe(false);
+    store.togglePreviewCollapsed();
+    expect(store.previewCollapsed).toBe(true);
+    store.togglePreviewCollapsed();
+    expect(store.previewCollapsed).toBe(false);
+  });
+
+  it('Chat und Preview sind wechselseitig exklusiv — nie beide ausgeblendet (leerer Screen)', () => {
+    const store = new ChatStore();
+    store.toggleChatCollapsed();
+    expect(store.chatCollapsed).toBe(true);
+    // Preview ausblenden hebt das Chat-Ausblenden auf.
+    store.togglePreviewCollapsed();
+    expect(store.previewCollapsed).toBe(true);
+    expect(store.chatCollapsed).toBe(false);
+    // Und umgekehrt.
+    store.toggleChatCollapsed();
+    expect(store.chatCollapsed).toBe(true);
+    expect(store.previewCollapsed).toBe(false);
+  });
+
+  it('connect() eines Projekts blendet Chat UND Preview wieder ein (kein versteckter Chat/Preview beim Projektwechsel)', async () => {
     const store = new ChatStore();
     store.toggleChatCollapsed();
     expect(store.chatCollapsed).toBe(true);
@@ -335,5 +358,6 @@ describe('Chat ausblendbar (Preview im Vollbild)', () => {
     await store.connect('p1');
     vi.unstubAllGlobals();
     expect(store.chatCollapsed).toBe(false);
+    expect(store.previewCollapsed).toBe(false);
   });
 });

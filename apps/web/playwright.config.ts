@@ -37,6 +37,9 @@ export default defineConfig({
         HOST: '127.0.0.1',
         MACVIBES_HOME: E2E_HOME,
         DB_PATH: join(E2E_HOME, 'app.db'),
+        // Eigener Egress-Port — sonst kollidiert der E2E-Server mit einem
+        // parallel laufenden Dev-Server auf dem Default 4010 (EADDRINUSE).
+        MACVIBES_EGRESS_PORT: String(E2E_API_PORT + 10),
         // Kurze Grace-Period, damit der R9-Lifecycle im E2E beobachtbar ist.
         MACVIBES_GRACE_MS: '1500',
         MACVIBES_IDLE_MS: '600000',

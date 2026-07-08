@@ -71,6 +71,8 @@ export class ChatStore {
   turnActive = false;
   /** Chat-Spalte ausgeblendet → Preview nimmt das ganze Fenster ein. */
   chatCollapsed = false;
+  /** Preview-Spalte ausgeblendet → Chat nimmt das ganze Fenster ein (Fokus/Phone). */
+  previewCollapsed = false;
   error: string | null = null;
   draft = '';
   projectId: string | null = null;
@@ -104,6 +106,14 @@ export class ChatStore {
 
   toggleChatCollapsed(): void {
     this.chatCollapsed = !this.chatCollapsed;
+    // Wechselseitig exklusiv — nie beide Spalten gleichzeitig ausgeblendet
+    // (sonst leerer Bildschirm).
+    if (this.chatCollapsed) this.previewCollapsed = false;
+  }
+
+  togglePreviewCollapsed(): void {
+    this.previewCollapsed = !this.previewCollapsed;
+    if (this.previewCollapsed) this.chatCollapsed = false;
   }
 
   /**
@@ -156,8 +166,9 @@ export class ChatStore {
     this.messages = [];
     this.error = null;
     this.turnActive = false;
-    // Projektwechsel: Chat immer sichtbar starten (kein „versteckter" Chat).
+    // Projektwechsel: beide Spalten sichtbar starten (kein „versteckter" Chat/Preview).
     this.chatCollapsed = false;
+    this.previewCollapsed = false;
 
     try {
       const data = await gqlRequest<{ chatMessages: ChatMessage[]; turnActive: boolean }>(
