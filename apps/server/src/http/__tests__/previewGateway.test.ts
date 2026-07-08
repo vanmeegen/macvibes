@@ -104,8 +104,15 @@ describe('startPreviewGateway (Integration mit Fake-Upstream)', () => {
     // Fake-Upstream mit WS-Echo (steht für den HMR-Endpunkt des Dev-Servers).
     upstream = Bun.serve({
       port: 0,
-      fetch: (req, srv) => (srv.upgrade(req) ? undefined : new Response('nope')),
-      websocket: { message: (ws, msg) => ws.send(`echo:${msg as string}`) },
+      fetch(req, srv): Response | undefined {
+        if (srv.upgrade(req, { data: undefined })) return undefined;
+        return new Response('nope');
+      },
+      websocket: {
+        message(ws, msg): void {
+          ws.send(`echo:${msg as string}`);
+        },
+      },
     });
     const vmPort = upstream.port ?? null;
     const gw = startPreviewGateway({ port: 0, previewPortFor: () => vmPort });
