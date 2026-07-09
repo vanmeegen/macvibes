@@ -82,6 +82,8 @@ function providerConfig(home: string, bare: string): MicrosandboxProviderConfig 
         MACVIBES_AGENT_CWD: '/work',
       }),
     },
+    // Keine Credentials nötig — diese Tests machen keine Claude-Turns.
+    secrets: [],
   };
 }
 

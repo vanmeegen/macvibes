@@ -48,7 +48,6 @@ export interface ServerConfig {
     fakeDelayMs: number;
   };
   anthropic: {
-    upstreamUrl: string;
     /** Abo-Token (claude setup-token) — bevorzugt. */
     oauthToken: string | null;
     /** Alternativ: klassischer API-Key. */
@@ -101,7 +100,6 @@ export function loadConfig(): ServerConfig {
       fakeDelayMs: Number(Bun.env.MACVIBES_FAKE_DELAY_MS ?? 25),
     },
     anthropic: {
-      upstreamUrl: Bun.env.ANTHROPIC_UPSTREAM_URL ?? 'https://api.anthropic.com',
       oauthToken: Bun.env.CLAUDE_CODE_OAUTH_TOKEN ?? null,
       apiKey: Bun.env.ANTHROPIC_API_KEY ?? null,
     },

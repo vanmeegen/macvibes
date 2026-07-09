@@ -8,9 +8,6 @@ import { buildDaemonBundle } from '../../agent/daemonBundle';
 import { DaemonAgentRunner } from '../../agent/daemonRunner';
 import type { AgentEvent } from '../../agent/events';
 import { buildVmAgentEnv } from '../../agent/vmAgentEnv';
-import { createAnthropicProxy } from '../../http/anthropicProxy';
-import { startEgressProxy } from '../../http/egressProxy';
-import type { EgressProxyHandle } from '../../http/egressProxy';
 import {
   createTempDir,
   createTemplatesFixture,
@@ -47,7 +44,6 @@ const TOKEN = crypto.randomUUID();
 const tempDirs: string[] = [];
 let templateDir = '';
 let server: Server<GatewaySocketData> | null = null;
-let egress: EgressProxyHandle | null = null;
 let gateway: AgentGateway;
 let handle: SandboxHandle | null = null;
 let runner: DaemonAgentRunner;
@@ -82,15 +78,10 @@ async function collectTurn(
 beforeAll(async () => {
   if (!enabled) return;
 
-  // Host-Seite: Gateway + Credential-Proxy auf EINEM Server (wie index.ts),
-  // dazu der Egress-Proxy — ohne ihn hängt claudes Startup (chatproblems #9).
+  // Host-Seite: nur noch das Agent-WS-Gateway (wie index.ts). Credentials
+  // laufen als msb-Secret in die VM (Platzhalter), Egress geht direkt über
+  // die Domain-Netzregeln — Credential- und Egress-Proxy sind entfallen.
   gateway = new AgentGateway({ token: TOKEN });
-  const anthropicProxy = createAnthropicProxy({
-    upstreamUrl: Bun.env.ANTHROPIC_UPSTREAM_URL ?? 'https://api.anthropic.com',
-    proxyToken: TOKEN,
-    oauthToken,
-    apiKey,
-  });
   server = Bun.serve({
     port: 0,
     hostname: '0.0.0.0',
@@ -102,13 +93,9 @@ beforeAll(async () => {
         const response = gateway.handleUpgrade(request, srv);
         return response ?? undefined;
       }
-      if (url.pathname.startsWith('/anthropic/')) {
-        return anthropicProxy(request, url.pathname.slice('/anthropic'.length) + url.search);
-      }
       return new Response('nicht hier', { status: 404 });
     },
   });
-  egress = startEgressProxy({ port: 0, token: TOKEN });
 
   // Projekt + Baseline (MIT Daemon-Zubehör: SDK, tini, monit).
   const home = await createTempDir('macvibes-home-');
@@ -126,7 +113,13 @@ beforeAll(async () => {
 
   const serverPort = server.port;
   if (serverPort === undefined) throw new Error('Testserver ohne Port');
-  const egressPort = egress.port;
+  // Credentials als msb-Secret — exakt wie index.ts sie baut.
+  const secrets =
+    oauthToken !== null
+      ? [{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: oauthToken, host: 'api.anthropic.com' }]
+      : apiKey !== null
+        ? [{ name: 'ANTHROPIC_API_KEY', value: apiKey, host: 'api.anthropic.com' }]
+        : [];
   const provider = new MicrosandboxSandboxProvider({
     macvibesHome: home,
     bareRepoPath: bare,
@@ -136,13 +129,14 @@ beforeAll(async () => {
     agentDaemon: {
       bundleDir,
       envFor: (sandboxName) => ({
-        ...buildVmAgentEnv({ serverPort, proxyToken: TOKEN, egressPort }),
+        ...buildVmAgentEnv(),
         MACVIBES_AGENT_GATEWAY_URL:
           `ws://host.microsandbox.internal:${serverPort}${AGENT_GATEWAY_PATH}` +
           `?sandbox=${encodeURIComponent(sandboxName)}&token=${encodeURIComponent(TOKEN)}`,
         MACVIBES_AGENT_CWD: '/work',
       }),
     },
+    secrets,
   });
 
   handle = await provider.start({
@@ -165,7 +159,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await handle?.stop();
   server?.stop(true);
-  egress?.stop();
   if (templateDir.length > 0) {
     await removeSnapshot(baselineSnapshotName(templateDir));
   }
@@ -274,6 +267,24 @@ describe.skipIf(!enabled)(
         expect(gateway.isConnected(SANDBOX_NAME)).toBe(true);
       },
       { timeout: 200_000 },
+    );
+
+    test.skipIf(!hasCredentials)(
+      'der echte Token ist NIE in der VM — nur der msb-Platzhalter',
+      async () => {
+        // Sicherheitseigenschaft des Secret-Mechanismus (ersetzt den
+        // Credential-Proxy): die VM-Env enthält einen $MSB_-Platzhalter,
+        // niemals den echten Wert.
+        const envName = oauthToken !== null ? 'CLAUDE_CODE_OAUTH_TOKEN' : 'ANTHROPIC_API_KEY';
+        const echtwert = oauthToken ?? apiKey ?? '';
+        const inGuest = (
+          await runMsb(['exec', SANDBOX_NAME, '--', 'sh', '-c', `printf %s "$${envName}"`])
+        ).trim();
+        expect(inGuest.startsWith('$MSB_')).toBe(true);
+        expect(inGuest).not.toBe(echtwert);
+        expect(inGuest.length).toBeLessThan(echtwert.length);
+      },
+      { timeout: 120_000 },
     );
 
     test.skipIf(!hasCredentials)(

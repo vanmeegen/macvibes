@@ -107,6 +107,35 @@ Integrationstest ist grün inkl. Turn/Interrupt/Kontext):**
 - monit-Basic-Auth, falls die Status-API je über `127.0.0.1` hinaus exponiert
   wird (aktuell nur host-lokal gemappt).
 
+**msb-Secrets statt Credential-/Egress-Proxy — GEPARKT (Branch
+`msb-secrets-spike`, 2026-07-09):**
+
+msb bietet Secret-Injection (`--secret NAME@host`: VM sieht nur den
+Platzhalter `$MSB_<NAME>`, Substitution host-seitig am Egress) und
+Domain-Netzregeln — das könnte anthropicProxy + egressProxy (~700 Zeilen)
+ersetzen. Der Umbau ist implementiert und **funktioniert isoliert** (echter
+SDK-Turn mit Platzhalter: verifiziert), scheitert aber an einem
+**Regel-Engine-Bug in msb 0.6.2–0.6.6**: von den vier nötigen Pfaden
+(Host-Gateway 172.16/12 fürs Agent-WS · Public-Egress npm · Secret-Host
+api.anthropic.com · LAN-Block) liefert JEDE Regelkombination nur drei —
+
+| Regeln                                            | Gateway | Public | Secret-Host | LAN-Block |
+| ------------------------------------------------- | ------- | ------ | ----------- | --------- |
+| Gruppen (`allow@public,allow@172.16/12`) + Secret | ✓       | ✗      | ✗           | ✓         |
+| Domain- + Gruppenregeln                           | ✗       | ✗      | ✓           | ✓         |
+| `--net-default-egress allow` + CIDR-Denies        | ✗       | ✓      | ✓           | ✓         |
+| keine Regeln                                      | ✗       | ✓      | ✓           | ✓         |
+
+Kernbugs: (a) jede Domain-Regel deaktiviert Gruppen-/CIDR-Regeln, (b) der
+Gateway-Pfad stirbt unter `--net-default-egress allow`, (c)
+`host.microsandbox.internal` ist als Domain-Regel nicht matchbar. Erledigt,
+wenn upstream gefixt (Issue melden!). Wichtige Erkenntnisse für den Wieder-
+einstieg: monit vererbt die Platzhalter-Env NICHT (explizit in daemon.env.sh
+schreiben, Platzhalter ist deterministisch `$MSB_<NAME>`); ab msb 0.6.6 nur
+noch `NAME@HOST`-Form (Wert aus der Host-Env des msb-Aufrufs, nie inline).
+Weiterer Befund: Public-Egress ist mit Gruppen-Regeln auch OHNE Secret tot
+(0.6.2 wie 0.6.6) — der egressProxy bleibt also so oder so nötig.
+
 ---
 
 ## Die eine Kernthese

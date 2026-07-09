@@ -3,8 +3,6 @@ import { useCookies } from '@whatwg-node/server-plugin-cookies';
 import { loadConfig } from './config';
 import { createDb } from './db/client';
 import { runMigrations } from './db/migrate';
-import { createAnthropicProxy } from './http/anthropicProxy';
-import { startEgressProxy } from './http/egressProxy';
 import { startPreviewGateway } from './http/previewGateway';
 import { readSessionToken } from './http/cookies';
 import { serveWebUi } from './http/staticFiles';
@@ -40,20 +38,27 @@ runMigrations(db);
 await ensureAdmin(db, config);
 await ensureBareRepo(config.bareRepoPath);
 
-// Shared Secret VM → Credential-Proxy, pro Serverstart neu (B5c).
+// Shared Secret VM → Agent-WS-Gateway, pro Serverstart neu (B5c).
 // Zufällig pro Start; für kontrollierte Diagnose per Env überschreibbar.
 const proxyToken = Bun.env.MACVIBES_PROXY_TOKEN ?? crypto.randomUUID();
-// Egress-Proxy: einziger Weg der VMs ins Internet (msb-Regeln blocken Public).
-const egressPort = Bun.env.MACVIBES_EGRESS_PORT ? Number(Bun.env.MACVIBES_EGRESS_PORT) : 4010;
-const egressProxy = startEgressProxy({ port: egressPort, token: proxyToken });
-console.log(`Egress-Proxy für VMs auf Port ${egressProxy.port}`);
-const anthropicProxy = createAnthropicProxy({
-  upstreamUrl: config.anthropic.upstreamUrl,
-  proxyToken,
-  oauthToken: config.anthropic.oauthToken,
-  apiKey: config.anthropic.apiKey,
-});
-if (config.anthropic.oauthToken === null && config.anthropic.apiKey === null) {
+
+// Claude-Credentials als msb-Secrets (B5c): die VM sieht nur einen Platzhalter,
+// msb setzt den echten Wert host-seitig am Egress ein — ausschließlich Richtung
+// api.anthropic.com. Ersetzt Credential-Proxy und Egress-Proxy (msb ≥ 0.6.2:
+// Platzhalter-Substitution + Domain-Netzregeln, verifiziert 2026-07-09).
+const vmSecrets =
+  config.anthropic.oauthToken !== null
+    ? [
+        {
+          name: 'CLAUDE_CODE_OAUTH_TOKEN',
+          value: config.anthropic.oauthToken,
+          host: 'api.anthropic.com',
+        },
+      ]
+    : config.anthropic.apiKey !== null
+      ? [{ name: 'ANTHROPIC_API_KEY', value: config.anthropic.apiKey, host: 'api.anthropic.com' }]
+      : [];
+if (vmSecrets.length === 0) {
   console.warn(
     'Achtung: keine Claude-Credentials (CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY) — ' +
       'der Agent in der VM kann die API nicht erreichen.',
@@ -86,13 +91,14 @@ const sandboxProvider = useMicrosandbox
       agentDaemon: {
         bundleDir: daemonBundleDir,
         envFor: (sandboxName: string) => ({
-          ...buildVmAgentEnv({ serverPort: config.port, proxyToken, egressPort }),
+          ...buildVmAgentEnv(),
           MACVIBES_AGENT_GATEWAY_URL:
             `ws://host.microsandbox.internal:${config.port}${AGENT_GATEWAY_PATH}` +
             `?sandbox=${encodeURIComponent(sandboxName)}&token=${encodeURIComponent(proxyToken)}`,
           MACVIBES_AGENT_CWD: '/work',
         }),
       },
+      secrets: vmSecrets,
     })
   : new ProcessSandboxProvider({
       macvibesHome: config.macvibesHome,
@@ -219,11 +225,6 @@ const server = Bun.serve({
     }
     if (url.pathname === '/graphql') {
       return yoga.fetch(request);
-    }
-    // Credential-Proxy für den Agenten in der VM (B5c): /anthropic/* → Claude API.
-    if (url.pathname.startsWith('/anthropic/')) {
-      const upstreamPath = url.pathname.slice('/anthropic'.length) + url.search;
-      return anthropicProxy(request, upstreamPath);
     }
     const staticResponse = await serveWebUi(config.webDistDir, url.pathname);
     if (staticResponse) {
