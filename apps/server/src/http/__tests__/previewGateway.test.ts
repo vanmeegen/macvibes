@@ -86,6 +86,38 @@ describe('startPreviewGateway (Integration mit Fake-Upstream)', () => {
     expect(await asset.text()).toBe('upstream:/@vite/client');
   });
 
+  test('ZWEI Projekte gleichzeitig: Referer trennt die Upstreams sauber', async () => {
+    // Zwei "VMs" (Upstreams) — das Gateway muss root-absolute Asset-Requests
+    // anhand des Referers dem RICHTIGEN Projekt zuordnen (parallel offene
+    // Previews im selben Browser, ein einziger Gateway-Port).
+    upstream = Bun.serve({ port: 0, fetch: () => new Response('vm-A') });
+    const upstreamB = Bun.serve({ port: 0, fetch: () => new Response('vm-B') });
+    try {
+      const ports: Record<string, number | null> = {
+        'proj-a': upstream.port ?? null,
+        'proj-b': upstreamB.port ?? null,
+      };
+      const gw = startPreviewGateway({ port: 0, previewPortFor: (id) => ports[id] ?? null });
+      started.push(gw);
+
+      // Einstieg beider Projekte trifft die jeweils eigene VM.
+      expect(await (await fetch(`http://127.0.0.1:${gw.port}/p/proj-a/`)).text()).toBe('vm-A');
+      expect(await (await fetch(`http://127.0.0.1:${gw.port}/p/proj-b/`)).text()).toBe('vm-B');
+
+      // Dasselbe Asset, unterschiedlicher Referer → unterschiedliche VM.
+      const viaA = await fetch(`http://127.0.0.1:${gw.port}/assets/app.js`, {
+        headers: { referer: `http://127.0.0.1:${gw.port}/p/proj-a/` },
+      });
+      const viaB = await fetch(`http://127.0.0.1:${gw.port}/assets/app.js`, {
+        headers: { referer: `http://127.0.0.1:${gw.port}/p/proj-b/` },
+      });
+      expect(await viaA.text()).toBe('vm-A');
+      expect(await viaB.text()).toBe('vm-B');
+    } finally {
+      upstreamB.stop(true);
+    }
+  });
+
   test('kein/gestoppter VM-Port → 503', async () => {
     const gw = startPreviewGateway({ port: 0, previewPortFor: () => null });
     started.push(gw);

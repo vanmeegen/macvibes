@@ -27,6 +27,13 @@ test('Preview: Dev-Server der Sandbox wird im iframe erreichbar', async ({ page,
   // Dev-Server bindet IPv4, node-fetch würde localhost sonst zu ::1 auflösen.
   const response = await request.get((src ?? '').replace('localhost', '127.0.0.1'));
   expect(response.ok()).toBeTruthy();
+
+  // Und die Seite RENDERT im iframe: erst damit laufen die root-absoluten
+  // Asset-Requests (/@vite/client, /_bun/…) über die Referer-Routing-Logik
+  // des Gateways — genau die Bug-Klasse „Preview bleibt schwarz".
+  await expect(
+    page.frameLocator('[data-testselector="chat-preview"]').locator('body'),
+  ).toContainText(/Deine App/i, { timeout: 60_000 });
 });
 
 test('Preview zeigt klaren Zustand, wenn die Sandbox gestoppt ist', async ({ page }) => {

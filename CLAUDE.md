@@ -99,6 +99,7 @@ bun install                # Dependencies
 bun run dev                # Web (5173) + Server (4000) parallel, Dev-Modus
 bun run ci                 # lint + typecheck + alle Unit-/Integrationstests
 bun --filter='@macvibes/web' run e2e   # Playwright-E2E (nutzt Prozess-Provider + Fake-Agent)
+bun --filter='@macvibes/web' run e2e:live  # Live-Walkthrough gegen LAUFENDEN Server (echte VMs + Claude; braucht freigeschalteten Nutzer browsertest, s. e2e-live/)
 bun run baselines          # Template-Baseline-Snapshots (neu) bauen — nach Template-Änderungen
 bun run start              # Produktion: Web bauen + Server (liefert dist aus, LAN)
 ```

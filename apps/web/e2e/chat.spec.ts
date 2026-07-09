@@ -74,6 +74,14 @@ test('Stop-Button bricht einen laufenden Turn ab', async ({ page }) => {
 
   await expect(chatPage.messagesByRole('system').last()).toBeVisible({ timeout: 15_000 });
   await expect(chatPage.stopButton).not.toBeVisible();
+
+  // Nach dem Stop geht es WEITER: der nächste Turn läuft normal, der bisherige
+  // Verlauf bleibt erhalten (Live-Befund: „Stop → weiterchatten" war ungeprüft).
+  await chatPage.send('Nach dem Stopp weiter');
+  await expect(chatPage.messagesByRole('assistant').last()).toContainText('Nach dem Stopp weiter', {
+    timeout: 15_000,
+  });
+  await expect(chatPage.messagesByRole('user').first()).toContainText('LANGSAM');
 });
 
 test('Mid-Turn-Steering: neue Nachricht während eines Turns unterbricht ihn', async ({ page }) => {
