@@ -71,8 +71,8 @@ export interface ServerConfig {
     apiKey: string;
     /**
      * Startkommando für den Shim (Autostart durch macvibes). Env
-     * MACVIBES_LOCAL_ROUTER_CMD; sonst Auto-Detect des Nachbar-Repos
-     * (mac-local-coding-agent/run-anthropic-shim.sh). null = kein Autostart.
+     * MACVIBES_LOCAL_ROUTER_CMD; Default: das mitgelieferte
+     * apps/server/local-router/run.sh. null = kein Autostart.
      */
     routerCommand: string | null;
   };
@@ -121,12 +121,11 @@ function parseModelRoutes(
 }
 
 /**
- * Auto-Detect des Shim-Startskripts im Nachbar-Repo. Findet sich dort nichts,
- * gibt es keinen Autostart (null) — der Server meldet das beim Boot klar.
+ * Startskript des mitgelieferten Routers (apps/server/local-router/run.sh) —
+ * Teil des Repos, legt seine venv beim ersten Start selbst an (~/macvibes).
  */
 function detectLocalRouterCommand(): string | null {
-  const repoRoot = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
-  const script = join(repoRoot, '..', 'mac-local-coding-agent', 'run-anthropic-shim.sh');
+  const script = resolve(fileURLToPath(new URL('../local-router/run.sh', import.meta.url)));
   return existsSync(script) ? script : null;
 }
 

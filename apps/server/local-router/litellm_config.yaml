@@ -1,0 +1,29 @@
+# Lokaler Modell-Router (LiteLLM): bietet einen Anthropic-/v1/messages-Endpunkt
+# und übersetzt Requests (inkl. Streaming + Tool-Calling) auf lokale Ollama-
+# Modelle. Wird von macvibes automatisch mitgestartet (localRouterService);
+# die Modell-Aliase hier müssen zum Katalog in src/agent/agentModel.ts passen.
+
+model_list:
+  - model_name: qwen3.6-coder
+    litellm_params:
+      model: ollama_chat/qwen3.6-coder
+      api_base: http://localhost:11434
+  # MoE-„fast gear" (Katalog: "Qwen 35B MoE (lokal)")
+  - model_name: qwen3.6-moe
+    litellm_params:
+      model: ollama_chat/qwen3.6:35b-a3b-coding-mxfp8
+      api_base: http://localhost:11434
+  # Catch-all: Claude Code ruft intern Hilfsmodelle auf (claude-*-haiku etc.).
+  # Ohne diesen Eintrag antwortet der Router darauf mit 400 → der Agent stolpert.
+  - model_name: '*'
+    litellm_params:
+      model: ollama_chat/qwen3.6-coder
+      api_base: http://localhost:11434
+
+litellm_settings:
+  drop_params: true # unbekannte Anthropic-Felder (z. B. thinking) verwerfen statt Fehler
+  telemetry: false
+
+general_settings:
+  # Lokal, kein Auth — macvibes' Proxy setzt zwar x-api-key, der Router ignoriert ihn.
+  master_key: null

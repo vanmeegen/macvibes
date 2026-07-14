@@ -86,7 +86,10 @@ export async function startLocalRouter(options: LocalRouterOptions): Promise<Loc
     spawn,
     probe,
     probeIntervalMs: options.probeIntervalMs ?? 500,
-    startTimeoutMs: options.readyTimeoutMs ?? 30_000,
+    // Großzügig: der allererste Start legt die venv an + installiert LiteLLM
+    // (~1–2 min). Ein kaputtes Kommando scheitert trotzdem schnell (Prozess-Exit
+    // → Crash-Loop-Schutz), die Frist greift nur bei ehrlich langsamem Boot.
+    startTimeoutMs: options.readyTimeoutMs ?? 300_000,
     unhealthyThreshold: 6,
     maxRestarts: 3,
     restartWindowMs: 5 * 60_000,
