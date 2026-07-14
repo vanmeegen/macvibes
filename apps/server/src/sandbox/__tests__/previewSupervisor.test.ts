@@ -157,3 +157,58 @@ describe('PreviewSupervisor — Crash-Loop-Schutz & Stop', () => {
     expect(h.spawnCount()).toBe(before);
   });
 });
+
+describe('Spawn-Fehler dürfen NIE den Server crashen (E2E-Absturz 2026-07-14)', () => {
+  // Live-Befund: nach dem Löschen eines Projekts versuchte die Crash-Recovery
+  // den Dev-Server im GELÖSCHTEN Workspace neu zu starten — Bun.spawn wirft
+  // dann ENOENT, und über das fire-and-forget runCycle() riss die unbehandelte
+  // Exception den ganzen macvibes-Server mit (Vite: "http proxy error").
+  test('wirft spawn direkt beim Start, wird der Status "failed" — keine Exception', async () => {
+    const statuses: PreviewStatus[] = [];
+    const supervisor = new PreviewSupervisor({
+      spawn: () => {
+        throw new Error("ENOENT: no such file or directory, posix_spawn 'sh'");
+      },
+      probe: async () => false,
+      onStatusChange: (s) => statuses.push(s),
+      probeIntervalMs: 10,
+      startTimeoutMs: 120,
+      unhealthyThreshold: 3,
+      maxRestarts: 3,
+      restartWindowMs: 10_000,
+      backoffMs: 10,
+    });
+    supervisor.start();
+    await waitFor(() => supervisor.getStatus() === 'failed');
+    await supervisor.stop();
+  });
+
+  test('wirft spawn beim NEUSTART (Workspace weg), wird der Status "failed" — keine Exception', async () => {
+    let calls = 0;
+    const procs: ReturnType<typeof fakeProcess>[] = [];
+    const supervisor = new PreviewSupervisor({
+      spawn: () => {
+        calls += 1;
+        if (calls > 1) {
+          // Zweiter Start = Crash-Recovery nach Projekt-Löschung → cwd weg.
+          throw new Error("ENOENT: no such file or directory, posix_spawn 'sh'");
+        }
+        const p = fakeProcess();
+        procs.push(p);
+        return p;
+      },
+      probe: async () => calls === 1,
+      probeIntervalMs: 10,
+      startTimeoutMs: 120,
+      unhealthyThreshold: 3,
+      maxRestarts: 3,
+      restartWindowMs: 10_000,
+      backoffMs: 10,
+    });
+    supervisor.start();
+    await waitFor(() => supervisor.getStatus() === 'ready');
+    procs[0]?.crash(); // Prozess stirbt → Recovery-Neustart läuft in den Spawn-Fehler
+    await waitFor(() => supervisor.getStatus() === 'failed');
+    await supervisor.stop();
+  });
+});

@@ -73,7 +73,11 @@ export class PreviewSupervisor {
   start(): void {
     if (this.status !== 'stopped') return;
     this.stopped = false;
-    void this.runCycle();
+    // Fehler hier dürfen nie als unhandled rejection den Server killen.
+    this.runCycle().catch((error) => {
+      console.error('Preview-Supervisor-Zyklus fehlgeschlagen:', error);
+      this.setStatus('failed');
+    });
   }
 
   async stop(): Promise<void> {
@@ -104,7 +108,18 @@ export class PreviewSupervisor {
     }
 
     const gen = ++this.monitorGen;
-    const proc = this.deps.spawn();
+    // spawn kann synchron werfen (z. B. ENOENT, wenn der Workspace nach einer
+    // Projekt-Löschung weg ist und die Crash-Recovery neu starten will). Das
+    // darf NIE als unbehandelte Exception aus dem fire-and-forget runCycle()
+    // entkommen — sonst reißt es den ganzen Server mit (Live-Absturz im E2E).
+    let proc: SupervisedProcess;
+    try {
+      proc = this.deps.spawn();
+    } catch (error) {
+      console.error('Preview-Dev-Server konnte nicht gestartet werden:', error);
+      this.setStatus('failed');
+      return;
+    }
     this.current = proc;
     // Erster Start → "starting"; Neustarts hat restart() schon auf
     // "restarting" gesetzt, dieser Zustand bleibt bis der Server wieder ready ist.
@@ -179,7 +194,11 @@ export class PreviewSupervisor {
     if (this.stopped || gen !== this.monitorGen) return;
     await Bun.sleep(this.opts.backoffMs);
     if (this.stopped || gen !== this.monitorGen) return;
-    void this.runCycle();
+    // Fehler hier dürfen nie als unhandled rejection den Server killen.
+    this.runCycle().catch((error) => {
+      console.error('Preview-Supervisor-Zyklus fehlgeschlagen:', error);
+      this.setStatus('failed');
+    });
   }
 
   /** Crash-Loop-Schutz: max. Neustarts im gleitenden Fenster. */
