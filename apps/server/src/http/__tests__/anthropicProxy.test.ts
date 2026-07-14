@@ -140,6 +140,126 @@ describe('Anthropic-Credential-Proxy (B5c, R10/NFR)', () => {
   });
 });
 
+describe('Modell-Routing (Modellwahl pro Chat: Claude API vs. lokaler Router)', () => {
+  // Zweiter Upstream: der lokale Shim/Router (LiteLLM) für qwen-Modelle.
+  let localUpstream: ReturnType<typeof Bun.serve>;
+  const localSeen: SeenRequest[] = [];
+
+  beforeAll(() => {
+    localUpstream = Bun.serve({
+      port: 0,
+      fetch: async (request) => {
+        const url = new URL(request.url);
+        localSeen.push({
+          path: url.pathname + url.search,
+          headers: Object.fromEntries(request.headers.entries()),
+          body: await request.text(),
+        });
+        return Response.json({ ok: true, upstream: 'local' });
+      },
+    });
+  });
+
+  afterAll(() => {
+    localUpstream.stop(true);
+  });
+
+  function makeRoutingProxy(overrides: Partial<AnthropicProxyConfig> = {}) {
+    return makeProxy({
+      localUpstreamUrl: `http://localhost:${localUpstream.port}`,
+      localApiKey: 'local-key',
+      ...overrides,
+    });
+  }
+
+  function bodyWithModel(model: string): string {
+    return JSON.stringify({ model, max_tokens: 1, messages: [] });
+  }
+
+  test('claude-* Modelle gehen an den Anthropic-Upstream mit OAuth-Token', async () => {
+    const proxy = makeRoutingProxy();
+    seen.length = 0;
+    localSeen.length = 0;
+
+    await proxy(vmRequest({}, bodyWithModel('claude-sonnet-5')), '/v1/messages');
+    expect(seen).toHaveLength(1);
+    expect(localSeen).toHaveLength(0);
+    expect(seen[0]?.headers['authorization']).toBe('Bearer test-oauth-token');
+  });
+
+  test('qwen-Modelle gehen an den lokalen Router mit dessen API-Key', async () => {
+    const proxy = makeRoutingProxy();
+    seen.length = 0;
+    localSeen.length = 0;
+
+    const response = await proxy(vmRequest({}, bodyWithModel('qwen3.6-coder')), '/v1/messages');
+    expect(await response.json()).toEqual({ ok: true, upstream: 'local' });
+    expect(seen).toHaveLength(0);
+    expect(localSeen).toHaveLength(1);
+    expect(localSeen[0]?.headers['x-api-key']).toBe('local-key');
+    // Claude-Credentials dürfen NICHT an den lokalen Router leaken.
+    expect(localSeen[0]?.headers['authorization']).toBeUndefined();
+  });
+
+  test('claude-* ohne Claude-Credentials fällt auf den lokalen Router zurück (Hilfsmodelle)', async () => {
+    // Claude Code ruft intern claude-haiku-* Hilfsmodelle auf, auch wenn der
+    // Chat auf qwen steht — ohne Claude-Zugang beantwortet die der lokale Router.
+    const proxy = makeRoutingProxy({ oauthToken: null, apiKey: null });
+    seen.length = 0;
+    localSeen.length = 0;
+
+    const response = await proxy(vmRequest({}, bodyWithModel('claude-haiku-4-5')), '/v1/messages');
+    expect(response.status).toBe(200);
+    expect(seen).toHaveLength(0);
+    expect(localSeen).toHaveLength(1);
+  });
+
+  test('Requests ohne Modell (z. B. GET) gehen an den Claude-Upstream, wenn Credentials da sind', async () => {
+    const proxy = makeRoutingProxy();
+    seen.length = 0;
+    localSeen.length = 0;
+
+    const request = new Request('http://host/anthropic/v1/models', {
+      method: 'GET',
+      headers: { [PROXY_TOKEN_HEADER]: 'geheim-123' },
+    });
+    await proxy(request, '/v1/models');
+    expect(seen).toHaveLength(1);
+    expect(localSeen).toHaveLength(0);
+  });
+
+  test('Zusatz-Routen (OpenRouter-Stil) matchen vor den Default-Routen', async () => {
+    const extraUpstream = Bun.serve({
+      port: 0,
+      fetch: async (request) => {
+        const headers = Object.fromEntries(request.headers.entries());
+        await request.text();
+        return Response.json({ ok: true, upstream: 'extra', key: headers['x-api-key'] ?? null });
+      },
+    });
+    try {
+      const proxy = makeRoutingProxy({
+        extraRoutes: [
+          {
+            prefix: 'gpt-',
+            upstreamUrl: `http://localhost:${extraUpstream.port}`,
+            apiKey: 'sk-or-123',
+          },
+        ],
+      });
+      seen.length = 0;
+      localSeen.length = 0;
+
+      const response = await proxy(vmRequest({}, bodyWithModel('gpt-5')), '/v1/messages');
+      expect(await response.json()).toEqual({ ok: true, upstream: 'extra', key: 'sk-or-123' });
+      expect(seen).toHaveLength(0);
+      expect(localSeen).toHaveLength(0);
+    } finally {
+      extraUpstream.stop(true);
+    }
+  });
+});
+
 describe('Thinking-Text sichtbar machen (display: summarized)', () => {
   test('ergänzt display:"summarized" bei aktivem Thinking', () => {
     const body = JSON.stringify({
@@ -277,6 +397,52 @@ describe('Antwortpfad — die Live-Bugs von 2026-07-04 dürfen nie zurückkommen
     } finally {
       sseUpstream.stop(true);
     }
+  });
+
+  test('Keepalive: hält den SSE-Stream in Sende-Pausen warm (gegen NAT/Idle-Timeout-Kappung)', async () => {
+    // Upstream mit einer langen Pause zwischen zwei Frames — genau die Situation
+    // (langsames lokales Modell: Prefill/Denken ohne Tokens), in der die
+    // VM→Host-Verbindung sonst als idle gekappt wird ("Connection closed mid-response").
+    const gapUpstream = Bun.serve({
+      port: 0,
+      fetch: () => {
+        const stream = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            const encoder = new TextEncoder();
+            controller.enqueue(encoder.encode('event: message_start\ndata: {"a":1}\n\n'));
+            await Bun.sleep(150); // > 3× keepAliveMs → mehrere Keepalives erwartet
+            controller.enqueue(encoder.encode('event: message_stop\ndata: {"b":2}\n\n'));
+            controller.close();
+          },
+        });
+        return new Response(stream, { headers: { 'content-type': 'text/event-stream' } });
+      },
+    });
+    try {
+      const proxy = makeProxy({
+        upstreamUrl: `http://localhost:${gapUpstream.port}`,
+        keepAliveMs: 40,
+      });
+      const response = await proxy(vmRequest(), '/v1/messages');
+      const full = await response.text();
+      // Original-Frames unversehrt …
+      expect(full).toContain('event: message_start');
+      expect(full).toContain('event: message_stop');
+      // … und in der Pause wurde mindestens ein SSE-Kommentar-Keepalive injiziert.
+      expect(full).toContain(': keepalive');
+      // Der Keepalive liegt an der Frame-Grenze, zerstört also kein Event.
+      expect(full.indexOf(': keepalive')).toBeGreaterThan(full.indexOf('message_start'));
+      expect(full.indexOf(': keepalive')).toBeLessThan(full.indexOf('message_stop'));
+    } finally {
+      gapUpstream.stop(true);
+    }
+  });
+
+  test('Keepalive: nicht-SSE-Antworten (einzelnes JSON) bleiben unangetastet', async () => {
+    // Der geteilte Upstream liefert application/json → kein Keepalive, exakt der Body.
+    const proxy = makeProxy({ keepAliveMs: 40 });
+    const response = await proxy(vmRequest(), '/v1/messages');
+    expect(await response.json()).toEqual({ ok: true });
   });
 
   test('Fehler-Status und retry-after werden durchgereicht (SDK-Retry braucht sie)', async () => {

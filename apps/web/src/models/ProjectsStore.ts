@@ -1,6 +1,6 @@
 import { makeAutoObservable, runInAction } from 'mobx';
 import { gqlRequest } from '../api/graphqlClient';
-import type { Project, Template } from '../api/types';
+import type { AgentModelInfo, Project, Template } from '../api/types';
 import type { AuthStore } from './AuthStore';
 
 export type ProjectFilter = 'mine' | 'all';
@@ -19,11 +19,17 @@ const PROJECTS_AND_TEMPLATES_QUERY = /* GraphQL */ `
         id
         username
       }
+      agentModel
       createdAt
       lastActivityAt
       sandboxStatus
       previewHostPort
       previewStatus
+    }
+    agentModels {
+      id
+      label
+      slow
     }
     templates {
       name
@@ -53,6 +59,15 @@ const ENTER_PROJECT_MUTATION = /* GraphQL */ `
 const LEAVE_PROJECT_MUTATION = /* GraphQL */ `
   mutation LeaveProject($id: ID!) {
     leaveProject(id: $id)
+  }
+`;
+
+const SET_PROJECT_MODEL_MUTATION = /* GraphQL */ `
+  mutation SetProjectModel($projectId: ID!, $model: String!) {
+    setProjectModel(projectId: $projectId, model: $model) {
+      id
+      agentModel
+    }
   }
 `;
 
@@ -126,6 +141,8 @@ export function sandboxStatusLabel(status: string): string {
 export class ProjectsStore {
   projects: Project[] = [];
   templates: Template[] = [];
+  /** Wählbare Agenten-Modelle (Katalog vom Server, fürs Dropdown im Chat). */
+  agentModels: AgentModelInfo[] = [];
   /** Fester Port des Preview-Gateways — Basis der iframe-URL (Remote/VPN). */
   previewGatewayPort: number | null = null;
   filter: ProjectFilter = readFilterFromStorage();
@@ -194,11 +211,13 @@ export class ProjectsStore {
         projects: Project[];
         templates: Template[];
         previewGatewayPort: number;
+        agentModels: AgentModelInfo[];
       }>(PROJECTS_AND_TEMPLATES_QUERY);
       runInAction(() => {
         this.projects = data.projects;
         this.templates = data.templates;
         this.previewGatewayPort = data.previewGatewayPort;
+        this.agentModels = data.agentModels;
       });
     } catch (err) {
       console.error('ProjectsStore.load fehlgeschlagen', err);
@@ -219,11 +238,13 @@ export class ProjectsStore {
         projects: Project[];
         templates: Template[];
         previewGatewayPort: number;
+        agentModels: AgentModelInfo[];
       }>(PROJECTS_AND_TEMPLATES_QUERY);
       runInAction(() => {
         this.projects = data.projects;
         this.templates = data.templates;
         this.previewGatewayPort = data.previewGatewayPort;
+        this.agentModels = data.agentModels;
       });
     } catch (err) {
       console.error('ProjectsStore.refresh fehlgeschlagen', err);
@@ -254,6 +275,35 @@ export class ProjectsStore {
       runInAction(() => {
         this.error = toErrorMessage(err);
       });
+    }
+  }
+
+  /**
+   * Modellwahl pro Projekt (Dropdown im Chat): optimistisch umschalten, bei
+   * Server-Fehler zurückrollen. Der NÄCHSTE Turn nutzt das neue Modell.
+   */
+  async setProjectModel(projectId: string, model: string): Promise<boolean> {
+    const project = this.projects.find((p) => p.id === projectId);
+    const previous = project?.agentModel ?? null;
+    if (project) {
+      project.agentModel = model;
+    }
+    try {
+      await gqlRequest<{ setProjectModel: { id: string; agentModel: string } }>(
+        SET_PROJECT_MODEL_MUTATION,
+        { projectId, model },
+      );
+      return true;
+    } catch (err) {
+      console.error('ProjectsStore.setProjectModel fehlgeschlagen', err);
+      runInAction(() => {
+        const current = this.projects.find((p) => p.id === projectId);
+        if (current && previous !== null) {
+          current.agentModel = previous;
+        }
+        this.error = toErrorMessage(err);
+      });
+      return false;
     }
   }
 

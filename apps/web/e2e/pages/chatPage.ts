@@ -23,6 +23,20 @@ export class ChatPage {
     return this.page.getByTestId('chat-send');
   }
 
+  /** Modellwahl-Dropdown in der Toolbar (nur Owner sichtbar). */
+  get modelSelect(): Locator {
+    return this.page.getByTestId('chat-model-select');
+  }
+
+  modelOption(modelId: string): Locator {
+    return this.page.getByTestId(`chat-model-option-${modelId}`);
+  }
+
+  async selectModel(modelId: string): Promise<void> {
+    await this.modelSelect.click();
+    await this.modelOption(modelId).click();
+  }
+
   get stopButton(): Locator {
     return this.page.getByTestId('chat-stop');
   }

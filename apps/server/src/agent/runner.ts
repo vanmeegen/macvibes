@@ -6,6 +6,8 @@ export interface TurnOptions {
   workspaceDir: string;
   /** Claude-Session zum Fortsetzen (`--resume`) — null für die erste Nachricht. */
   resumeSessionId: string | null;
+  /** Modell für diesen Turn (Modellwahl pro Chat/Projekt, s. agentModel.ts). */
+  model: string;
 }
 
 export interface TurnHandle {

@@ -23,6 +23,24 @@ if (!gatewayUrl) {
 }
 const cwd = process.env['MACVIBES_AGENT_CWD'] ?? '/work';
 
+/**
+ * Zusätzliche System-Anweisung an das Modell. Nötig für schwächere lokale
+ * Modelle (z. B. qwen3.6-coder), die sonst (a) Arbeit nur ankündigen statt Tools
+ * aufzurufen und (b) Dateien nach /home/user statt ins Projekt (cwd) schreiben —
+ * beides macht die Live-Preview „tot". Für die Claude-API ist die Anweisung ein
+ * harmloses No-Op (macht es ohnehin richtig). Über Env überschreibbar.
+ */
+const appendSystemPrompt =
+  process.env['MACVIBES_AGENT_APPEND_PROMPT'] ??
+  `WICHTIG (macvibes-Laufzeitumgebung): Das Projekt liegt im aktuellen ` +
+    `Arbeitsverzeichnis ${cwd}. Erstelle und bearbeite ALLE Dateien ausschließlich ` +
+    `dort mit RELATIVEN Pfaden. Verwende NIEMALS absolute Pfade wie /home/user/... ` +
+    `oder /root/... — Dateien außerhalb von ${cwd} sind für die Live-Preview unsichtbar. ` +
+    `Lies zuerst AGENTS.md im Projekt und HALTE DICH DARAN (welche Datei die App-Wurzel ` +
+    `ist, was ausgeliefert wird). Beende deinen Turn NIEMALS mit einer Ankündigung wie ` +
+    `"Jetzt mache ich X" oder "Als Nächstes …" — führe angekündigte Schritte SOFORT im ` +
+    `selben Turn aus und arbeite die Aufgabe vollständig ab, bevor du zusammenfasst.`;
+
 let socket: WebSocket | null = null;
 
 const session = new DaemonSession({
@@ -48,6 +66,12 @@ const session = new DaemonSession({
       options: {
         cwd: queryCwd,
         model,
+        // Claude-Code-Preset behalten (Tools/Verhalten) + macvibes-Anweisung anhängen.
+        systemPrompt: { type: 'preset', preset: 'claude_code', append: appendSystemPrompt },
+        // Projekt-Memory laden (AGENTS.md/CLAUDE.md aus dem Workspace) — ohne dies
+        // ignoriert das SDK die Dateien. Gibt schwachen Modellen den Projektkontext,
+        // den Claude sich sonst selbst erschließt.
+        settingSources: ['project'],
         permissionMode: 'bypassPermissions',
         includePartialMessages: true,
         ...(resumeSessionId !== null ? { resume: resumeSessionId } : {}),

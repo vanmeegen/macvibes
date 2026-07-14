@@ -84,7 +84,13 @@ test('Stop-Button bricht einen laufenden Turn ab', async ({ page }) => {
   await expect(chatPage.messagesByRole('user').first()).toContainText('LANGSAM');
 });
 
-test('Mid-Turn-Steering: neue Nachricht während eines Turns unterbricht ihn', async ({ page }) => {
+test('Nachricht während eines Turns wird EINGEREIHT (kein Abbruch) und danach beantwortet', async ({
+  page,
+}) => {
+  // Neues Verhalten: ein schnelles „weiter" killt den laufenden Turn NICHT mehr
+  // (bei langsamen lokalen Modellen brach das den Turn vor dem ersten Tool-Call
+  // ab). Die neue Nachricht läuft als NÄCHSTER Turn; expliziter Abbruch bleibt
+  // dem Stop-Button vorbehalten (Opt-in: VITE_MACVIBES_STEER_ON_SEND=true).
   await registerNewUser(page);
   const projectsPage = new ProjectsPage(page);
   const chatPage = new ChatPage(page);
@@ -94,16 +100,18 @@ test('Mid-Turn-Steering: neue Nachricht während eines Turns unterbricht ihn', a
 
   await chatPage.send('LANGSAM alte Aufgabe');
   await expect(chatPage.stopButton).toBeVisible({ timeout: 15_000 });
-  // Mitten im laufenden Turn nachsteuern.
+  // Mitten im laufenden Turn eine weitere Nachricht schicken — sie wird eingereiht.
   await chatPage.send('Neue Aufgabe');
 
-  await expect(chatPage.messagesByRole('system').last()).toBeVisible({ timeout: 15_000 });
-  // Der Retry läuft ohne Session-Resume und bettet den bisherigen Verlauf ein
-  // (Kontext-Recovery) — die Echo-Antwort enthält den Prompt daher nicht mehr
-  // isoliert, sondern eingebettet am Ende.
-  await expect(chatPage.messagesByRole('assistant').last()).toContainText('Neue Aufgabe', {
-    timeout: 15_000,
+  // Der ERSTE Turn läuft zu Ende (kein „Turn abgebrochen"-Systemeintrag) …
+  await expect(chatPage.messagesByRole('assistant').first()).toContainText('LANGSAM alte Aufgabe', {
+    timeout: 30_000,
   });
+  // … und die zweite Nachricht wird als eigener Turn beantwortet.
+  await expect(chatPage.messagesByRole('assistant').last()).toContainText('Neue Aufgabe', {
+    timeout: 30_000,
+  });
+  await expect(chatPage.messagesByRole('system')).toHaveCount(0);
 });
 
 test('Nur-Lese-Besucher sieht den Chat-Verlauf', async ({ page }) => {
@@ -127,4 +135,48 @@ test('Nur-Lese-Besucher sieht den Chat-Verlauf', async ({ page }) => {
   await expect(chatPage.readonlyHint).toBeVisible();
   await expect(chatPage.messagesByRole('user').last()).toContainText('Hallo Publikum');
   await expect(chatPage.messagesByRole('assistant').last()).toContainText('Echo: Hallo Publikum');
+});
+
+// Modellwahl pro Chat (Dropdown in der Toolbar)
+
+test('Modellwahl: Default ist Sonnet 5, Wechsel persistiert über Reload', async ({ page }) => {
+  await registerNewUser(page);
+  const projectsPage = new ProjectsPage(page);
+  const chatPage = new ChatPage(page);
+  const name = uniqueProjectName('Modellwahl');
+
+  await projectsPage.createProject(name, 'pwa');
+
+  // Neue Chats starten mit Claude Sonnet 5.
+  await expect(chatPage.modelSelect).toContainText('Claude Sonnet 5');
+
+  // Umschalten auf das lokale Qwen-Modell …
+  await chatPage.selectModel('qwen3.6-coder');
+  await expect(chatPage.modelSelect).toContainText('Qwen 27B (lokal)');
+
+  // … und die Wahl ist persistent (DB, nicht nur UI-State).
+  await page.reload();
+  await expect(chatPage.modelSelect).toContainText('Qwen 27B (lokal)');
+
+  // Zurück auf ein Claude-Modell.
+  await chatPage.selectModel('claude-haiku-4-5');
+  await expect(chatPage.modelSelect).toContainText('Claude Haiku 4.5');
+});
+
+test('Modellwahl: fremdes Projekt zeigt KEIN Dropdown (nur Owner)', async ({ page }) => {
+  const projectsPage = new ProjectsPage(page);
+  const chatPage = new ChatPage(page);
+
+  await registerNewUser(page);
+  const name = uniqueProjectName('Fremdes Modell');
+  await projectsPage.createProject(name, 'pwa');
+  await projectsPage.goto();
+  await projectsPage.logout();
+
+  await registerNewUser(page);
+  await projectsPage.filterAll.click();
+  await projectsPage.openProject(name);
+
+  await expect(chatPage.readonlyHint).toBeVisible();
+  await expect(chatPage.modelSelect).toHaveCount(0);
 });

@@ -24,11 +24,21 @@ export interface Project {
   branchName: string;
   templateDir: string;
   owner: User;
+  /** Gewähltes Agenten-Modell (Dropdown im Chat, pro Projekt). */
+  agentModel: string;
   createdAt: string;
   lastActivityAt: string;
   sandboxStatus: string;
   previewHostPort: number | null;
   previewStatus: string;
+}
+
+/** Wählbares Agenten-Modell (Katalog vom Server). */
+export interface AgentModelInfo {
+  id: string;
+  label: string;
+  /** Lokales (langsames) Modell — Hinweis im UI. */
+  slow: boolean;
 }
 
 export type ChatRole = 'user' | 'assistant' | 'thinking' | 'tool' | 'system' | 'error';

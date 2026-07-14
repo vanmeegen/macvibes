@@ -1,0 +1,1 @@
+ALTER TABLE `projects` ADD `agent_model` text DEFAULT 'claude-sonnet-5' NOT NULL;

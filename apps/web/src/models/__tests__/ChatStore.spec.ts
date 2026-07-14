@@ -235,9 +235,24 @@ describe('ChatStore', () => {
       expect(store.error).toBeNull();
     });
 
-    it('setzt interrupt=true, wenn schon ein Turn läuft (Mid-Turn-Steering)', async () => {
+    it('reiht bei laufendem Turn standardmäßig EIN statt zu unterbrechen (langsame lokale Modelle)', async () => {
       gqlRequestMock.mockResolvedValue({ sendMessage: true });
       const store = new ChatStore();
+      store.projectId = 'p1';
+      store.turnActive = true;
+      store.setDraft('Neue Anweisung');
+
+      await store.send();
+
+      const [, variables] = gqlRequestMock.mock.calls[0] ?? [];
+      // Ein schnelles „weiter" darf den laufenden Turn NICHT killen — Abbruch
+      // macht nur der explizite „Turn abbrechen"-Button.
+      expect(variables).toMatchObject({ interrupt: false });
+    });
+
+    it('setzt interrupt=true bei laufendem Turn, wenn Steering aktiviert ist (Opt-in)', async () => {
+      gqlRequestMock.mockResolvedValue({ sendMessage: true });
+      const store = new ChatStore(true); // steerOnSend (VITE_MACVIBES_STEER_ON_SEND=true)
       store.projectId = 'p1';
       store.turnActive = true;
       store.setDraft('Neue Anweisung');

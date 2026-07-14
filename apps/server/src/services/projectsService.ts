@@ -7,6 +7,7 @@ import {
   projectNameSchema,
   resolveSlugCollision,
 } from '@macvibes/shared';
+import { AGENT_MODELS, DEFAULT_AGENT_MODEL, isKnownAgentModel } from '../agent/agentModel';
 import type { Db } from '../db/client';
 import { projects, users, type ProjectRow, type UserRow } from '../db/schema';
 import { DomainError } from './errors';
@@ -41,6 +42,24 @@ export async function getProject(db: Db, id: string): Promise<ProjectWithOwner |
     .limit(1);
   const row = rows[0];
   return row ? { ...row.projects, owner: row.users } : null;
+}
+
+/**
+ * Setzt das Agenten-Modell eines Projekts (Dropdown im Chat). Validiert gegen
+ * den Modellkatalog; ein laufender Turn bleibt unberührt, der NÄCHSTE Turn
+ * nutzt das neue Modell (die Session startet dabei frisch — s. chatService).
+ */
+export async function setProjectAgentModel(
+  db: Db,
+  projectId: string,
+  model: string,
+): Promise<void> {
+  if (!isKnownAgentModel(model)) {
+    throw new DomainError(
+      `Unbekanntes Modell "${model}" — wählbar sind: ${AGENT_MODELS.map((m) => m.id).join(', ')}`,
+    );
+  }
+  await db.update(projects).set({ agentModel: model }).where(eq(projects.id, projectId));
 }
 
 export async function createProject(
@@ -98,6 +117,8 @@ export async function createProject(
         devCommand: template.devCommand,
         previewPort: template.previewPort,
         ownerId: owner.id,
+        // Neue Chats starten mit dem Default-Modell (Sonnet 5, env-übersteuerbar).
+        agentModel: DEFAULT_AGENT_MODEL,
       })
       .returning();
     const project = inserted[0];

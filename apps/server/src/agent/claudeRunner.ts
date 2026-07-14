@@ -11,10 +11,21 @@ export class ClaudeAgentRunner implements AgentRunner {
   startTurn(options: TurnOptions): TurnHandle {
     const abortController = new AbortController();
 
+    // Schwächere lokale Modelle kündigen Arbeit oft nur an, statt Tools aufzurufen —
+    // diese Anweisung drängt zum direkten Handeln. Für Claude ein harmloses No-Op.
+    const appendSystemPrompt =
+      Bun.env.MACVIBES_AGENT_APPEND_PROMPT ??
+      `WICHTIG (macvibes): Kündige Änderungen nicht nur an, sondern rufe sofort die ` +
+        `passenden Tools (Write/Edit) im aktuellen Arbeitsverzeichnis auf und führe sie aus.`;
+
     const stream = query({
       prompt: options.prompt,
       options: {
         cwd: options.workspaceDir,
+        model: options.model,
+        systemPrompt: { type: 'preset', preset: 'claude_code', append: appendSystemPrompt },
+        // Projekt-Memory (AGENTS.md/CLAUDE.md) aus dem Workspace laden.
+        settingSources: ['project'],
         permissionMode: 'bypassPermissions',
         includePartialMessages: true,
         abortController,

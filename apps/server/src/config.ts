@@ -46,6 +46,13 @@ export interface ServerConfig {
     /** "claude" (Agent SDK) oder "fake" (deterministisch, für Tests/E2E). */
     backend: 'claude' | 'fake';
     fakeDelayMs: number;
+    /**
+     * Stiller Config-Warmup beim Projekt-Öffnen. Für die schnelle Claude-API eine
+     * Latenz-Optimierung; bei langsamen lokalen Modellen belegt er den Ein-Turn-
+     * Daemon so lange, dass der erste echte Prompt abgewiesen wird — dann abschalten
+     * (MACVIBES_DISABLE_PREWARM=1).
+     */
+    prewarm: boolean;
   };
   anthropic: {
     upstreamUrl: string;
@@ -54,6 +61,20 @@ export interface ServerConfig {
     /** Alternativ: klassischer API-Key. */
     apiKey: string | null;
   };
+  /**
+   * Lokaler Modell-Router (LiteLLM-Shim vor Ollama) — Ziel aller NICHT-Claude-
+   * Modelle. Der Credential-Proxy routet pro Request nach dem `model` im Body.
+   */
+  localModels: {
+    upstreamUrl: string;
+    apiKey: string;
+  };
+  /**
+   * Zusätzliche Modell-Routen (OpenRouter-Stil) aus MACVIBES_MODEL_ROUTES —
+   * JSON-Array [{prefix, upstreamUrl, apiKey?}], matcht VOR den Default-Routen.
+   * So lassen sich weitere Anbieter samt eigenem Key einhängen.
+   */
+  modelRoutes: Array<{ prefix: string; upstreamUrl: string; apiKey?: string }>;
   mirror: {
     /** GitHub-Remote für macvibes-apps (mit Token). Null = Mirror aus. */
     remoteUrl: string | null;
@@ -69,6 +90,27 @@ const DEFAULT_WEB_DIST_DIR = resolve(fileURLToPath(new URL('../../web/dist', imp
 export function resolveDbPath(): string {
   if (Bun.env.DB_PATH) return Bun.env.DB_PATH;
   return Bun.env.MACVIBES_TEST_MODE === '1' ? './data/app-test.db' : './data/app.db';
+}
+
+/** MACVIBES_MODEL_ROUTES parsen — nie werfen, ungültige Werte klar melden. */
+function parseModelRoutes(
+  raw: string | undefined,
+): Array<{ prefix: string; upstreamUrl: string; apiKey?: string }> {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) throw new Error('kein Array');
+    return parsed.filter(
+      (r): r is { prefix: string; upstreamUrl: string; apiKey?: string } =>
+        typeof r === 'object' &&
+        r !== null &&
+        typeof (r as Record<string, unknown>)['prefix'] === 'string' &&
+        typeof (r as Record<string, unknown>)['upstreamUrl'] === 'string',
+    );
+  } catch (error) {
+    console.error('MACVIBES_MODEL_ROUTES ungültig (JSON-Array erwartet) — ignoriert:', error);
+    return [];
+  }
 }
 
 export function loadConfig(): ServerConfig {
@@ -99,12 +141,19 @@ export function loadConfig(): ServerConfig {
     agent: {
       backend: Bun.env.MACVIBES_AGENT === 'fake' ? 'fake' : 'claude',
       fakeDelayMs: Number(Bun.env.MACVIBES_FAKE_DELAY_MS ?? 25),
+      prewarm:
+        Bun.env.MACVIBES_DISABLE_PREWARM !== '1' && Bun.env.MACVIBES_DISABLE_PREWARM !== 'true',
     },
     anthropic: {
       upstreamUrl: Bun.env.ANTHROPIC_UPSTREAM_URL ?? 'https://api.anthropic.com',
       oauthToken: Bun.env.CLAUDE_CODE_OAUTH_TOKEN ?? null,
       apiKey: Bun.env.ANTHROPIC_API_KEY ?? null,
     },
+    localModels: {
+      upstreamUrl: Bun.env.MACVIBES_LOCAL_UPSTREAM_URL ?? 'http://localhost:8787',
+      apiKey: Bun.env.MACVIBES_LOCAL_API_KEY ?? 'local',
+    },
+    modelRoutes: parseModelRoutes(Bun.env.MACVIBES_MODEL_ROUTES),
     mirror: {
       remoteUrl: Bun.env.MACVIBES_GITHUB_REMOTE ?? null,
       intervalMs: Number(Bun.env.MACVIBES_MIRROR_INTERVAL_MS ?? 10 * 60 * 1000),

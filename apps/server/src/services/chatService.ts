@@ -1,5 +1,5 @@
 import { asc, eq, sql } from 'drizzle-orm';
-import { AGENT_MODEL } from '../agent/agentModel';
+import { DEFAULT_AGENT_MODEL, agentTimeoutsFor, isSlowAgentModel } from '../agent/agentModel';
 import type { AgentEvent } from '../agent/events';
 import type { AgentRunner, TurnHandle } from '../agent/runner';
 import type { Db } from '../db/client';
@@ -68,6 +68,20 @@ export interface ChatServiceOptions {
   agentColdStartTimeoutMs?: number | undefined;
   /** Nachlauf nach dem Abbruch, um einen späten Fehlertext (stderr) einzusammeln. */
   agentAbortGraceMs?: number | undefined;
+  /**
+   * Timeout-Varianten für LANGSAME (lokale) Modelle — die denken vor dem ersten
+   * sichtbaren Token deutlich länger. Welche Variante greift, entscheidet das
+   * Projekt-Modell pro Turn (agentTimeoutsFor).
+   */
+  agentSlowIdleTimeoutMs?: number | undefined;
+  agentSlowFirstEventTimeoutMs?: number | undefined;
+  agentSlowColdStartTimeoutMs?: number | undefined;
+  /**
+   * Stillen Config-Warmup beim Projekt-Öffnen ausführen. Default true (Claude).
+   * Bei langsamen lokalen Modellen abschalten — der Warmup belegt sonst den
+   * Ein-Turn-Daemon und der erste echte Prompt wird abgewiesen.
+   */
+  prewarmEnabled?: boolean | undefined;
 }
 
 export class ChatService {
@@ -78,6 +92,10 @@ export class ChatService {
   private readonly firstEventTimeoutMs: number;
   private readonly coldStartTimeoutMs: number;
   private readonly abortGraceMs: number;
+  private readonly slowIdleTimeoutMs: number;
+  private readonly slowFirstEventTimeoutMs: number;
+  private readonly slowColdStartTimeoutMs: number;
+  private readonly prewarmEnabled: boolean;
 
   constructor(
     private readonly db: Db,
@@ -96,6 +114,16 @@ export class ChatService {
       this.idleTimeoutMs,
     );
     this.abortGraceMs = options.agentAbortGraceMs ?? 5_000;
+    this.slowIdleTimeoutMs = options.agentSlowIdleTimeoutMs ?? 600_000;
+    this.slowFirstEventTimeoutMs = Math.min(
+      options.agentSlowFirstEventTimeoutMs ?? 180_000,
+      this.slowIdleTimeoutMs,
+    );
+    this.slowColdStartTimeoutMs = Math.min(
+      options.agentSlowColdStartTimeoutMs ?? 300_000,
+      this.slowIdleTimeoutMs,
+    );
+    this.prewarmEnabled = options.prewarmEnabled ?? true;
   }
 
   private state(projectId: string): ProjectChatState {
@@ -136,21 +164,27 @@ export class ChatService {
    * ein Warmup läuft oder das Projekt bereits eine Session hat (Config warm).
    */
   async prewarm(projectId: string, workspaceDir: string): Promise<void> {
+    if (!this.prewarmEnabled) return;
     if (this.warmups.has(projectId)) return;
     const projectRow = (
       await this.db.select().from(projects).where(eq(projects.id, projectId)).limit(1)
     )[0];
     if (projectRow?.claudeSessionId != null) return;
-    this.warmups.set(projectId, this.runWarmup(projectId, workspaceDir));
+    const model = projectRow?.agentModel ?? DEFAULT_AGENT_MODEL;
+    // Langsame lokale Modelle NICHT vorwärmen: der minutenlange Warmup belegt
+    // den Ein-Turn-Daemon und der erste echte Prompt würde abgewiesen.
+    if (isSlowAgentModel(model)) return;
+    this.warmups.set(projectId, this.runWarmup(projectId, workspaceDir, model));
   }
 
-  private async runWarmup(projectId: string, workspaceDir: string): Promise<void> {
+  private async runWarmup(projectId: string, workspaceDir: string, model: string): Promise<void> {
     try {
       const handle = this.runner.startTurn({
         projectId,
         prompt: 'Antworte nur mit dem Wort: bereit',
         workspaceDir,
         resumeSessionId: null,
+        model,
       });
       // Events konsumieren und VERWERFEN — der Warmup initialisiert nur die
       // claude-Config in der VM, er erzeugt keine Chat-Nachrichten.
@@ -373,15 +407,29 @@ export class ChatService {
       await this.db.select().from(projects).where(eq(projects.id, projectId)).limit(1)
     )[0];
 
-    // Nur fortsetzen, wenn die Session mit dem AKTUELLEN Modell erstellt wurde.
-    // Sonst (anderes/kein Modell) frisch starten — ein --resume über einen
+    // Modell PRO PROJEKT (Dropdown im Chat); langsame lokale Modelle bekommen
+    // großzügigere Timeouts, sonst bricht der Watchdog mitten im „Denken" ab.
+    const model = projectRow?.agentModel ?? DEFAULT_AGENT_MODEL;
+    const timeouts = agentTimeoutsFor(
+      model,
+      {
+        idleMs: this.idleTimeoutMs,
+        firstEventMs: this.firstEventTimeoutMs,
+        coldStartMs: this.coldStartTimeoutMs,
+      },
+      {
+        idleMs: this.slowIdleTimeoutMs,
+        firstEventMs: this.slowFirstEventTimeoutMs,
+        coldStartMs: this.slowColdStartTimeoutMs,
+      },
+    );
+    // Nur fortsetzen, wenn die Session mit dem AKTUELLEN Projekt-Modell erstellt
+    // wurde. Sonst (anderes/kein Modell) frisch starten — ein --resume über einen
     // Modellwechsel hinweg bringt Claude Code zum Hängen ("Agent arbeitet" ewig).
     const canResume =
-      allowResume &&
-      projectRow?.claudeSessionId != null &&
-      projectRow.claudeSessionModel === AGENT_MODEL;
+      allowResume && projectRow?.claudeSessionId != null && projectRow.claudeSessionModel === model;
     // Kaltstart: erster Turn dieser (frischen) VM — mehr Zeit bis zum ersten Event.
-    const firstEventBudget = canResume ? this.firstEventTimeoutMs : this.coldStartTimeoutMs;
+    const firstEventBudget = canResume ? timeouts.firstEventMs : timeouts.coldStartMs;
     // Kontext-Recovery: OHNE Resume sähe claude nur den neuen Prompt (z. B. nur
     // „weiter"). Gibt es schon einen Chat-Verlauf (nach Interrupt-Reset oder
     // heilendem Retry), betten wir ihn in den Prompt ein — sonst startet der
@@ -394,6 +442,7 @@ export class ChatService {
       prompt,
       workspaceDir: turn.workspaceDir,
       resumeSessionId: canResume ? projectRow.claudeSessionId : null,
+      model,
     });
     state.currentHandle = handle;
     // Abbruch nachholen, falls Stop/Interrupt schon VOR diesem Zeitpunkt kam
@@ -502,7 +551,7 @@ export class ChatService {
           // NICHT fortsetzen (--resume + anderes --model hängt).
           await this.db
             .update(projects)
-            .set({ claudeSessionId: event.sessionId, claudeSessionModel: AGENT_MODEL })
+            .set({ claudeSessionId: event.sessionId, claudeSessionModel: model })
             .where(eq(projects.id, projectId));
           break;
         case 'api-retry':
@@ -529,7 +578,7 @@ export class ChatService {
           if (event.sessionId !== null) {
             await this.db
               .update(projects)
-              .set({ claudeSessionId: event.sessionId, claudeSessionModel: AGENT_MODEL })
+              .set({ claudeSessionId: event.sessionId, claudeSessionModel: model })
               .where(eq(projects.id, projectId));
           }
           break;
@@ -540,14 +589,14 @@ export class ChatService {
       for (;;) {
         // Vor dem ersten Event gilt der kurze Start-Timeout (kaputter msb-exec
         // wird in Sekunden erkannt), danach der großzügige Idle-Timeout.
-        const step = await race(sawAnyEvent ? this.idleTimeoutMs : firstEventBudget);
+        const step = await race(sawAnyEvent ? timeouts.idleMs : firstEventBudget);
         if (step === 'timeout') {
           // Stiller Hänger: abbrechen. Beim letzten Versuch als Fehler SICHTBAR
           // machen (statt ewig „Agent arbeitet"); sonst folgt gleich der Retry.
           handle.abort();
           const detail = await drainForErrorDetail();
           if (sawMeaningful || isLastAttempt) {
-            const usedMs = sawAnyEvent ? this.idleTimeoutMs : firstEventBudget;
+            const usedMs = sawAnyEvent ? timeouts.idleMs : firstEventBudget;
             const secs = Math.round(usedMs / 1000);
             await insert(
               'error',

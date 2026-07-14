@@ -66,6 +66,12 @@ function toErrorMessage(err: unknown): string {
 /** Präfix der optimistischen (noch nicht serverbestätigten) User-Bubbles. */
 const OPTIMISTIC_PREFIX = 'optimistic-';
 
+/** Liest das Steering-Flag aus der Vite-Env (Default: aus). */
+function readSteerOnSendEnv(): boolean {
+  const viteEnv = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
+  return viteEnv?.VITE_MACVIBES_STEER_ON_SEND === 'true';
+}
+
 export class ChatStore {
   messages: ChatMessage[] = [];
   turnActive = false;
@@ -92,7 +98,13 @@ export class ChatStore {
    */
   connectEpoch = 0;
 
-  constructor() {
+  /**
+   * steerOnSend: unterbricht eine Nachricht während eines laufenden Turns den
+   * Turn (altes Mid-Turn-Steering)? Default: aus — bei langsamen lokalen
+   * Modellen killt ein schnelles „weiter" sonst den Turn, bevor er ein Tool
+   * aufruft. Per VITE_MACVIBES_STEER_ON_SEND=true reaktivierbar.
+   */
+  constructor(private readonly steerOnSend: boolean = readSteerOnSendEnv()) {
     makeAutoObservable(
       this,
       { eventSource: false, reconcileTimer: false, connectEpoch: false },
@@ -235,8 +247,9 @@ export class ChatStore {
     const text = this.draft.trim();
     if (projectId === null || text.length === 0) return;
 
-    // Läuft schon ein Turn, unterbricht die neue Anweisung ihn (Mid-Turn-Steering).
-    const interrupt = this.turnActive;
+    // Läuft schon ein Turn, wird die neue Nachricht standardmäßig EINGEREIHT
+    // statt ihn abzubrechen (s. Konstruktor-Doku zu steerOnSend).
+    const interrupt = this.steerOnSend && this.turnActive;
     this.draft = '';
     this.error = null;
 

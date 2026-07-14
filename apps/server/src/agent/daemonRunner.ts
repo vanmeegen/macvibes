@@ -16,8 +16,6 @@ export interface DaemonAgentRunnerConfig {
   gateway: GatewayApi;
   /** Sandbox-Name zu einem Projekt (muss mit dem Provider übereinstimmen). */
   sandboxNameFor: (projectId: string) => string;
-  /** Modell für neue Turns (Host entscheidet, wie beim CLI-Pfad). */
-  model: string;
   /** Wartezeit, bis der Daemon der (ggf. frisch bootenden) VM verbunden ist. */
   connectTimeoutMs?: number;
   /**
@@ -41,7 +39,10 @@ export class DaemonAgentRunner implements AgentRunner {
   constructor(private readonly config: DaemonAgentRunnerConfig) {}
 
   startTurn(options: TurnOptions): TurnHandle {
-    const { gateway, model } = this.config;
+    const { gateway } = this.config;
+    // Modell pro Turn (Modellwahl pro Chat/Projekt) — der Daemon startet die
+    // SDK-Query bei Modellwechsel ohnehin frisch (daemonSession).
+    const model = options.model;
     const sandbox = this.config.sandboxNameFor(options.projectId);
     const connectTimeoutMs = this.config.connectTimeoutMs ?? 60_000;
     const ackTimeoutMs = this.config.ackTimeoutMs ?? 5_000;

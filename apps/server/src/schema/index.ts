@@ -13,11 +13,13 @@ import {
   rejectUser,
 } from '../services/authService';
 import { DomainError } from '../services/errors';
+import { AGENT_MODELS, type AgentModelInfo } from '../agent/agentModel';
 import {
   createProject,
   deleteProject,
   getProject,
   listProjects,
+  setProjectAgentModel,
   type ProjectWithOwner,
 } from '../services/projectsService';
 import { loadTemplates } from '../services/templatesService';
@@ -54,6 +56,8 @@ ProjectRef.implement({
     branchName: t.exposeString('branchName'),
     templateDir: t.exposeString('templateDir'),
     owner: t.field({ type: UserRef, resolve: (project) => project.owner }),
+    /** Gewähltes Agenten-Modell (Dropdown im Chat, pro Projekt). */
+    agentModel: t.exposeString('agentModel'),
     createdAt: t.string({ resolve: (project) => project.createdAt.toISOString() }),
     lastActivityAt: t.string({ resolve: (project) => project.lastActivityAt.toISOString() }),
     sandboxStatus: t.string({
@@ -124,12 +128,30 @@ async function touchProject(db: Db, id: string): Promise<void> {
   await db.update(projects).set({ lastActivityAt: new Date() }).where(eq(projects.id, id));
 }
 
+const AgentModelRef = builder.objectRef<AgentModelInfo>('AgentModel');
+AgentModelRef.implement({
+  fields: (t) => ({
+    id: t.exposeID('id'),
+    label: t.exposeString('label'),
+    /** Lokales (langsames) Modell — UI kann z. B. einen Hinweis anzeigen. */
+    slow: t.exposeBoolean('slow'),
+  }),
+});
+
 builder.queryType({
   fields: (t) => ({
     me: t.field({
       type: UserRef,
       nullable: true,
       resolve: (_root, _args, ctx) => ctx.currentUser,
+    }),
+    /** Wählbare Agenten-Modelle (Dropdown im Chat). */
+    agentModels: t.field({
+      type: [AgentModelRef],
+      resolve: (_root, _args, ctx) => {
+        requireUser(ctx);
+        return [...AGENT_MODELS];
+      },
     }),
     templates: t.field({
       type: [TemplateRef],
@@ -311,6 +333,24 @@ builder.mutationType({
         await getProjectOwned(ctx, user, String(args.id));
         ctx.sandboxManager.leave(String(args.id));
         return true;
+      },
+    }),
+    /**
+     * Modellwahl pro Chat/Projekt (Dropdown). Ein laufender Turn bleibt
+     * unberührt; der NÄCHSTE Turn nutzt das neue Modell — die Claude-Session
+     * startet dabei automatisch frisch (Reconciliation im chatService).
+     */
+    setProjectModel: t.field({
+      type: ProjectRef,
+      args: {
+        projectId: t.arg.id({ required: true }),
+        model: t.arg.string({ required: true }),
+      },
+      resolve: async (_root, args, ctx) => {
+        const user = requireUser(ctx);
+        const project = await getProjectOwned(ctx, user, String(args.projectId));
+        await setProjectAgentModel(ctx.db, project.id, args.model);
+        return { ...project, agentModel: args.model };
       },
     }),
     sendMessage: t.boolean({

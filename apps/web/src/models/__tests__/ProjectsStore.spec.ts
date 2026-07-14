@@ -17,6 +17,7 @@ function makeProject(overrides: Partial<Project> & { id: string }): Project {
     branchName: `vibe/${overrides.id}`,
     templateDir: 'react-starter',
     owner: { id: 'u1', username: 'alice', role: 'admin', approved: true, createdAt: 't0' },
+    agentModel: 'claude-sonnet-5',
     createdAt: '2026-07-01T10:00:00.000Z',
     lastActivityAt: '2026-07-02T12:00:00.000Z',
     sandboxStatus: 'stopped',
@@ -217,5 +218,59 @@ describe('ProjectsStore', () => {
       expect(store.pendingDeleteId).toBeNull();
       expect(store.projects).toEqual([]);
     });
+  });
+});
+
+describe('Modellwahl pro Projekt (Dropdown im Chat)', () => {
+  beforeEach(() => {
+    mockGql.mockReset();
+    window.localStorage.clear();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+
+  function storeWithProject(): ProjectsStore {
+    const store = new ProjectsStore(makeAuthStore('alice'));
+    runInAction(() => {
+      store.projects = [makeProject({ id: 'p1' })];
+    });
+    return store;
+  }
+
+  it('setProjectModel ruft die Mutation und übernimmt das neue Modell', async () => {
+    const store = storeWithProject();
+    mockGql.mockResolvedValueOnce({
+      setProjectModel: { id: 'p1', agentModel: 'qwen3.6-coder' },
+    });
+    const ok = await store.setProjectModel('p1', 'qwen3.6-coder');
+    expect(ok).toBe(true);
+    expect(store.projects[0]?.agentModel).toBe('qwen3.6-coder');
+    expect(mockGql).toHaveBeenCalledWith(expect.stringContaining('setProjectModel'), {
+      projectId: 'p1',
+      model: 'qwen3.6-coder',
+    });
+  });
+
+  it('rollt bei Server-Fehler zurück und meldet den Fehler', async () => {
+    const store = storeWithProject();
+    mockGql.mockRejectedValueOnce(new Error('Unbekanntes Modell "gpt-5"'));
+    const ok = await store.setProjectModel('p1', 'gpt-5');
+    expect(ok).toBe(false);
+    expect(store.projects[0]?.agentModel).toBe('claude-sonnet-5');
+    expect(store.error).toContain('Unbekanntes Modell');
+  });
+
+  it('load lädt den Modellkatalog (agentModels) mit', async () => {
+    const store = new ProjectsStore(makeAuthStore('alice'));
+    mockGql.mockResolvedValueOnce({
+      projects: [],
+      templates,
+      previewGatewayPort: 4173,
+      agentModels: [
+        { id: 'claude-sonnet-5', label: 'Claude Sonnet 5', slow: false },
+        { id: 'qwen3.6-coder', label: 'Qwen 27B (lokal)', slow: true },
+      ],
+    });
+    await store.load();
+    expect(store.agentModels.map((m) => m.id)).toEqual(['claude-sonnet-5', 'qwen3.6-coder']);
   });
 });

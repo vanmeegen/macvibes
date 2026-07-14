@@ -28,6 +28,11 @@ export const projects = sqliteTable(
      * bei Abweichung/NULL startet der Turn frisch.
      */
     claudeSessionModel: text('claude_session_model'),
+    /**
+     * Vom Nutzer gewähltes Agenten-Modell (Dropdown im Chat, pro Projekt).
+     * Muss im Katalog (agentModel.ts) stehen; Default = Claude Sonnet 5.
+     */
+    agentModel: text('agent_model').notNull().default('claude-sonnet-5'),
   },
   (table) => ({
     // Projektnamen müssen nur pro User eindeutig sein.

@@ -53,17 +53,19 @@ function makeRunner(gateway: FakeGateway, connectTimeoutMs = 100, ackTimeoutMs =
   return new DaemonAgentRunner({
     gateway,
     sandboxNameFor: (projectId) => `sb-${projectId}`,
-    model: 'claude-sonnet-5',
     connectTimeoutMs,
     ackTimeoutMs,
   });
 }
 
+// Das Modell kommt PRO TURN aus den Optionen (Modellwahl pro Chat/Projekt),
+// nicht mehr aus der Runner-Konfiguration.
 const TURN = {
   projectId: 'p1',
   prompt: 'Baue eine Todo-App',
   workspaceDir: '/host/pfad/egal',
   resumeSessionId: 'sess-1',
+  model: 'qwen3.6-coder',
 };
 
 /** turnId des zuerst gesendeten start-turn-Kommandos. */
@@ -99,7 +101,7 @@ describe('DaemonAgentRunner', () => {
       kind: 'start-turn',
       prompt: 'Baue eine Todo-App',
       resumeSessionId: 'sess-1',
-      model: 'claude-sonnet-5',
+      model: 'qwen3.6-coder',
     });
     const turnId = start.kind === 'start-turn' ? start.turnId : '';
 

@@ -15,6 +15,7 @@ import CircularProgress from '@mui/material/CircularProgress';
 import LinearProgress from '@mui/material/LinearProgress';
 import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
+import MenuItem from '@mui/material/MenuItem';
 import TextField from '@mui/material/TextField';
 import Toolbar from '@mui/material/Toolbar';
 import Typography from '@mui/material/Typography';
@@ -201,6 +202,32 @@ export const ChatPage = observer(function ChatPage({
           <Typography variant="h5" component="h1" sx={{ flexGrow: 1 }} noWrap>
             {project?.name ?? 'Projekt'}
           </Typography>
+          {/* Modellwahl pro Chat (nur Owner): der NÄCHSTE Turn nutzt das neue
+              Modell, die Claude-Session startet dabei frisch. */}
+          {project !== null && isOwner && projectsStore.agentModels.length > 0 && (
+            <TextField
+              select
+              size="small"
+              value={project.agentModel}
+              onChange={(event) => {
+                void projectsStore.setProjectModel(project.id, event.target.value);
+              }}
+              sx={{ mr: 2, minWidth: 200, display: { xs: 'none', sm: 'block' } }}
+              // Testselektor auf dem SICHTBAREN Select-Element (klickbar in E2E);
+              // inputProps landet beim MUI-Select nur auf dem versteckten Input.
+              SelectProps={{
+                SelectDisplayProps: {
+                  'data-testselector': 'chat-model-select',
+                } as React.HTMLAttributes<HTMLDivElement>,
+              }}
+            >
+              {projectsStore.agentModels.map((m) => (
+                <MenuItem key={m.id} value={m.id} data-testselector={`chat-model-option-${m.id}`}>
+                  {m.label}
+                </MenuItem>
+              ))}
+            </TextField>
+          )}
           {project !== null && (
             <Chip
               size="small"

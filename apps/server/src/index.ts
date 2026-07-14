@@ -11,7 +11,6 @@ import { serveWebUi } from './http/staticFiles';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { AGENT_GATEWAY_PATH, AgentGateway } from './agent/agentGateway';
-import { AGENT_MODEL } from './agent/agentModel';
 import { ClaudeAgentRunner } from './agent/claudeRunner';
 import { buildDaemonBundle } from './agent/daemonBundle';
 import { DaemonAgentRunner } from './agent/daemonRunner';
@@ -52,11 +51,19 @@ const anthropicProxy = createAnthropicProxy({
   proxyToken,
   oauthToken: config.anthropic.oauthToken,
   apiKey: config.anthropic.apiKey,
+  keepAliveMs: Bun.env.MACVIBES_PROXY_KEEPALIVE_MS
+    ? Number(Bun.env.MACVIBES_PROXY_KEEPALIVE_MS)
+    : undefined,
+  // Modell-Routing: claude-* → Anthropic, alles andere → lokaler Router (Shim);
+  // Zusatz-Routen (MACVIBES_MODEL_ROUTES) matchen davor.
+  localUpstreamUrl: config.localModels.upstreamUrl,
+  localApiKey: config.localModels.apiKey,
+  extraRoutes: config.modelRoutes,
 });
 if (config.anthropic.oauthToken === null && config.anthropic.apiKey === null) {
   console.warn(
     'Achtung: keine Claude-Credentials (CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY) — ' +
-      'der Agent in der VM kann die API nicht erreichen.',
+      'Claude-Modelle laufen dann über den lokalen Router (Fallback), nur lokale Modelle sind verlässlich.',
   );
 }
 
@@ -149,7 +156,6 @@ function selectAgentRunner() {
     return new DaemonAgentRunner({
       gateway: agentGateway,
       sandboxNameFor: microsandboxSandboxName,
-      model: AGENT_MODEL,
       connectTimeoutMs: 60_000,
     });
   }
@@ -185,6 +191,17 @@ const chatService = new ChatService(
     agentColdStartTimeoutMs: Bun.env.MACVIBES_AGENT_COLD_START_TIMEOUT_MS
       ? Number(Bun.env.MACVIBES_AGENT_COLD_START_TIMEOUT_MS)
       : undefined,
+    // Timeouts für LANGSAME (lokale) Modelle — greift pro Turn je nach Projekt-Modell.
+    agentSlowIdleTimeoutMs: Bun.env.MACVIBES_AGENT_SLOW_IDLE_TIMEOUT_MS
+      ? Number(Bun.env.MACVIBES_AGENT_SLOW_IDLE_TIMEOUT_MS)
+      : undefined,
+    agentSlowFirstEventTimeoutMs: Bun.env.MACVIBES_AGENT_SLOW_FIRST_EVENT_TIMEOUT_MS
+      ? Number(Bun.env.MACVIBES_AGENT_SLOW_FIRST_EVENT_TIMEOUT_MS)
+      : undefined,
+    agentSlowColdStartTimeoutMs: Bun.env.MACVIBES_AGENT_SLOW_COLD_START_TIMEOUT_MS
+      ? Number(Bun.env.MACVIBES_AGENT_SLOW_COLD_START_TIMEOUT_MS)
+      : undefined,
+    prewarmEnabled: config.agent.prewarm,
   },
 );
 chatServiceRef = chatService;

@@ -3,7 +3,6 @@ import type { Server } from 'bun';
 import { join } from 'node:path';
 import { AGENT_GATEWAY_PATH, AgentGateway } from '../../agent/agentGateway';
 import type { GatewaySocketData } from '../../agent/agentGateway';
-import { AGENT_MODEL } from '../../agent/agentModel';
 import { buildDaemonBundle } from '../../agent/daemonBundle';
 import { DaemonAgentRunner } from '../../agent/daemonRunner';
 import type { AgentEvent } from '../../agent/events';
@@ -157,7 +156,6 @@ beforeAll(async () => {
   runner = new DaemonAgentRunner({
     gateway,
     sandboxNameFor: () => SANDBOX_NAME,
-    model: AGENT_MODEL,
     connectTimeoutMs: 120_000,
   });
 }, 900_000);
@@ -292,6 +290,7 @@ describe.skipIf(!enabled)(
               prompt: 'Antworte ausschließlich mit dem Wort: bereit. Merke dir die Zahl 42.',
               workspaceDir: '/egal-host-pfad',
               resumeSessionId: null,
+              model: 'claude-sonnet-5',
             }).events,
           );
         let turn1 = await startTurn1();
@@ -326,6 +325,7 @@ describe.skipIf(!enabled)(
           prompt: 'Zähle langsam und ausführlich von 1 bis 100, jede Zahl einzeln erklärt.',
           workspaceDir: '/egal-host-pfad',
           resumeSessionId: null,
+          model: 'claude-sonnet-5',
         });
         const turn2Promise = collectTurn(handle2.events);
         // Auf das erste Lebenszeichen warten, dann abbrechen.
@@ -343,6 +343,7 @@ describe.skipIf(!enabled)(
               'Welche Zahl solltest du dir vorhin merken? Antworte ausschließlich mit der Zahl.',
             workspaceDir: '/egal-host-pfad',
             resumeSessionId: null,
+            model: 'claude-sonnet-5',
           }).events,
         );
         expect(turn3.at(-1)?.type).toBe('turn-completed');

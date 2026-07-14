@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
-import { AGENT_MODEL } from '../../agent/agentModel';
+import { DEFAULT_AGENT_MODEL } from '../../agent/agentModel';
 import { FakeAgentRunner } from '../../agent/fakeRunner';
 import type { AgentEvent } from '../../agent/events';
 import type { AgentRunner, TurnHandle, TurnOptions } from '../../agent/runner';
@@ -145,7 +145,7 @@ describe('Config-Warmup: erster Turn wird schnell, weil beim Öffnen vorgewärmt
     const { db, service, projectId } = await setup(runner);
     await db
       .update(projects)
-      .set({ claudeSessionId: 'vorhanden', claudeSessionModel: AGENT_MODEL })
+      .set({ claudeSessionId: 'vorhanden', claudeSessionModel: DEFAULT_AGENT_MODEL })
       .where(eq(projects.id, projectId));
     await service.prewarm(projectId, '/tmp/ws');
     await Bun.sleep(50);
@@ -319,7 +319,7 @@ describe('Kontext-Recovery: frischer Start bekommt die Chat-Historie mitgegeben'
     const { db, service, projectId } = await setup(cap.runner);
     await db
       .update(projects)
-      .set({ claudeSessionId: 's1', claudeSessionModel: AGENT_MODEL })
+      .set({ claudeSessionId: 's1', claudeSessionModel: DEFAULT_AGENT_MODEL })
       .where(eq(projects.id, projectId));
     await service.postMessage(projectId, 'user', 'alter turn');
     await service.sendMessage(sendInput(projectId, 'neuer prompt'));
@@ -364,7 +364,7 @@ describe('Retry ohne Session-Resume: hängender/korrupter Resume heilt sich selb
     const { db, service, projectId } = await setup(runner, 10_000, 40, 40, 40);
     await db
       .update(projects)
-      .set({ claudeSessionId: 'korrupt', claudeSessionModel: AGENT_MODEL })
+      .set({ claudeSessionId: 'korrupt', claudeSessionModel: DEFAULT_AGENT_MODEL })
       .where(eq(projects.id, projectId));
     await service.sendMessage(sendInput(projectId, 'weiter'));
     await waitFor(() => !service.isTurnActive(projectId), 3000);
@@ -478,7 +478,7 @@ describe('Session-Resume nur bei gleichem Modell (Hänger-Schutz)', () => {
     await waitFor(() => !service.isTurnActive(projectId));
     const row = (await db.select().from(projects).where(eq(projects.id, projectId)))[0];
     expect(row?.claudeSessionId).toBe('neue-session');
-    expect(row?.claudeSessionModel).toBe(AGENT_MODEL);
+    expect(row?.claudeSessionModel).toBe(DEFAULT_AGENT_MODEL);
   });
 
   test('resumed eine Session mit passendem Modell', async () => {
@@ -486,7 +486,7 @@ describe('Session-Resume nur bei gleichem Modell (Hänger-Schutz)', () => {
     const { db, service, projectId } = await setup(cap.runner);
     await db
       .update(projects)
-      .set({ claudeSessionId: 'alte-session', claudeSessionModel: AGENT_MODEL })
+      .set({ claudeSessionId: 'alte-session', claudeSessionModel: DEFAULT_AGENT_MODEL })
       .where(eq(projects.id, projectId));
     await service.sendMessage(sendInput(projectId, 'Weiter'));
     await waitFor(() => !service.isTurnActive(projectId));
@@ -516,6 +516,109 @@ describe('Session-Resume nur bei gleichem Modell (Hänger-Schutz)', () => {
     await service.sendMessage(sendInput(projectId, 'Weiter'));
     await waitFor(() => !service.isTurnActive(projectId));
     expect(cap.seen()).toBeNull();
+  });
+});
+
+describe('Modellwahl pro Projekt (Dropdown im Chat)', () => {
+  /** Runner, der das übergebene Modell + resumeSessionId festhält. */
+  function modelCapturingRunner(): {
+    runner: AgentRunner;
+    model: () => string | null;
+    resume: () => string | null;
+  } {
+    let model: string | null = null;
+    let resume: string | null = null;
+    const runner: AgentRunner = {
+      startTurn(options: TurnOptions): TurnHandle {
+        model = options.model;
+        resume = options.resumeSessionId;
+        const events = (async function* () {
+          yield { type: 'turn-completed', sessionId: 'sess-1' } as const;
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    return { runner, model: () => model, resume: () => resume };
+  }
+
+  test('der Turn läuft mit dem Projekt-Modell (nicht mit einem globalen Default)', async () => {
+    const cap = modelCapturingRunner();
+    const { db, service, projectId } = await setup(cap.runner);
+    await db
+      .update(projects)
+      .set({ agentModel: 'qwen3.6-coder' })
+      .where(eq(projects.id, projectId));
+    await service.sendMessage(sendInput(projectId, 'Bau ein Board'));
+    await waitFor(() => !service.isTurnActive(projectId));
+    expect(cap.model()).toBe('qwen3.6-coder');
+  });
+
+  test('ohne explizite Wahl läuft der Turn mit dem Default (Sonnet 5)', async () => {
+    const cap = modelCapturingRunner();
+    const { service, projectId } = await setup(cap.runner);
+    await service.sendMessage(sendInput(projectId, 'Bau'));
+    await waitFor(() => !service.isTurnActive(projectId));
+    expect(cap.model()).toBe(DEFAULT_AGENT_MODEL);
+  });
+
+  test('die Session wird mit dem PROJEKT-Modell gespeichert', async () => {
+    const cap = modelCapturingRunner();
+    const { db, service, projectId } = await setup(cap.runner);
+    await db
+      .update(projects)
+      .set({ agentModel: 'claude-haiku-4-5' })
+      .where(eq(projects.id, projectId));
+    await service.sendMessage(sendInput(projectId, 'Bau'));
+    await waitFor(() => !service.isTurnActive(projectId));
+    const row = (await db.select().from(projects).where(eq(projects.id, projectId)))[0];
+    expect(row?.claudeSessionModel).toBe('claude-haiku-4-5');
+  });
+
+  test('prewarm überspringt langsame (lokale) Modelle — der Warmup würde den Daemon blockieren', async () => {
+    const prompts: string[] = [];
+    const runner: AgentRunner = {
+      startTurn(options: TurnOptions): TurnHandle {
+        prompts.push(options.prompt);
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          yield { type: 'turn-completed', sessionId: 'w' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { db, service, projectId } = await setup(runner);
+    await db
+      .update(projects)
+      .set({ agentModel: 'qwen3.6-coder' })
+      .where(eq(projects.id, projectId));
+    await service.prewarm(projectId, '/tmp/ws');
+    await Bun.sleep(30);
+    expect(prompts).toHaveLength(0);
+  });
+
+  test('Modellwechsel im Projekt startet die Session frisch, gleiches Modell resumed', async () => {
+    const cap = modelCapturingRunner();
+    const { db, service, projectId } = await setup(cap.runner);
+    // Session wurde unter qwen erstellt, Projekt steht jetzt auf Opus → kein Resume.
+    await db
+      .update(projects)
+      .set({
+        agentModel: 'claude-opus-4-8',
+        claudeSessionId: 'qwen-session',
+        claudeSessionModel: 'qwen3.6-coder',
+      })
+      .where(eq(projects.id, projectId));
+    await service.sendMessage(sendInput(projectId, 'Weiter'));
+    await waitFor(() => !service.isTurnActive(projectId));
+    expect(cap.resume()).toBeNull();
+
+    // Jetzt passt das Session-Modell zum Projekt-Modell → Resume.
+    await db
+      .update(projects)
+      .set({ claudeSessionId: 'opus-session', claudeSessionModel: 'claude-opus-4-8' })
+      .where(eq(projects.id, projectId));
+    await service.sendMessage(sendInput(projectId, 'Und weiter'));
+    await waitFor(() => !service.isTurnActive(projectId));
+    expect(cap.resume()).toBe('opus-session');
   });
 });
 
