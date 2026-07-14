@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -68,6 +69,12 @@ export interface ServerConfig {
   localModels: {
     upstreamUrl: string;
     apiKey: string;
+    /**
+     * Startkommando für den Shim (Autostart durch macvibes). Env
+     * MACVIBES_LOCAL_ROUTER_CMD; sonst Auto-Detect des Nachbar-Repos
+     * (mac-local-coding-agent/run-anthropic-shim.sh). null = kein Autostart.
+     */
+    routerCommand: string | null;
   };
   /**
    * Zusätzliche Modell-Routen (OpenRouter-Stil) aus MACVIBES_MODEL_ROUTES —
@@ -113,6 +120,16 @@ function parseModelRoutes(
   }
 }
 
+/**
+ * Auto-Detect des Shim-Startskripts im Nachbar-Repo. Findet sich dort nichts,
+ * gibt es keinen Autostart (null) — der Server meldet das beim Boot klar.
+ */
+function detectLocalRouterCommand(): string | null {
+  const repoRoot = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
+  const script = join(repoRoot, '..', 'mac-local-coding-agent', 'run-anthropic-shim.sh');
+  return existsSync(script) ? script : null;
+}
+
 export function loadConfig(): ServerConfig {
   const macvibesHome = Bun.env.MACVIBES_HOME ?? join(homedir(), 'macvibes');
   return {
@@ -152,6 +169,7 @@ export function loadConfig(): ServerConfig {
     localModels: {
       upstreamUrl: Bun.env.MACVIBES_LOCAL_UPSTREAM_URL ?? 'http://localhost:8787',
       apiKey: Bun.env.MACVIBES_LOCAL_API_KEY ?? 'local',
+      routerCommand: Bun.env.MACVIBES_LOCAL_ROUTER_CMD ?? detectLocalRouterCommand(),
     },
     modelRoutes: parseModelRoutes(Bun.env.MACVIBES_MODEL_ROUTES),
     mirror: {

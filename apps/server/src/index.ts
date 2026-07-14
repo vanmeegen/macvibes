@@ -30,6 +30,7 @@ import { ensureAdmin, resolveSession } from './services/authService';
 import { ChatService } from './services/chatService';
 import { ensureBareRepo } from './services/gitService';
 import { startMirrorScheduler } from './services/mirrorService';
+import { startLocalRouter } from './services/localRouterService';
 import { workspaceDirFor } from './services/workspaceService';
 
 const config = loadConfig();
@@ -65,6 +66,25 @@ if (config.anthropic.oauthToken === null && config.anthropic.apiKey === null) {
     'Achtung: keine Claude-Credentials (CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY) — ' +
       'Claude-Modelle laufen dann über den lokalen Router (Fallback), nur lokale Modelle sind verlässlich.',
   );
+}
+
+// Lokalen Modell-Router (Anthropic-Shim) MITSTARTEN — im Hintergrund, damit der
+// Server sofort hochkommt; qwen-Turns vor Router-Readiness scheitern mit klarer
+// 502 des Proxys. Ein extern laufender Shim wird erkannt und nie angefasst.
+// Im Fake-Agent-Modus (Tests/E2E) gibt es keine Modell-Requests → kein Autostart.
+const localRouterReady =
+  config.agent.backend === 'claude'
+    ? startLocalRouter({
+        upstreamUrl: config.localModels.upstreamUrl,
+        command: config.localModels.routerCommand,
+        logFile: join(config.macvibesHome, 'local-router.log'),
+      })
+    : Promise.resolve({ state: 'unavailable' as const, stop: async () => {} });
+// Selbst gestarteten Shim beim Beenden mitnehmen (SIGTERM = bun run shutdown).
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.on(signal, () => {
+    void localRouterReady.then((router) => router.stop()).finally(() => process.exit(0));
+  });
 }
 
 // chatService entsteht erst nach dem Manager — Hooks greifen über diese Referenz.
