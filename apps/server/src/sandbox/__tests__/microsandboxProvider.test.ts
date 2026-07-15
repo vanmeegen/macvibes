@@ -46,7 +46,7 @@ beforeAll(async () => {
       await buildTemplateBaseline({
         templatesDir: templates,
         templateDir: FIXTURE_TEMPLATE_DIR,
-        image: 'oven/bun',
+        image: 'oven/bun:1.3.14',
       });
     } finally {
       await removeDir(templates);
@@ -72,7 +72,7 @@ function providerConfig(home: string, bare: string): MicrosandboxProviderConfig 
   return {
     macvibesHome: home,
     bareRepoPath: bare,
-    image: 'oven/bun',
+    image: 'oven/bun:1.3.14',
     cpus: 1,
     memoryMib: 512,
     agentDaemon: {

@@ -106,6 +106,10 @@ bun run start              # Produktion: Web bauen + Server (liefert dist aus, L
 
 ## Sandbox / VM (microsandbox)
 
+- **Bun ist auf 1.3.14 gepinnt** (Host via `brew pin bun`, VM-Image
+  `oven/bun:1.3.14` in `config.ts`, `@types/bun` exakt in allen Manifesten):
+  das nächste große Bun ist ein Rust-Rewrite — NICHT upgraden ohne intensiven
+  Test aller Sandbox-/Agent-Pfade.
 - `msb` muss installiert sein (`brew install superradcompany/tap/microsandbox`).
   Ohne `msb` fällt der Server automatisch auf den Prozess-Provider zurück
   (kein VM-Isolat — nur Dev). Erzwingen: `MACVIBES_SANDBOX=microsandbox|process`.

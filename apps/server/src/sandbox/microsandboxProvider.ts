@@ -23,7 +23,7 @@ export interface AgentDaemonProviderConfig {
 export interface MicrosandboxProviderConfig {
   macvibesHome: string;
   bareRepoPath: string;
-  /** OCI-Image für die Sandbox-VMs (Default: oven/bun). */
+  /** OCI-Image für die Sandbox-VMs (Default: oven/bun, Version gepinnt). */
   image: string;
   cpus: number;
   memoryMib: number;

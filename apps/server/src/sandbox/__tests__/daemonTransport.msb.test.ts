@@ -118,7 +118,7 @@ beforeAll(async () => {
   const bare = join(home, 'macvibes-apps.git');
   await ensureBareRepo(bare);
   await createProjectBranch(bare, `marco/${PROJECT_ID}`, join(templates, templateDir));
-  await buildTemplateBaseline({ templatesDir: templates, templateDir, image: 'oven/bun' });
+  await buildTemplateBaseline({ templatesDir: templates, templateDir, image: 'oven/bun:1.3.14' });
 
   const bundleDir = join(home, 'agent-daemon');
   await buildDaemonBundle(bundleDir);
@@ -129,7 +129,7 @@ beforeAll(async () => {
   const provider = new MicrosandboxSandboxProvider({
     macvibesHome: home,
     bareRepoPath: bare,
-    image: 'oven/bun',
+    image: 'oven/bun:1.3.14',
     cpus: 2,
     memoryMib: 1024,
     agentDaemon: {
