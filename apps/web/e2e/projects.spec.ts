@@ -40,7 +40,7 @@ test('lehnt doppelte Projektnamen desselben Users verständlich ab', async ({ pa
   await expect(projectsPage.dialogError).toBeVisible();
 });
 
-test('Filter: „Nur meine" ist Default, „Alle" zeigt fremde Projekte ohne Lösch-Button', async ({
+test('Filter: „Nur meine" ist Default, „Alle" zeigt fremde Projekte ohne Kartenmenü', async ({
   page,
 }) => {
   const projectsPage = new ProjectsPage(page);
@@ -57,12 +57,28 @@ test('Filter: „Nur meine" ist Default, „Alle" zeigt fremde Projekte ohne Lö
   await expect(projectsPage.newProjectFab).toBeVisible();
   await expect(projectsPage.cardByName(foreignProject)).not.toBeVisible();
 
-  // „Alle": sichtbar, aber ohne Lösch-Button; Owner wird angezeigt.
+  // „Alle": sichtbar, aber ohne Kartenmenü (Umbenennen/Löschen); Owner wird angezeigt.
   await projectsPage.filterAll.click();
   const foreignCard = projectsPage.cardByName(foreignProject);
   await expect(foreignCard).toBeVisible();
   await expect(foreignCard).toContainText(ownerName);
-  await expect(projectsPage.deleteButtonIn(foreignCard)).toHaveCount(0);
+  await expect(projectsPage.menuButtonIn(foreignCard)).toHaveCount(0);
+});
+
+test('benennt ein eigenes Projekt über das Kartenmenü um', async ({ page }) => {
+  await registerNewUser(page);
+  const projectsPage = new ProjectsPage(page);
+  const name = uniqueProjectName('Alter Name');
+  const newName = uniqueProjectName('Neuer Name');
+
+  await projectsPage.createProject(name, 'pwa');
+  await projectsPage.goto();
+  await expect(projectsPage.cardByName(name)).toBeVisible();
+
+  await projectsPage.renameProject(name, newName);
+
+  await expect(projectsPage.cardByName(newName)).toBeVisible();
+  await expect(projectsPage.cardByName(name)).not.toBeVisible();
 });
 
 test('löscht ein eigenes Projekt nach Bestätigung', async ({ page }) => {

@@ -53,8 +53,26 @@ export class ProjectsPage {
     return this.allCards.filter({ hasText: name });
   }
 
-  deleteButtonIn(card: Locator): Locator {
-    return card.locator('[data-testselector^="project-delete-"]');
+  /** Kebab-Menü (Umbenennen/Löschen) — nur auf eigenen Karten vorhanden. */
+  menuButtonIn(card: Locator): Locator {
+    return card.locator('[data-testselector^="project-menu-"]');
+  }
+
+  /** Menü-Einträge rendern in einem Portal, daher page-weit selektieren. */
+  get renameMenuItem(): Locator {
+    return this.page.locator('[data-testselector^="project-rename-"]');
+  }
+
+  get deleteMenuItem(): Locator {
+    return this.page.locator('[data-testselector^="project-delete-"]');
+  }
+
+  get renameNameInput(): Locator {
+    return this.page.getByTestId('rename-project-name');
+  }
+
+  get renameConfirmButton(): Locator {
+    return this.page.getByTestId('rename-confirm');
   }
 
   statusChipIn(card: Locator): Locator {
@@ -96,8 +114,16 @@ export class ProjectsPage {
   }
 
   async deleteProject(name: string): Promise<void> {
-    await this.deleteButtonIn(this.cardByName(name)).click();
+    await this.menuButtonIn(this.cardByName(name)).click();
+    await this.deleteMenuItem.click();
     await this.deleteConfirmButton.click();
+  }
+
+  async renameProject(name: string, newName: string): Promise<void> {
+    await this.menuButtonIn(this.cardByName(name)).click();
+    await this.renameMenuItem.click();
+    await this.renameNameInput.fill(newName);
+    await this.renameConfirmButton.click();
   }
 
   async openProject(name: string): Promise<void> {

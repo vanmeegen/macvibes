@@ -19,6 +19,7 @@ import {
   deleteProject,
   getProject,
   listProjects,
+  renameProject,
   setProjectAgentModel,
   type ProjectWithOwner,
 } from '../services/projectsService';
@@ -299,6 +300,16 @@ builder.mutationType({
         await deleteProject(ctx.db, user, String(args.id), ctx.config.macvibesHome);
         return true;
       },
+    }),
+    /** Benennt ein Projekt um — nur der Anzeigename, der Git-Branch bleibt. */
+    renameProject: t.field({
+      type: ProjectRef,
+      args: {
+        id: t.arg.id({ required: true }),
+        name: t.arg.string({ required: true }),
+      },
+      resolve: (_root, args, ctx) =>
+        renameProject(ctx.db, requireUser(ctx), String(args.id), args.name),
     }),
     enterProject: t.field({
       type: ProjectRef,

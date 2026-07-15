@@ -170,4 +170,55 @@ describe('ProjectsPage', () => {
     await screen.findByText('Mein Vibe-Projekt');
     expect(screen.getByTestId('current-username')).toHaveTextContent('alice');
   });
+
+  describe('Projektmenü (Umbenennen/Löschen)', () => {
+    it('zeigt das Menü nur auf eigenen Projektkarten', async () => {
+      const { projectsStore } = renderPage();
+      await screen.findByText('Mein Vibe-Projekt');
+      runInAction(() => projectsStore.setFilter('all'));
+      await screen.findByText('Bobs Projekt');
+
+      expect(screen.getByTestId('project-menu-p1')).toBeInTheDocument();
+      expect(screen.queryByTestId('project-menu-p2')).not.toBeInTheDocument();
+    });
+
+    it('öffnet über das Menü den Umbenennen-Dialog mit vorgefülltem Namen und benennt um', async () => {
+      renderPage();
+      await screen.findByText('Mein Vibe-Projekt');
+      // Nach renderPage() setzen — renderPage() registriert selbst einen Mock.
+      mockGql.mockImplementation(async (query: string) =>
+        query.includes('renameProject')
+          ? { renameProject: { id: 'p1', name: 'Umbenannt' } }
+          : { projects, templates },
+      );
+
+      fireEvent.click(screen.getByTestId('project-menu-p1'));
+      fireEvent.click(await screen.findByTestId('project-rename-p1'));
+
+      const nameInput = document.querySelector<HTMLInputElement>(
+        '[data-testselector="rename-project-name"]',
+      );
+      expect(nameInput).not.toBeNull();
+      expect(nameInput?.value).toBe('Mein Vibe-Projekt');
+
+      fireEvent.change(nameInput as HTMLInputElement, { target: { value: 'Umbenannt' } });
+      fireEvent.click(screen.getByTestId('rename-confirm'));
+
+      expect(await screen.findByText('Umbenannt')).toBeInTheDocument();
+      expect(mockGql).toHaveBeenCalledWith(expect.stringContaining('renameProject'), {
+        id: 'p1',
+        name: 'Umbenannt',
+      });
+    });
+
+    it('öffnet über das Menü den Lösch-Bestätigungsdialog', async () => {
+      renderPage();
+      await screen.findByText('Mein Vibe-Projekt');
+
+      fireEvent.click(screen.getByTestId('project-menu-p1'));
+      fireEvent.click(await screen.findByTestId('project-delete-p1'));
+
+      expect(await screen.findByText('Projekt löschen?')).toBeInTheDocument();
+    });
+  });
 });

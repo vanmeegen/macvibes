@@ -1,5 +1,7 @@
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
+import EditIcon from '@mui/icons-material/Edit';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
 import Alert from '@mui/material/Alert';
 import AppBar from '@mui/material/AppBar';
 import Box from '@mui/material/Box';
@@ -18,6 +20,10 @@ import Fab from '@mui/material/Fab';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import Grid from '@mui/material/Grid';
 import IconButton from '@mui/material/IconButton';
+import ListItemIcon from '@mui/material/ListItemIcon';
+import ListItemText from '@mui/material/ListItemText';
+import Menu from '@mui/material/Menu';
+import MenuItem from '@mui/material/MenuItem';
 import Radio from '@mui/material/Radio';
 import RadioGroup from '@mui/material/RadioGroup';
 import Stack from '@mui/material/Stack';
@@ -28,7 +34,7 @@ import Toolbar from '@mui/material/Toolbar';
 import Typography from '@mui/material/Typography';
 import { observer } from 'mobx-react-lite';
 import type { MouseEvent } from 'react';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Project } from '../api/types';
 import type { AuthStore } from '../models/AuthStore';
@@ -50,11 +56,13 @@ const ProjectCard = observer(function ProjectCard({
   projectsStore: ProjectsStore;
 }): JSX.Element {
   const navigate = useNavigate();
+  // Anker des Karten-Menüs — reiner View-Zustand (DOM-Referenz), daher lokal.
+  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
 
-  const handleDelete = (event: MouseEvent<HTMLButtonElement>): void => {
+  const handleMenuOpen = (event: MouseEvent<HTMLButtonElement>): void => {
     event.stopPropagation();
     event.preventDefault();
-    projectsStore.requestDelete(project.id);
+    setMenuAnchor(event.currentTarget);
   };
 
   return (
@@ -95,15 +103,47 @@ const ProjectCard = observer(function ProjectCard({
         </CardContent>
       </CardActionArea>
       {projectsStore.isOwn(project) && (
-        <IconButton
-          aria-label="Projekt löschen"
-          size="small"
-          onClick={handleDelete}
-          sx={{ position: 'absolute', right: 8, bottom: 8 }}
-          data-testselector={`project-delete-${project.id}`}
-        >
-          <DeleteIcon fontSize="small" />
-        </IconButton>
+        <>
+          <IconButton
+            aria-label="Projektmenü"
+            size="small"
+            onClick={handleMenuOpen}
+            sx={{ position: 'absolute', right: 8, bottom: 8 }}
+            data-testselector={`project-menu-${project.id}`}
+          >
+            <MoreVertIcon fontSize="small" />
+          </IconButton>
+          <Menu
+            anchorEl={menuAnchor}
+            open={menuAnchor !== null}
+            onClose={() => setMenuAnchor(null)}
+          >
+            <MenuItem
+              onClick={() => {
+                setMenuAnchor(null);
+                projectsStore.requestRename(project.id);
+              }}
+              data-testselector={`project-rename-${project.id}`}
+            >
+              <ListItemIcon>
+                <EditIcon fontSize="small" />
+              </ListItemIcon>
+              <ListItemText>Umbenennen</ListItemText>
+            </MenuItem>
+            <MenuItem
+              onClick={() => {
+                setMenuAnchor(null);
+                projectsStore.requestDelete(project.id);
+              }}
+              data-testselector={`project-delete-${project.id}`}
+            >
+              <ListItemIcon>
+                <DeleteIcon fontSize="small" />
+              </ListItemIcon>
+              <ListItemText>Löschen</ListItemText>
+            </MenuItem>
+          </Menu>
+        </>
       )}
     </Card>
   );
@@ -201,6 +241,66 @@ const CreateProjectDialog = observer(function CreateProjectDialog({
           data-testselector="new-project-submit"
         >
           Erstellen
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+});
+
+const RenameProjectDialog = observer(function RenameProjectDialog({
+  projectsStore,
+}: {
+  projectsStore: ProjectsStore;
+}): JSX.Element {
+  const project = projectsStore.pendingRenameProject;
+  return (
+    // disableRestoreFocus: sonst klaut MUIs Focus-Restore dem Namensfeld den
+    // Autofokus beim Öffnen des Dialogs.
+    <Dialog
+      open={project !== null}
+      onClose={projectsStore.cancelRename}
+      fullWidth
+      maxWidth="sm"
+      disableRestoreFocus
+    >
+      <DialogTitle>Projekt umbenennen</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ mt: 1 }}>
+          {projectsStore.renameError !== null && (
+            <Alert severity="error" data-testselector="rename-project-error">
+              {projectsStore.renameError}
+            </Alert>
+          )}
+          <TextField
+            label="Projektname"
+            value={projectsStore.renameName}
+            onChange={(e) => projectsStore.setRenameName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && projectsStore.canConfirmRename) {
+                e.preventDefault();
+                void projectsStore.confirmRename();
+              }
+            }}
+            autoFocus
+            inputProps={{ 'data-testselector': 'rename-project-name' }}
+          />
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button
+          onClick={projectsStore.cancelRename}
+          color="inherit"
+          data-testselector="rename-cancel"
+        >
+          Abbrechen
+        </Button>
+        <Button
+          variant="contained"
+          onClick={() => void projectsStore.confirmRename()}
+          disabled={!projectsStore.canConfirmRename}
+          data-testselector="rename-confirm"
+        >
+          Umbenennen
         </Button>
       </DialogActions>
     </Dialog>
@@ -370,6 +470,7 @@ export const ProjectsPage = observer(function ProjectsPage({
         projectsStore={projectsStore}
         onCreated={(projectId) => navigate(`/projects/${projectId}`)}
       />
+      <RenameProjectDialog projectsStore={projectsStore} />
       <DeleteConfirmDialog projectsStore={projectsStore} />
     </Box>
   );

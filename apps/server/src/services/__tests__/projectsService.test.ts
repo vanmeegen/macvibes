@@ -3,7 +3,13 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { DomainError } from '../errors';
 import { ensureBareRepo, listBranches } from '../gitService';
-import { createProject, deleteProject, getProject, listProjects } from '../projectsService';
+import {
+  createProject,
+  deleteProject,
+  getProject,
+  listProjects,
+  renameProject,
+} from '../projectsService';
 import { projectVolumeDir } from '../workspaceService';
 import {
   createTempDir,
@@ -93,6 +99,74 @@ describe('createProject', () => {
     await expect(
       createProject(db, config, marco, { name: '!!!', templateDir: 'pwa' }),
     ).rejects.toThrow(DomainError);
+  });
+});
+
+describe('renameProject', () => {
+  test('ändert den Anzeigenamen, der Git-Branch bleibt stabil', async () => {
+    const { db, config, marco } = await setup();
+    const project = await createProject(db, config, marco, {
+      name: 'Dashboard',
+      templateDir: 'pwa',
+    });
+
+    const renamed = await renameProject(db, marco, project.id, 'Cockpit');
+
+    expect(renamed.name).toBe('Cockpit');
+    expect(renamed.branchName).toBe('marco/dashboard');
+    const reloaded = await getProject(db, project.id);
+    expect(reloaded?.name).toBe('Cockpit');
+    expect(reloaded?.branchName).toBe('marco/dashboard');
+    expect(await listBranches(config.bareRepoPath)).toEqual(['marco/dashboard']);
+  });
+
+  test('verweigert Umbenennen für fremde Projekte', async () => {
+    const { db, config, marco } = await setup();
+    const gast = await createUser(db, 'gast');
+    const project = await createProject(db, config, marco, {
+      name: 'Dashboard',
+      templateDir: 'pwa',
+    });
+    await expect(renameProject(db, gast, project.id, 'Meins')).rejects.toThrow(
+      'Nur der Eigentümer',
+    );
+    expect((await getProject(db, project.id))?.name).toBe('Dashboard');
+  });
+
+  test('lehnt doppelten Namen desselben Users ab', async () => {
+    const { db, config, marco } = await setup();
+    await createProject(db, config, marco, { name: 'Dashboard', templateDir: 'pwa' });
+    const second = await createProject(db, config, marco, { name: 'Notizen', templateDir: 'pwa' });
+    await expect(renameProject(db, marco, second.id, 'Dashboard')).rejects.toThrow(
+      'bereits ein Projekt',
+    );
+  });
+
+  test('erlaubt das erneute Speichern des unveränderten Namens', async () => {
+    const { db, config, marco } = await setup();
+    const project = await createProject(db, config, marco, {
+      name: 'Dashboard',
+      templateDir: 'pwa',
+    });
+    const renamed = await renameProject(db, marco, project.id, 'Dashboard');
+    expect(renamed.name).toBe('Dashboard');
+  });
+
+  test('lehnt ungültige Namen ab', async () => {
+    const { db, config, marco } = await setup();
+    const project = await createProject(db, config, marco, {
+      name: 'Dashboard',
+      templateDir: 'pwa',
+    });
+    await expect(renameProject(db, marco, project.id, '   ')).rejects.toThrow();
+    expect((await getProject(db, project.id))?.name).toBe('Dashboard');
+  });
+
+  test('meldet unbekannte Projekte als Fehler', async () => {
+    const { db, marco } = await setup();
+    await expect(renameProject(db, marco, 'gibt-es-nicht', 'Egal')).rejects.toThrow(
+      'Projekt nicht gefunden',
+    );
   });
 });
 

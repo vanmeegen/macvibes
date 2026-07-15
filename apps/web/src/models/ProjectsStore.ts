@@ -47,6 +47,15 @@ const DELETE_PROJECT_MUTATION = /* GraphQL */ `
   }
 `;
 
+const RENAME_PROJECT_MUTATION = /* GraphQL */ `
+  mutation RenameProject($id: ID!, $name: String!) {
+    renameProject(id: $id, name: $name) {
+      id
+      name
+    }
+  }
+`;
+
 const ENTER_PROJECT_MUTATION = /* GraphQL */ `
   mutation EnterProject($id: ID!) {
     enterProject(id: $id) {
@@ -150,6 +159,12 @@ export class ProjectsStore {
   loading = false;
   /** Projekt-ID, für die gerade der Lösch-Bestätigungsdialog offen ist. */
   pendingDeleteId: string | null = null;
+  /** Projekt-ID, für die gerade der Umbenennen-Dialog offen ist. */
+  pendingRenameId: string | null = null;
+  /** Eingabewert im Umbenennen-Dialog (vorgefüllt mit dem aktuellen Namen). */
+  renameName = '';
+  /** Fehler im Umbenennen-Dialog — der Dialog bleibt offen, Name korrigierbar. */
+  renameError: string | null = null;
   /** Interval-Handle fürs Status-Polling — bewusst nicht observable. */
   pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -187,6 +202,67 @@ export class ProjectsStore {
 
   requestDelete(id: string): void {
     this.pendingDeleteId = id;
+  }
+
+  get pendingRenameProject(): Project | null {
+    if (this.pendingRenameId === null) {
+      return null;
+    }
+    return this.projects.find((p) => p.id === this.pendingRenameId) ?? null;
+  }
+
+  get canConfirmRename(): boolean {
+    return this.renameName.trim().length > 0;
+  }
+
+  requestRename(id: string): void {
+    const project = this.projects.find((p) => p.id === id);
+    this.pendingRenameId = id;
+    this.renameName = project?.name ?? '';
+    this.renameError = null;
+  }
+
+  cancelRename(): void {
+    this.pendingRenameId = null;
+    this.renameError = null;
+  }
+
+  setRenameName(name: string): void {
+    this.renameName = name;
+    this.renameError = null;
+  }
+
+  /**
+   * Benennt das vorgemerkte Projekt um. Bei Server-Fehler (z. B. doppelter
+   * Name) bleibt der Dialog offen, damit der Name korrigiert werden kann.
+   */
+  async confirmRename(): Promise<boolean> {
+    const id = this.pendingRenameId;
+    const name = this.renameName.trim();
+    if (id === null || name.length === 0) {
+      return false;
+    }
+    try {
+      const data = await gqlRequest<{ renameProject: { id: string; name: string } }>(
+        RENAME_PROJECT_MUTATION,
+        { id, name },
+      );
+      runInAction(() => {
+        const project = this.projects.find((p) => p.id === id);
+        if (project) {
+          project.name = data.renameProject.name;
+        }
+        this.pendingRenameId = null;
+        this.renameError = null;
+      });
+      return true;
+    } catch (err) {
+      console.error('ProjectsStore.confirmRename fehlgeschlagen', err);
+      runInAction(() => {
+        this.renameError = toErrorMessage(err);
+      });
+      return false;
+    }
   }
 
   cancelDelete(): void {

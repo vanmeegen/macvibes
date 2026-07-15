@@ -221,6 +221,91 @@ describe('ProjectsStore', () => {
   });
 });
 
+describe('renameProject (Menü auf der Projektkarte)', () => {
+  beforeEach(() => {
+    mockGql.mockReset();
+    window.localStorage.clear();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+
+  function storeWithProjects(): ProjectsStore {
+    const store = new ProjectsStore(makeAuthStore('alice'));
+    runInAction(() => {
+      store.projects = [
+        makeProject({ id: 'p1', name: 'Altes Projekt' }),
+        makeProject({ id: 'p2', name: 'Zweites Projekt' }),
+      ];
+    });
+    return store;
+  }
+
+  it('requestRename öffnet den Dialog und füllt den aktuellen Namen vor', () => {
+    const store = storeWithProjects();
+    store.requestRename('p1');
+    expect(store.pendingRenameProject?.id).toBe('p1');
+    expect(store.renameName).toBe('Altes Projekt');
+  });
+
+  it('cancelRename schließt den Dialog', () => {
+    const store = storeWithProjects();
+    store.requestRename('p1');
+    store.cancelRename();
+    expect(store.pendingRenameProject).toBeNull();
+  });
+
+  it('canConfirmRename ist bei leerem/weißem Namen false', () => {
+    const store = storeWithProjects();
+    store.requestRename('p1');
+    store.setRenameName('   ');
+    expect(store.canConfirmRename).toBe(false);
+    store.setRenameName('Neuer Name');
+    expect(store.canConfirmRename).toBe(true);
+  });
+
+  it('confirmRename ruft die Mutation, übernimmt den Namen und schließt den Dialog', async () => {
+    const store = storeWithProjects();
+    store.requestRename('p1');
+    store.setRenameName('Neuer Name');
+    mockGql.mockResolvedValueOnce({ renameProject: { id: 'p1', name: 'Neuer Name' } });
+
+    const ok = await store.confirmRename();
+
+    expect(ok).toBe(true);
+    expect(store.projects[0]?.name).toBe('Neuer Name');
+    expect(store.pendingRenameProject).toBeNull();
+    expect(mockGql).toHaveBeenCalledWith(expect.stringContaining('renameProject'), {
+      id: 'p1',
+      name: 'Neuer Name',
+    });
+  });
+
+  it('lässt den Dialog bei Server-Fehler offen und zeigt den Fehler dort an', async () => {
+    const store = storeWithProjects();
+    store.requestRename('p1');
+    store.setRenameName('Zweites Projekt');
+    mockGql.mockRejectedValueOnce(
+      new Error('Du hast bereits ein Projekt namens „Zweites Projekt"'),
+    );
+
+    const ok = await store.confirmRename();
+
+    expect(ok).toBe(false);
+    expect(store.pendingRenameProject?.id).toBe('p1');
+    expect(store.renameError).toContain('bereits ein Projekt');
+    expect(store.projects[0]?.name).toBe('Altes Projekt');
+  });
+
+  it('setRenameName löscht einen alten Fehler', async () => {
+    const store = storeWithProjects();
+    store.requestRename('p1');
+    mockGql.mockRejectedValueOnce(new Error('Kaputt'));
+    await store.confirmRename();
+    expect(store.renameError).toBe('Kaputt');
+    store.setRenameName('Anders');
+    expect(store.renameError).toBeNull();
+  });
+});
+
 describe('Modellwahl pro Projekt (Dropdown im Chat)', () => {
   beforeEach(() => {
     mockGql.mockReset();

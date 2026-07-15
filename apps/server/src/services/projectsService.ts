@@ -133,6 +133,42 @@ export async function createProject(
   }
 }
 
+/**
+ * Benennt ein Projekt um (nur der Anzeigename). Der Git-Branch behält bewusst
+ * seinen Slug — er ist die stabile Identität des Projekts im Bare-Repo.
+ */
+export async function renameProject(
+  db: Db,
+  currentUser: UserRow,
+  id: string,
+  newName: string,
+): Promise<ProjectWithOwner> {
+  const nameResult = projectNameSchema.safeParse(newName);
+  if (!nameResult.success) {
+    throw new DomainError(nameResult.error.issues[0]?.message ?? 'Ungültiger Projektname');
+  }
+  const name = nameResult.data;
+
+  const project = await getProject(db, id);
+  if (!project) {
+    throw new DomainError('Projekt nicht gefunden');
+  }
+  if (project.ownerId !== currentUser.id) {
+    throw new DomainError('Nur der Eigentümer kann ein Projekt umbenennen');
+  }
+
+  const siblings = await db
+    .select({ id: projects.id, name: projects.name })
+    .from(projects)
+    .where(eq(projects.ownerId, currentUser.id));
+  if (siblings.some((p) => p.id !== id && p.name === name)) {
+    throw new DomainError(`Du hast bereits ein Projekt namens „${name}"`);
+  }
+
+  await db.update(projects).set({ name }).where(eq(projects.id, id));
+  return { ...project, name };
+}
+
 export async function deleteProject(
   db: Db,
   currentUser: UserRow,

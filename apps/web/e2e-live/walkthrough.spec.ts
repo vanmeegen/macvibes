@@ -37,7 +37,9 @@ async function deleteProject(page: Page, name: string): Promise<void> {
   const card = page
     .locator('[data-testselector^="project-card-"]:not([data-testselector^="project-card-link-"])')
     .filter({ hasText: name });
-  await card.locator('[data-testselector^="project-delete-"]').click();
+  // Löschen sitzt im Kebab-Menü der Karte; das Menü rendert in einem Portal.
+  await card.locator('[data-testselector^="project-menu-"]').click();
+  await page.locator('[data-testselector^="project-delete-"]').click();
   await page.getByTestId('delete-confirm').click();
   await expect(card).toHaveCount(0);
 }
