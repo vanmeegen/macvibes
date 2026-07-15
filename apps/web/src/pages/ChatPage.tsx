@@ -1,6 +1,7 @@
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import MicIcon from '@mui/icons-material/Mic';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import SendIcon from '@mui/icons-material/Send';
 import StopIcon from '@mui/icons-material/Stop';
@@ -18,6 +19,7 @@ import Stack from '@mui/material/Stack';
 import MenuItem from '@mui/material/MenuItem';
 import TextField from '@mui/material/TextField';
 import Toolbar from '@mui/material/Toolbar';
+import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { observer } from 'mobx-react-lite';
 import { useEffect, useRef } from 'react';
@@ -26,10 +28,33 @@ import type { ChatMessage } from '../api/types';
 import type { ChatStore } from '../models/ChatStore';
 import { derivePreviewView } from '../models/PreviewModel';
 import { agentWorkingLabel, sandboxStatusLabel, type ProjectsStore } from '../models/ProjectsStore';
+import type { SpeechStore } from '../models/SpeechStore';
 
 export interface ChatPageProps {
   projectsStore: ProjectsStore;
   chatStore: ChatStore;
+  speechStore: SpeechStore;
+}
+
+/** Tooltip des Mikro-Buttons je nach Verfügbarkeit/Status. */
+function micTooltip(speechStore: SpeechStore): string {
+  switch (speechStore.availability) {
+    case 'insecure':
+      return (
+        'Diktat braucht einen sicheren Kontext. Auf dem Mac localhost verwenden; ' +
+        'im LAN einmalig chrome://flags/#unsafely-treat-insecure-origin-as-secure ' +
+        'für diese Adresse aktivieren.'
+      );
+    case 'unsupported':
+      return 'Lokale Spracherkennung braucht Chrome/Chromium 139+.';
+    case 'unavailable':
+      return 'Für diese Sprache ist keine lokale Erkennung verfügbar.';
+    default:
+      break;
+  }
+  if (speechStore.status === 'recording') return 'Aufnahme stoppen';
+  if (speechStore.status === 'installing') return 'Sprachpaket wird installiert …';
+  return 'Diktieren — läuft komplett lokal im Browser';
 }
 
 const MessageBubble = observer(function MessageBubble({
@@ -131,10 +156,18 @@ const MessageBubble = observer(function MessageBubble({
 export const ChatPage = observer(function ChatPage({
   projectsStore,
   chatStore,
+  speechStore,
 }: ChatPageProps): JSX.Element {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  // Grundvoraussetzungen fürs Diktat prüfen — bewusst nur synchrone Checks;
+  // die echte available()-Probe passiert erst beim Klick (Chromium-Crash-Bug
+  // auf macOS, s. SpeechStore).
+  useEffect(() => {
+    speechStore.init();
+  }, [speechStore]);
 
   useEffect(() => {
     if (projectsStore.projects.length === 0 && !projectsStore.loading) {
@@ -363,43 +396,106 @@ export const ChatPage = observer(function ChatPage({
                 Nur-Lese-Modus — Projekt von {project.owner.username}
               </Alert>
             ) : (
-              <Stack direction="row" spacing={1} alignItems="center">
-                <TextField
-                  placeholder="Nachricht an den Agenten …"
-                  size="small"
-                  fullWidth
-                  multiline
-                  maxRows={6}
-                  value={chatStore.draft}
-                  onChange={(e) => chatStore.setDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      void chatStore.send();
-                    }
-                  }}
-                  inputProps={{ 'data-testselector': 'chat-input' }}
-                />
-                {chatStore.turnActive && (
+              <>
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <TextField
+                    placeholder="Nachricht an den Agenten …"
+                    size="small"
+                    fullWidth
+                    multiline
+                    maxRows={6}
+                    value={chatStore.draft}
+                    onChange={(e) => chatStore.setDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        void chatStore.send();
+                      }
+                    }}
+                    inputProps={{ 'data-testselector': 'chat-input' }}
+                  />
+                  {/* Diktat: lokale Erkennung im Browser (Chrome On-Device). */}
+                  <Tooltip title={micTooltip(speechStore)}>
+                    {/* span: Tooltips brauchen bei disabled-Buttons einen Wrapper */}
+                    <span>
+                      <IconButton
+                        aria-label={
+                          speechStore.status === 'recording' ? 'Aufnahme stoppen' : 'Diktieren'
+                        }
+                        color={speechStore.status === 'recording' ? 'error' : 'default'}
+                        disabled={!speechStore.canRecord}
+                        onClick={() => void speechStore.toggle()}
+                        data-testselector="chat-mic"
+                        data-status={speechStore.status}
+                        sx={
+                          speechStore.status === 'recording'
+                            ? {
+                                '@keyframes micPulse': {
+                                  '0%': { opacity: 1 },
+                                  '50%': { opacity: 0.4 },
+                                  '100%': { opacity: 1 },
+                                },
+                                animation: 'micPulse 1.2s ease-in-out infinite',
+                              }
+                            : {}
+                        }
+                      >
+                        {speechStore.status === 'installing' ? (
+                          <CircularProgress size={20} />
+                        ) : (
+                          <MicIcon />
+                        )}
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                  {speechStore.canRecord && (
+                    <Tooltip title="Diktiersprache umschalten">
+                      <Chip
+                        size="small"
+                        label={speechStore.lang === 'de-DE' ? 'DE' : 'EN'}
+                        onClick={() =>
+                          speechStore.setLang(speechStore.lang === 'de-DE' ? 'en-US' : 'de-DE')
+                        }
+                        data-testselector="chat-mic-lang"
+                      />
+                    </Tooltip>
+                  )}
+                  {chatStore.turnActive && (
+                    <IconButton
+                      aria-label="Turn abbrechen"
+                      color="error"
+                      onClick={() => void chatStore.stop()}
+                      data-testselector="chat-stop"
+                    >
+                      <StopIcon />
+                    </IconButton>
+                  )}
                   <IconButton
-                    aria-label="Turn abbrechen"
-                    color="error"
-                    onClick={() => void chatStore.stop()}
-                    data-testselector="chat-stop"
+                    aria-label="Senden"
+                    color="primary"
+                    disabled={chatStore.draft.trim().length === 0}
+                    onClick={() => void chatStore.send()}
+                    data-testselector="chat-send"
                   >
-                    <StopIcon />
+                    <SendIcon />
                   </IconButton>
+                </Stack>
+                {speechStore.status === 'recording' && speechStore.interimText.length > 0 && (
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ fontStyle: 'italic' }}
+                    data-testselector="chat-mic-interim"
+                  >
+                    🎙 {speechStore.interimText}
+                  </Typography>
                 )}
-                <IconButton
-                  aria-label="Senden"
-                  color="primary"
-                  disabled={chatStore.draft.trim().length === 0}
-                  onClick={() => void chatStore.send()}
-                  data-testselector="chat-send"
-                >
-                  <SendIcon />
-                </IconButton>
-              </Stack>
+                {speechStore.error !== null && (
+                  <Typography variant="caption" color="error" data-testselector="chat-mic-error">
+                    {speechStore.error}
+                  </Typography>
+                )}
+              </>
             )}
           </Box>
         </Paper>

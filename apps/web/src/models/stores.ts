@@ -3,6 +3,7 @@ import { ChatStore } from './ChatStore';
 import { CreateProjectModel } from './CreateProjectModel';
 import { LoginModel } from './LoginModel';
 import { ProjectsStore } from './ProjectsStore';
+import { SpeechStore } from './SpeechStore';
 
 /**
  * Singleton-Stores der Anwendung. Werden einmal auf Modulebene erzeugt
@@ -13,3 +14,4 @@ export const projectsStore = new ProjectsStore(authStore);
 export const createProjectModel = new CreateProjectModel(projectsStore);
 export const loginModel = new LoginModel(authStore);
 export const chatStore = new ChatStore();
+export const speechStore = new SpeechStore(chatStore);

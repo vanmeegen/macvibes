@@ -8,6 +8,7 @@ import {
   createProjectModel,
   loginModel,
   projectsStore,
+  speechStore,
 } from './models/stores';
 import { AdminPage } from './pages/AdminPage';
 import { ChatPage } from './pages/ChatPage';
@@ -69,7 +70,11 @@ export const App = observer(function App(): JSX.Element {
         path="/projects/:id"
         element={
           loggedIn ? (
-            <ChatPage projectsStore={projectsStore} chatStore={chatStore} />
+            <ChatPage
+              projectsStore={projectsStore}
+              chatStore={chatStore}
+              speechStore={speechStore}
+            />
           ) : (
             <Navigate to="/login" replace />
           )
