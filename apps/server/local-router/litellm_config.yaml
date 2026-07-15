@@ -4,9 +4,20 @@
 # die Modell-Aliase hier müssen zum Katalog in src/agent/agentModel.ts passen.
 
 model_list:
+  # qwen3.6-coder-fixed = unsloth-GGUF mit gepatchtem Chat-Template
+  # (froggeric v21.3, https://huggingface.co/froggeric/Qwen-Fixed-Chat-Templates).
+  # Bauen: Blob-Kopie mit `gguf-new-metadata --chat-template-file chat_template.jinja`
+  # umschreiben, dann `ollama create qwen3.6-coder-fixed` aus dem Original-Modelfile.
+  # Direkter Alias für A/B-Tests gegen das Original:
+  - model_name: qwen3.6-coder-fixed
+    litellm_params:
+      model: ollama_chat/qwen3.6-coder-fixed
+      api_base: http://localhost:11434
   - model_name: qwen3.6-coder
     litellm_params:
-      model: ollama_chat/qwen3.6-coder
+      # Fix-Template (froggeric v21.3) — behebt vorzeitige Turn-Enden und den
+      # Kaltstart-502 (Nacht-Testserie 2026-07-15: 4/4 Turns OK vs. 502+zäh davor).
+      model: ollama_chat/qwen3.6-coder-fixed
       api_base: http://localhost:11434
   # MoE-„fast gear" (Katalog: "Qwen 35B MoE (lokal)")
   - model_name: qwen3.6-moe
@@ -17,7 +28,7 @@ model_list:
   # Ohne diesen Eintrag antwortet der Router darauf mit 400 → der Agent stolpert.
   - model_name: '*'
     litellm_params:
-      model: ollama_chat/qwen3.6-coder
+      model: ollama_chat/qwen3.6-coder-fixed
       api_base: http://localhost:11434
 
 litellm_settings:
