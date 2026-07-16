@@ -18,13 +18,42 @@ export interface PreviewView {
  * über Remote/VPN erreichbar (nur der Gateway-Port wird geforwardet). Das
  * Gateway routet über Referer/Cookie zur richtigen VM.
  */
+/** Protokoll-Kontext der aufrufenden Seite (HTTPS-Terminierung via Caddy). */
+export interface PreviewProtocolOptions {
+  /** window.location.protocol der App-Seite ('http:' | 'https:'). */
+  pageProtocol: string;
+  /** HTTPS-Port des Preview-Gateways (Caddy-Terminierung) — null wenn keiner. */
+  httpsGatewayPort: number | null;
+}
+
 export function derivePreviewView(
   status: PreviewStatus | string,
   host: string,
   gatewayPort: number | null,
   projectId: string | null,
+  protocol: PreviewProtocolOptions = { pageProtocol: 'http:', httpsGatewayPort: null },
 ): PreviewView {
   if (status === 'ready' && gatewayPort !== null && projectId !== null) {
+    // HTTPS-Seite: der Browser blockt ein http-iframe als Mixed Content — die
+    // Preview muss über den HTTPS-Port des Gateways (Caddy) kommen.
+    if (protocol.pageProtocol === 'https:') {
+      if (protocol.httpsGatewayPort === null) {
+        return {
+          showIframe: false,
+          url: null,
+          spinner: false,
+          message:
+            'Preview über HTTPS braucht MACVIBES_PREVIEW_GATEWAY_HTTPS_PORT ' +
+            '(TLS-Terminierung, s. CLAUDE.md).',
+        };
+      }
+      return {
+        showIframe: true,
+        url: `https://${host}:${protocol.httpsGatewayPort}/p/${encodeURIComponent(projectId)}/`,
+        spinner: false,
+        message: '',
+      };
+    }
     return {
       showIframe: true,
       url: `http://${host}:${gatewayPort}/p/${encodeURIComponent(projectId)}/`,

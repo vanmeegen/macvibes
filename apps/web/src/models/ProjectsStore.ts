@@ -10,6 +10,7 @@ export const PROJECT_FILTER_STORAGE_KEY = 'macvibes.projectFilter';
 const PROJECTS_AND_TEMPLATES_QUERY = /* GraphQL */ `
   query ProjectsAndTemplates {
     previewGatewayPort
+    previewGatewayHttpsPort
     projects {
       id
       name
@@ -194,6 +195,8 @@ export class ProjectsStore {
   agentModels: AgentModelInfo[] = [];
   /** Fester Port des Preview-Gateways — Basis der iframe-URL (Remote/VPN). */
   previewGatewayPort: number | null = null;
+  /** HTTPS-Port des Gateways (Caddy-Terminierung) — null ohne TLS. */
+  previewGatewayHttpsPort: number | null = null;
   filter: ProjectFilter = readFilterFromStorage();
   error: string | null = null;
   loading = false;
@@ -397,12 +400,14 @@ export class ProjectsStore {
         projects: Project[];
         templates: Template[];
         previewGatewayPort: number;
+        previewGatewayHttpsPort: number | null;
         agentModels: AgentModelInfo[];
       }>(PROJECTS_AND_TEMPLATES_QUERY);
       runInAction(() => {
         this.projects = data.projects;
         this.templates = data.templates;
         this.previewGatewayPort = data.previewGatewayPort;
+        this.previewGatewayHttpsPort = data.previewGatewayHttpsPort;
         this.agentModels = data.agentModels;
       });
     } catch (err) {
@@ -424,12 +429,14 @@ export class ProjectsStore {
         projects: Project[];
         templates: Template[];
         previewGatewayPort: number;
+        previewGatewayHttpsPort: number | null;
         agentModels: AgentModelInfo[];
       }>(PROJECTS_AND_TEMPLATES_QUERY);
       runInAction(() => {
         this.projects = data.projects;
         this.templates = data.templates;
         this.previewGatewayPort = data.previewGatewayPort;
+        this.previewGatewayHttpsPort = data.previewGatewayHttpsPort;
         this.agentModels = data.agentModels;
       });
     } catch (err) {

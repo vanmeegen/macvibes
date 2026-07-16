@@ -128,6 +128,20 @@ bun run start              # Produktion: Web bauen + Server (liefert dist aus, L
 - VM-Netz: nur `allow@public` (bun/npm) + `allow@172.16.0.0/12` (Host-Gateway
   `host.microsandbox.internal` für den Credential-Proxy).
 
+## HTTPS im LAN (Caddy, lokale CA)
+
+Mikrofon/AudioWorklet & Co. brauchen einen Secure Context — im LAN heißt das
+HTTPS. TLS terminiert ein **Caddy** vor den unveränderten http-Backends
+(`~/macvibes/Caddyfile`, `local_certs`): `:443 → 4000` (Web/API inkl.
+Gateway-WebSockets) und `:8443 → 4173` (Preview-iframe). Die VM-interne
+Kommunikation (Agent-Daemon, Credential-/Egress-Proxy) bleibt bewusst http.
+`MACVIBES_PREVIEW_GATEWAY_HTTPS_PORT` (hier 8443) sagt dem Frontend, dass es
+die iframe-URL auf einer HTTPS-Seite über diesen Port bauen muss (sonst Mixed
+Content). Start: `caddy start --config ~/macvibes/Caddyfile`. Geräte müssen
+der lokalen CA einmalig vertrauen: Mac `caddy trust`; iPad das Root-Zertifikat
+(`~/Library/Application Support/Caddy/pki/authorities/local/root.crt`)
+installieren + unter Zertifikatsvertrauen aktivieren.
+
 ## Credentials
 
 Der Agent in der VM erreicht die Claude API nur über den Host-Proxy. In

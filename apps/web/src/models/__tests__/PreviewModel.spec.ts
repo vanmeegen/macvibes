@@ -21,6 +21,32 @@ describe('derivePreviewView', () => {
     expect(derivePreviewView('ready', 'localhost', 4173, null).showIframe).toBe(false);
   });
 
+  it('HTTPS-Seite: iframe nutzt https und den HTTPS-Gateway-Port (Mixed Content)', () => {
+    const v = derivePreviewView('ready', '192.168.1.77', 4173, 'proj-1', {
+      pageProtocol: 'https:',
+      httpsGatewayPort: 8443,
+    });
+    expect(v.showIframe).toBe(true);
+    expect(v.url).toBe('https://192.168.1.77:8443/p/proj-1/');
+  });
+
+  it('HTTPS-Seite ohne konfigurierten HTTPS-Gateway-Port: kein iframe, klare Meldung', () => {
+    const v = derivePreviewView('ready', '192.168.1.77', 4173, 'proj-1', {
+      pageProtocol: 'https:',
+      httpsGatewayPort: null,
+    });
+    expect(v.showIframe).toBe(false);
+    expect(v.message).toMatch(/HTTPS/);
+  });
+
+  it('HTTP-Seite bleibt beim http-Gateway, auch wenn ein HTTPS-Port existiert', () => {
+    const v = derivePreviewView('ready', 'localhost', 4173, 'proj-1', {
+      pageProtocol: 'http:',
+      httpsGatewayPort: 8443,
+    });
+    expect(v.url).toBe('http://localhost:4173/p/proj-1/');
+  });
+
   it('starting: Overlay mit Spinner und "Startet …" — kein iframe', () => {
     const v = derivePreviewView('starting', 'localhost', 4173, 'proj-1');
     expect(v.showIframe).toBe(false);

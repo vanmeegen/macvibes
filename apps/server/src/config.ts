@@ -42,6 +42,8 @@ export interface ServerConfig {
      * ihn, statt der zufälligen hohen VM-Ports (Default 4173).
      */
     previewGatewayPort: number;
+    /** HTTPS-Port des Gateways (TLS-Terminierung via Caddy) — null ohne TLS. */
+    previewGatewayHttpsPort: number | null;
   };
   agent: {
     /** "claude" (Agent SDK) oder "fake" (deterministisch, für Tests/E2E). */
@@ -155,6 +157,11 @@ export function loadConfig(): ServerConfig {
       cpus: Number(Bun.env.MACVIBES_SANDBOX_CPUS ?? 4),
       memoryMib: Number(Bun.env.MACVIBES_SANDBOX_MEMORY_MIB ?? 4096),
       previewGatewayPort: Number(Bun.env.MACVIBES_PREVIEW_GATEWAY_PORT ?? 4173),
+      // HTTPS-Port des Preview-Gateways (TLS-Terminierung z. B. via Caddy) —
+      // null = kein HTTPS; die iframe-URL nutzt dann http (LAN wie bisher).
+      previewGatewayHttpsPort: Bun.env.MACVIBES_PREVIEW_GATEWAY_HTTPS_PORT
+        ? Number(Bun.env.MACVIBES_PREVIEW_GATEWAY_HTTPS_PORT)
+        : null,
     },
     agent: {
       backend: Bun.env.MACVIBES_AGENT === 'fake' ? 'fake' : 'claude',

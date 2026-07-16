@@ -169,6 +169,11 @@ builder.queryType({
     previewGatewayPort: t.int({
       resolve: (_root, _args, ctx) => ctx.config.sandbox.previewGatewayPort,
     }),
+    /** HTTPS-Port des Preview-Gateways (Caddy-Terminierung) — null ohne TLS. */
+    previewGatewayHttpsPort: t.int({
+      nullable: true,
+      resolve: (_root, _args, ctx) => ctx.config.sandbox.previewGatewayHttpsPort,
+    }),
     users: t.field({
       type: [UserRef],
       resolve: (_root, _args, ctx) => {

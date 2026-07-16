@@ -210,6 +210,12 @@ export const ChatPage = observer(function ChatPage({
     typeof window !== 'undefined' ? window.location.hostname : 'localhost',
     project?.sandboxStatus === 'running' ? projectsStore.previewGatewayPort : null,
     projectId,
+    {
+      // HTTPS-Seite (Caddy-Terminierung): iframe muss über den HTTPS-Port des
+      // Gateways kommen, sonst blockt der Browser Mixed Content.
+      pageProtocol: typeof window !== 'undefined' ? window.location.protocol : 'http:',
+      httpsGatewayPort: projectsStore.previewGatewayHttpsPort,
+    },
   );
 
   // Immer ans Ende scrollen, wenn neue Events eintreffen.
