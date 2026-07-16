@@ -66,18 +66,31 @@ export interface ChromeSpeechRecognition {
   onresult: ((event: ChromeRecognitionEvent) => void) | null;
   onerror: ((event: ChromeRecognitionErrorEvent) => void) | null;
   onend: (() => void) | null;
+  onspeechstart: (() => void) | null;
   start(): void;
   stop(): void;
   abort(): void;
 }
 
+/**
+ * Optionen für available()/install(). `quality: 'dictation'` ist entscheidend
+ * (Chrome 150+, Live-Befund 2026-07-16): ohne die Angabe meldet Chrome
+ * "available", sobald nur die Command-Stufe (kurze Sprachbefehle) existiert —
+ * kontinuierliches Diktat liefert damit aber NIE Ergebnisse. Ältere Chromes
+ * ignorieren das unbekannte Dictionary-Feld gefahrlos.
+ */
+interface OnDeviceOptions {
+  langs: string[];
+  processLocally: boolean;
+  quality?: 'command' | 'dictation' | 'conversation';
+}
+
 export interface ChromeSpeechRecognitionCtor {
   new (): ChromeSpeechRecognition;
-  available?(options: {
-    langs: string[];
-    processLocally: boolean;
-  }): Promise<'available' | 'downloadable' | 'downloading' | 'unavailable'>;
-  install?(options: { langs: string[]; processLocally: boolean }): Promise<boolean>;
+  available?(
+    options: OnDeviceOptions,
+  ): Promise<'available' | 'downloadable' | 'downloading' | 'unavailable'>;
+  install?(options: OnDeviceOptions): Promise<boolean>;
 }
 
 /** Chromium exponiert den Konstruktor teils nur mit webkit-Präfix. */
@@ -132,7 +145,7 @@ export async function chromeSpeechAvailability(lang: SpeechLang): Promise<Speech
   if (ctor?.available === undefined) return 'unsupported';
   try {
     const result = await withTimeout(
-      ctor.available({ langs: [lang], processLocally: true }),
+      ctor.available({ langs: [lang], processLocally: true, quality: 'dictation' }),
       5_000,
       'unavailable' as const,
     );
@@ -152,7 +165,11 @@ export async function installChromeSpeech(lang: SpeechLang): Promise<boolean> {
   try {
     // Großzügiges Limit für den Paket-Download; bekannte Hänger (Install-Promise
     // resolvt nie, z. B. Brave) laufen so kontrolliert in einen Fehler.
-    return await withTimeout(ctor.install({ langs: [lang], processLocally: true }), 180_000, false);
+    return await withTimeout(
+      ctor.install({ langs: [lang], processLocally: true, quality: 'dictation' }),
+      180_000,
+      false,
+    );
   } catch (err) {
     console.error('SpeechRecognition.install() fehlgeschlagen', err);
     return false;
@@ -176,9 +193,28 @@ function speechErrorMessage(code: string): string {
   }
 }
 
-/** Transcriber auf Basis von Chromes lokaler Web-Speech-Erkennung. */
-export function createChromeTranscriber(): Transcriber {
-  let recognition: ChromeSpeechRecognition | null = null;
+/** Watchdog-Zeiten — im Test überschreibbar. */
+export interface TranscriberTimeouts {
+  /** Sprachbeginn erkannt, aber nie ein Ergebnis → Abbruch (Zombie-Erkenner). */
+  resultTimeoutMs?: number;
+  /** stop() ohne end-Event → abort() + erzwungenes Ende (UI nie festhängen). */
+  stopTimeoutMs?: number;
+}
+
+export function createChromeTranscriber(timeouts: TranscriberTimeouts = {}): Transcriber {
+  const resultTimeoutMs = timeouts.resultTimeoutMs ?? 10_000;
+  const stopTimeoutMs = timeouts.stopTimeoutMs ?? 1_500;
+
+  let active: { rec: ChromeSpeechRecognition; finish: () => void } | null = null;
+  let zombieTimer: ReturnType<typeof setTimeout> | null = null;
+  let stopTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const clearTimers = (): void => {
+    if (zombieTimer !== null) clearTimeout(zombieTimer);
+    if (stopTimer !== null) clearTimeout(stopTimer);
+    zombieTimer = null;
+    stopTimer = null;
+  };
 
   return {
     start(lang: SpeechLang, callbacks: TranscriberCallbacks): void {
@@ -193,7 +229,28 @@ export function createChromeTranscriber(): Transcriber {
       rec.continuous = true;
       rec.interimResults = true;
       rec.processLocally = true;
+
+      // Genau EIN onEnd pro Aufnahme — egal ob echtes end-Event, Fehler oder
+      // Watchdog-Abbruch (Chromes Zombie-Erkenner verschluckt end teils komplett,
+      // Live-Befund 2026-07-16: speechstart, dann nie wieder ein Event).
+      let ended = false;
+      let hadResult = false;
+      const finish = (): void => {
+        if (ended) return;
+        ended = true;
+        clearTimers();
+        active = null;
+        callbacks.onEnd();
+      };
+
       rec.onresult = (event) => {
+        // Erstes Ergebnis beweist: der Erkenner liefert — Watchdog entschärfen.
+        // (Danach bewusst kein Timeout mehr: Sprechpausen sind kein Fehler.)
+        hadResult = true;
+        if (zombieTimer !== null) {
+          clearTimeout(zombieTimer);
+          zombieTimer = null;
+        }
         // Im continuous-Modus enthält results auch alle früheren Abschnitte —
         // relevant ist nur ab resultIndex. Interim-Teile fortlaufend sammeln,
         // finale Abschnitte einzeln melden.
@@ -213,19 +270,49 @@ export function createChromeTranscriber(): Transcriber {
         const interimTrimmed = interim.trim();
         if (interimTrimmed.length > 0) callbacks.onInterim(interimTrimmed);
       };
+      rec.onspeechstart = () => {
+        if (hadResult || zombieTimer !== null) return;
+        zombieTimer = setTimeout(() => {
+          zombieTimer = null;
+          callbacks.onError(
+            'Die lokale Erkennung liefert keine Ergebnisse — Diktat abgebrochen. ' +
+              '(Chrome-On-Device-Erkennung auf diesem Gerät vermutlich ohne Diktat-Stufe.)',
+          );
+          try {
+            rec.abort();
+          } catch {
+            // abort darf nie werfen dürfen — Ende erzwingen wir ohnehin.
+          }
+          finish();
+        }, resultTimeoutMs);
+      };
       rec.onerror = (event) => {
         callbacks.onError(speechErrorMessage(event.error));
       };
       rec.onend = () => {
-        recognition = null;
-        callbacks.onEnd();
+        finish();
       };
-      recognition = rec;
+      active = { rec, finish };
       rec.start();
     },
 
     stop(): void {
-      recognition?.stop();
+      const current = active;
+      if (current === null) return;
+      current.rec.stop();
+      // Chrome-Zombie verschluckt auch das end-Event nach stop() — dann hart
+      // abbrechen und das Ende erzwingen, damit das UI nie im Aufnahme-Zustand
+      // festhängt (Live-Befund 2026-07-16).
+      if (stopTimer !== null) return;
+      stopTimer = setTimeout(() => {
+        stopTimer = null;
+        try {
+          current.rec.abort();
+        } catch {
+          // s. o. — Ende wird so oder so erzwungen.
+        }
+        current.finish();
+      }, stopTimeoutMs);
     },
   };
 }

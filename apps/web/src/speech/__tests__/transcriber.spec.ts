@@ -22,8 +22,10 @@ class FakeRecognition {
   onresult: ((event: ChromeRecognitionEvent) => void) | null = null;
   onerror: ((event: ChromeRecognitionErrorEvent) => void) | null = null;
   onend: (() => void) | null = null;
+  onspeechstart: (() => void) | null = null;
   startCalls = 0;
   stopCalls = 0;
+  abortCalls = 0;
 
   constructor() {
     FakeRecognition.instances.push(this);
@@ -46,7 +48,9 @@ class FakeRecognition {
     this.stopCalls++;
   }
 
-  abort(): void {}
+  abort(): void {
+    this.abortCalls++;
+  }
 }
 
 function resultEvent(
@@ -120,13 +124,18 @@ describe('chromeSpeechAvailability', () => {
     expect(await chromeSpeechAvailability('de-DE')).toBe('unsupported');
   });
 
-  it('fragt Chrome mit processLocally und der Sprache an und mappt das Ergebnis', async () => {
+  it('fragt Chrome mit processLocally, Sprache und Diktat-Qualität an', async () => {
+    // quality: 'dictation' ist entscheidend (Live-Befund 2026-07-16): ohne die
+    // Angabe meldet Chrome 150 "available", obwohl nur die Command-Stufe
+    // existiert — die Erkennung liefert dann nie Ergebnisse (Zombie).
+    // Ältere Chromes ignorieren das unbekannte Dictionary-Feld gefahrlos.
     stubRecognition();
     FakeRecognition.availableResult = 'downloadable';
     expect(await chromeSpeechAvailability('de-DE')).toBe('downloadable');
     expect(FakeRecognition.availableCalls[0]).toEqual({
       langs: ['de-DE'],
       processLocally: true,
+      quality: 'dictation',
     });
   });
 
@@ -208,5 +217,82 @@ describe('createChromeTranscriber', () => {
     transcriber.start('de-DE', callbacks());
     transcriber.stop();
     expect(FakeRecognition.instances[0]?.stopCalls).toBe(1);
+  });
+});
+
+describe('createChromeTranscriber — Watchdogs (Zombie-Erkennung, Live-Befund 2026-07-16)', () => {
+  it('bricht ab, wenn nach Sprachbeginn nie ein Ergebnis kommt', () => {
+    vi.useFakeTimers();
+    stubRecognition();
+    const transcriber = createChromeTranscriber({ resultTimeoutMs: 100 });
+    const cb = callbacks();
+    transcriber.start('de-DE', cb);
+    const rec = FakeRecognition.instances[0]!;
+
+    rec.onspeechstart?.();
+    vi.advanceTimersByTime(150);
+
+    expect(rec.abortCalls).toBe(1);
+    expect(cb.errors).toHaveLength(1);
+    expect(cb.errors[0]).toMatch(/keine Ergebnisse/);
+    expect(cb.ends).toBe(1);
+    vi.useRealTimers();
+  });
+
+  it('lässt Sprechpausen zu: nach dem ERSTEN Ergebnis ist der Watchdog entschärft', () => {
+    vi.useFakeTimers();
+    stubRecognition();
+    const transcriber = createChromeTranscriber({ resultTimeoutMs: 100 });
+    const cb = callbacks();
+    transcriber.start('de-DE', cb);
+    const rec = FakeRecognition.instances[0]!;
+
+    rec.onspeechstart?.();
+    rec.onresult?.(resultEvent([{ transcript: 'Hallo', isFinal: false }]));
+    vi.advanceTimersByTime(500);
+
+    expect(rec.abortCalls).toBe(0);
+    expect(cb.errors).toEqual([]);
+    expect(cb.ends).toBe(0);
+    vi.useRealTimers();
+  });
+
+  it('erzwingt das Ende, wenn stop() kein end-Event liefert (Blinken hört IMMER auf)', () => {
+    vi.useFakeTimers();
+    stubRecognition();
+    const transcriber = createChromeTranscriber({ stopTimeoutMs: 100 });
+    const cb = callbacks();
+    transcriber.start('de-DE', cb);
+    const rec = FakeRecognition.instances[0]!;
+
+    transcriber.stop();
+    vi.advanceTimersByTime(150);
+
+    expect(rec.abortCalls).toBe(1);
+    expect(cb.ends).toBe(1);
+
+    // Kommt das echte end-Event doch noch, darf onEnd nicht doppelt feuern.
+    rec.onend?.();
+    expect(cb.ends).toBe(1);
+    vi.useRealTimers();
+  });
+
+  it('normales Ende räumt die Watchdogs ab — kein nachträglicher Abbruch', () => {
+    vi.useFakeTimers();
+    stubRecognition();
+    const transcriber = createChromeTranscriber({ resultTimeoutMs: 100, stopTimeoutMs: 100 });
+    const cb = callbacks();
+    transcriber.start('de-DE', cb);
+    const rec = FakeRecognition.instances[0]!;
+
+    rec.onspeechstart?.();
+    transcriber.stop();
+    rec.onend?.();
+    vi.advanceTimersByTime(500);
+
+    expect(rec.abortCalls).toBe(0);
+    expect(cb.ends).toBe(1);
+    expect(cb.errors).toEqual([]);
+    vi.useRealTimers();
   });
 });
