@@ -137,7 +137,10 @@ Gateway-WebSockets) und `:8443 → 4173` (Preview-iframe). Die VM-interne
 Kommunikation (Agent-Daemon, Credential-/Egress-Proxy) bleibt bewusst http.
 `MACVIBES_PREVIEW_GATEWAY_HTTPS_PORT` (hier 8443) sagt dem Frontend, dass es
 die iframe-URL auf einer HTTPS-Seite über diesen Port bauen muss (sonst Mixed
-Content). Start: `caddy start --config ~/macvibes/Caddyfile`. Geräte müssen
+Content). Dev-Modus: `:5443 → 5173` (Vite inkl. HMR). Caddy läuft als
+Brew-Service (Autostart beim Login); das Storage ist in der Caddyfile auf
+`~/macvibes/caddy-storage` gepinnt — sonst erzeugen verschiedene Startarten
+VERSCHIEDENE Roots mit gleichem CN (Live-Befund 2026-07-17). Geräte müssen
 der lokalen CA einmalig vertrauen: Mac `caddy trust`; iPad das Root-Zertifikat
 (`~/Library/Application Support/Caddy/pki/authorities/local/root.crt`)
 installieren + unter Zertifikatsvertrauen aktivieren.
