@@ -41,6 +41,16 @@ export class ChatPage {
     return this.page.getByTestId('chat-stop');
   }
 
+  /** Mikro-Button fürs Diktat (lokale Browser-Erkennung). */
+  get micButton(): Locator {
+    return this.page.getByTestId('chat-mic');
+  }
+
+  /** DE/EN-Badge neben dem Mikro-Button. */
+  get micLang(): Locator {
+    return this.page.getByTestId('chat-mic-lang');
+  }
+
   messagesByRole(role: 'user' | 'assistant' | 'tool' | 'system' | 'error'): Locator {
     return this.page.locator(`[data-testselector="chat-message"][data-role="${role}"]`);
   }

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { registerNewUser, uniqueProjectName } from './fixtures';
 import { ChatPage } from './pages/chatPage';
 import { ProjectsPage } from './pages/projectsPage';
@@ -161,6 +161,119 @@ test('Modellwahl: Default ist Sonnet 5, Wechsel persistiert über Reload', async
   // Zurück auf ein Claude-Modell.
   await chatPage.selectModel('claude-haiku-4-5');
   await expect(chatPage.modelSelect).toContainText('Claude Haiku 4.5');
+});
+
+// Diktat: Mikro-Button mit lokaler Browser-Erkennung (Chrome On-Device).
+// Die Web-Speech-API wird deterministisch gefakt — echte Erkennung braucht
+// Chrome-Sprachpakete und ein Mikrofon, beides gibt es im CI nicht.
+
+/** Fake-SpeechRecognition VOR dem App-Load injizieren. */
+async function installFakeSpeechRecognition(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    class FakeSpeechRecognition {
+      static available(): Promise<string> {
+        return Promise.resolve('available');
+      }
+      static install(): Promise<boolean> {
+        return Promise.resolve(true);
+      }
+      lang = '';
+      continuous = false;
+      interimResults = false;
+      processLocally = false;
+      onresult: ((event: unknown) => void) | null = null;
+      onerror: ((event: unknown) => void) | null = null;
+      onend: (() => void) | null = null;
+      private timer: ReturnType<typeof setTimeout> | null = null;
+      start(): void {
+        const text = this.lang === 'en-US' ? 'Build a pomodoro app' : 'Baue eine Pomodoro-App';
+        this.timer = setTimeout(() => {
+          this.onresult?.({
+            resultIndex: 0,
+            results: [{ isFinal: false, 0: { transcript: text.slice(0, 9) }, length: 1 }],
+          });
+          this.timer = setTimeout(() => {
+            this.onresult?.({
+              resultIndex: 0,
+              results: [{ isFinal: true, 0: { transcript: text }, length: 1 }],
+            });
+          }, 80);
+        }, 80);
+      }
+      stop(): void {
+        if (this.timer !== null) clearTimeout(this.timer);
+        setTimeout(() => this.onend?.(), 10);
+      }
+      abort(): void {}
+    }
+    // globalThis === window im Browser — die e2e-tsconfig kennt kein DOM-lib.
+    Object.defineProperty(globalThis, 'SpeechRecognition', {
+      value: FakeSpeechRecognition,
+      configurable: true,
+    });
+  });
+}
+
+test('Diktat: Mikro-Button schreibt erkannten Text ins Eingabefeld', async ({ page }) => {
+  await installFakeSpeechRecognition(page);
+  await registerNewUser(page);
+  const projectsPage = new ProjectsPage(page);
+  const chatPage = new ChatPage(page);
+  const name = uniqueProjectName('Diktat');
+
+  await projectsPage.createProject(name, 'pwa');
+
+  await expect(chatPage.micButton).toBeEnabled();
+  await chatPage.micButton.click();
+  await expect(chatPage.micButton).toHaveAttribute('data-status', 'recording');
+
+  // Das finale Fake-Ergebnis landet im Entwurf; der User schickt selbst ab.
+  await expect(chatPage.chatInput).toHaveValue('Baue eine Pomodoro-App');
+
+  // Zweites Tippen stoppt die Aufnahme.
+  await chatPage.micButton.click();
+  await expect(chatPage.micButton).toHaveAttribute('data-status', 'idle');
+});
+
+test('Diktat: DE/EN-Umschalter wechselt die Erkennungssprache', async ({ page }) => {
+  await installFakeSpeechRecognition(page);
+  await registerNewUser(page);
+  const projectsPage = new ProjectsPage(page);
+  const chatPage = new ChatPage(page);
+  const name = uniqueProjectName('Diktat Sprache');
+
+  await projectsPage.createProject(name, 'pwa');
+
+  await expect(chatPage.micLang).toContainText('DE');
+  await chatPage.micLang.click();
+  await expect(chatPage.micLang).toContainText('EN');
+
+  await chatPage.micButton.click();
+  await expect(chatPage.chatInput).toHaveValue('Build a pomodoro app');
+});
+
+test('Diktat: ohne Browser-Unterstützung ist der Mikro-Button deaktiviert', async ({ page }) => {
+  // Beide Konstruktoren entfernen — simuliert Nicht-Chromium/alte Browser.
+  await page.addInitScript(() => {
+    Object.defineProperty(globalThis, 'SpeechRecognition', {
+      value: undefined,
+      configurable: true,
+    });
+    Object.defineProperty(globalThis, 'webkitSpeechRecognition', {
+      value: undefined,
+      configurable: true,
+    });
+  });
+  await registerNewUser(page);
+  const projectsPage = new ProjectsPage(page);
+  const chatPage = new ChatPage(page);
+  const name = uniqueProjectName('Diktat Unsupported');
+
+  await projectsPage.createProject(name, 'pwa');
+
+  await expect(chatPage.micButton).toBeVisible();
+  await expect(chatPage.micButton).toBeDisabled();
+  await expect(chatPage.micLang).toHaveCount(0);
 });
 
 test('Modellwahl: fremdes Projekt zeigt KEIN Dropdown (nur Owner)', async ({ page }) => {

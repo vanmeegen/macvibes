@@ -76,6 +76,24 @@ Gateway auf einem festen Port (`MACVIBES_PREVIEW_GATEWAY_PORT`, Default **4173**
 Damit die Preview von unterwegs sichtbar ist, muss neben der UI (5173 bzw. prod 4000) **einmalig auch Port 4173** im Router/WireGuard geforwardet werden — die
 dynamischen VM-Ports müssen dann nicht mehr freigegeben werden.
 
+## Diktieren (Mikro-Button im Chat)
+
+Der Mikro-Button neben dem Eingabefeld nutzt **Chromes lokale On-Device-
+Spracherkennung** (Web Speech API mit `processLocally`, Chrome/Chromium 139+):
+Die Erkennung läuft komplett im Browser, nichts verlässt den Rechner, der
+macvibes-Server ist nicht beteiligt. Tippen startet/stoppt die Aufnahme, der
+erkannte Text landet im Eingabefeld; das DE/EN-Badge daneben schaltet die
+Diktiersprache um (persistiert). Beim ersten Mal lädt Chrome das lokale
+Sprachpaket selbst herunter.
+
+- **Auf dem Mac:** funktioniert direkt unter `http://localhost:5173`.
+- **Von anderen LAN-Geräten:** Browser geben das Mikrofon nur in sicheren
+  Kontexten frei. Ohne HTTPS geht es trotzdem — auf dem Gerät einmalig
+  `chrome://flags/#unsafely-treat-insecure-origin-as-secure` auf
+  `http://<mac-ip>:5173` setzen (Chromium-only).
+- In nicht unterstützten Browsern/Kontexten ist der Button deaktiviert; der
+  Tooltip erklärt die Ursache.
+
 ## Requirements
 
 Die detaillierten Anforderungen mit Akzeptanzkriterien stehen in
