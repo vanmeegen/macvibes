@@ -33,11 +33,10 @@ export class ProcessSandboxProvider implements SandboxProvider {
     });
 
     const port = await findFreePort(context.previewPort);
-    const needsInstall =
-      existsSync(join(workspaceDir, 'package.json')) &&
-      !existsSync(join(workspaceDir, 'node_modules'));
-    // Install einmalig vor dem ersten Start (die MicroVM übernimmt das via Baseline).
-    if (needsInstall) {
+    // Delta-Install bei jedem Start (ADR 0002, Parität zur MicroVM): bei
+    // vollständigem node_modules ein No-Op, sonst heilt er fehlende Pakete
+    // aus bun.lock (z. B. ein bun add einer früheren Session).
+    if (existsSync(join(workspaceDir, 'package.json'))) {
       await Bun.spawn(['bun', 'install', '--silent'], { cwd: workspaceDir }).exited;
     }
 

@@ -44,6 +44,18 @@ describe('buildVmServices (monit)', () => {
     expect(run).toContain("bun run dev --port '\\''5199'\\''");
   });
 
+  test('devserver-run.sh: Delta-Install aus bun.lock VOR dem devCommand (ADR 0002)', () => {
+    const run = services.files['devserver-run.sh']!;
+    // Subshell mit daemon.env.sh: bun install braucht den Egress-Proxy und den
+    // Cache-Pfad — das Token darf aber NICHT an den devCommand (User-Code) leaken.
+    expect(run).toContain('( . /opt/macvibes/etc/daemon.env.sh');
+    expect(run).toContain('bun install --silent');
+    // Nicht fatal: der Dev-Server startet auch bei fehlgeschlagenem Install.
+    expect(run).toContain('||');
+    // Reihenfolge: Install vor dem exec des devCommand.
+    expect(run.indexOf('bun install')).toBeLessThan(run.indexOf('exec nice'));
+  });
+
   test('daemon.env.sh exportiert die Env — Werte mit Single-Quotes sicher escaped', () => {
     const env = services.files['daemon.env.sh']!;
     expect(env).toContain(

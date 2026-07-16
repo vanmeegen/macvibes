@@ -1,6 +1,11 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { agentConfigDirFor, ensureWorkspace, projectVolumeDir } from '../services/workspaceService';
+import {
+  agentConfigDirFor,
+  bunCacheDirFor,
+  ensureWorkspace,
+  projectVolumeDir,
+} from '../services/workspaceService';
 import { baselineBootstrapScript, baselineExists, baselineSnapshotName } from './baselineService';
 import { httpProbe } from './httpProbe';
 import { MicrosandboxError, runMsb, waitForExecReady } from './msb';
@@ -57,6 +62,13 @@ const GUEST_WORKDIR = '/work';
 export const AGENT_CONFIG_GUEST_DIR = '/agent-config';
 
 /**
+ * Mountpunkt des persistenten Bun-Install-Caches (ADR 0002): hält die per
+ * `bun add` nachinstallierten Delta-Pakete über VM-Neustarts hinweg —
+ * der Boot-Delta-Install bedient sich daraus (offline-fähig).
+ */
+export const BUN_CACHE_GUEST_DIR = '/bun-cache';
+
+/**
  * Echter Sandbox-Provider auf microsandbox-MicroVMs (libkrun).
  *
  * PID 1 der VM ist ein In-VM-Supervisor (tini + monit, siehe vmServices.ts),
@@ -89,6 +101,9 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     // Persistente Agent-Config (Claude-Sessiondaten) — überlebt VM-Neustarts (R9).
     const agentConfigDir = agentConfigDirFor(this.config.macvibesHome, context.projectId);
     mkdirSync(agentConfigDir, { recursive: true });
+    // Persistenter Bun-Cache (ADR 0002) — Delta-Pakete überleben VM-Neustarts.
+    const bunCacheDir = bunCacheDirFor(this.config.macvibesHome, context.projectId);
+    mkdirSync(bunCacheDir, { recursive: true });
 
     // Baseline-Fork (B5b) ist Pflicht: der Snapshot enthält neben node_modules
     // auch tini/monit (PID 1) und das Agent SDK — ohne ihn bootet die VM nicht.
@@ -111,6 +126,9 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
         // in der VM lokal — dafür braucht er die Ports.
         MACVIBES_PREVIEW_PORT: String(context.previewPort),
         MACVIBES_MONIT_PORT: String(MONIT_HTTPD_PORT),
+        // Ein Mechanismus, zwei Nutzer (ADR 0002): gilt für bun add des Agenten
+        // UND für den Boot-Delta-Install in devserver-run.sh (sourcet die Env).
+        BUN_INSTALL_CACHE_DIR: BUN_CACHE_GUEST_DIR,
       },
     });
 
@@ -127,9 +145,11 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     }
 
     // node_modules kommt vorinstalliert aus dem Snapshot und wird in den
-    // gemounteten Workspace gelinkt — kein Install zur Laufzeit. Verlinkt ALLE
-    // node_modules (auch apps/<x>/node_modules bei Workspace-Templates wie
-    // fullstack), nicht nur das Root — sonst fehlt z. B. vite in .bin.
+    // gemounteten Workspace gelinkt — kein VOLL-Install zur Laufzeit; das
+    // Delta aus bun.lock zieht devserver-run.sh beim Start (ADR 0002).
+    // Verlinkt ALLE node_modules (auch apps/<x>/node_modules bei
+    // Workspace-Templates wie fullstack), nicht nur das Root — sonst fehlt
+    // z. B. vite in .bin.
     const bootstrap = baselineBootstrapScript;
 
     await runMsb([
@@ -144,6 +164,8 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       `${workspaceDir}:${GUEST_WORKDIR}`,
       '-v',
       `${agentConfigDir}:${AGENT_CONFIG_GUEST_DIR}`,
+      '-v',
+      `${bunCacheDir}:${BUN_CACHE_GUEST_DIR}`,
       '-v',
       `${etcDir}:${VM_ETC_DIR}:ro`,
       '-v',

@@ -113,6 +113,12 @@ bun run start              # Produktion: Web bauen + Server (liefert dist aus, L
 - `msb` muss installiert sein (`brew install superradcompany/tap/microsandbox`).
   Ohne `msb` fällt der Server automatisch auf den Prozess-Provider zurück
   (kein VM-Isolat — nur Dev). Erzwingen: `MACVIBES_SANDBOX=microsandbox|process`.
+- **Dependencies überleben VM-Neustarts per Delta-Install (ADR 0002):**
+  `node_modules` ist ein Symlink in den ephemeren Snapshot-Fork; ein `bun add`
+  des Agenten landet nur in `bun.lock` (persistent, auto-committet). Beim
+  Dev-Server-Start zieht `devserver-run.sh` das Delta per `bun install` nach
+  (No-Op ~17 ms), gespeist aus dem persistenten Bun-Cache auf dem
+  Projekt-Volume (`bun-cache`, gemountet als `/bun-cache`).
 - **Baselines sind Pflicht** und nach jeder Template-Änderung neu bauen
   (`bun run baselines`): eine Builder-VM installiert `bun install`, das
   **Agent SDK** (`/opt/macvibes`) und **tini + monit** (In-VM-Supervisor) und

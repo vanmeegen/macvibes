@@ -29,6 +29,16 @@ export function agentConfigDirFor(macvibesHome: string, projectId: string): stri
 }
 
 /**
+ * Persistenter Bun-Install-Cache pro Projekt (ADR 0002): hält NUR die per
+ * `bun add` nachinstallierten Delta-Pakete — die Basis kommt weiter aus dem
+ * Baseline-Snapshot. Pro Projekt statt global, damit nie zwei VMs gleichzeitig
+ * in dasselbe virtiofs-Verzeichnis schreiben.
+ */
+export function bunCacheDirFor(macvibesHome: string, projectId: string): string {
+  return join(projectVolumeDir(macvibesHome, projectId), 'bun-cache');
+}
+
+/**
  * Klont den Projekt-Branch beim ersten Start in das Projekt-Volume;
  * ein bestehendes Volume wird unverändert wiederverwendet (R9).
  */

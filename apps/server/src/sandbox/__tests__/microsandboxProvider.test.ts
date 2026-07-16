@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
-import { existsSync, lstatSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildDaemonBundle } from '../../agent/daemonBundle';
 import { baselineExists, buildTemplateBaseline } from '../baselineService';
@@ -238,6 +238,79 @@ describe.skipIf(!available)('Agent-Config-Persistenz (R9, resume über VM-Neusta
         `cat ${AGENT_CONFIG_GUEST_DIR}/session-marker 2>/dev/null || echo FEHLT`,
       ]);
       expect(marker.trim()).toBe('sess-123');
+
+      await h2.stop();
+      activeHandle = null;
+    },
+    { timeout: 180_000 },
+  );
+});
+
+describe.skipIf(!available)('Delta-Install (ADR 0002: bun add überlebt VM-Neustart)', () => {
+  test(
+    'ein per bun add installiertes Paket ist nach dem Neustart wieder importierbar',
+    async () => {
+      const { home, bare } = await projectSetup('delta');
+      const provider = new MicrosandboxSandboxProvider(providerConfig(home, bare));
+      const ctx = {
+        projectId: 'delta',
+        branchName: 'marco/delta',
+        workspaceDir: workspaceDirFor(home, 'delta'),
+        templateDir: FIXTURE_TEMPLATE_DIR,
+        devCommand: 'bun server.ts',
+        previewPort: 5199,
+      };
+
+      // 1. Start: file:-Dependency host-seitig ins Volume legen (kein Netz
+      // nötig) und in der VM per bun add installieren.
+      const h1 = await provider.start(ctx);
+      activeHandle = h1;
+      await waitForHttp(`http://localhost:${h1.previewHostPort}/`);
+      const vendorDir = join(ctx.workspaceDir, 'vendor', 'mv-testpkg');
+      mkdirSync(vendorDir, { recursive: true });
+      writeFileSync(
+        join(vendorDir, 'package.json'),
+        JSON.stringify({ name: 'mv-testpkg', version: '1.0.0', main: 'index.js' }),
+      );
+      writeFileSync(join(vendorDir, 'index.js'), "module.exports = 'delta-lebt';");
+      await runMsb([
+        'exec',
+        'macvibes-delta',
+        '--',
+        'sh',
+        '-c',
+        'cd /work && bun add ./vendor/mv-testpkg 2>&1 | tail -1',
+      ]);
+      const first = await runMsb([
+        'exec',
+        'macvibes-delta',
+        '--',
+        'bun',
+        '-e',
+        "console.log(require('mv-testpkg'))",
+      ]);
+      expect(first.trim()).toBe('delta-lebt');
+      await h1.stop();
+      activeHandle = null;
+
+      // 2. Neustart: frischer Fork — der Boot-Delta-Install (devserver-run.sh)
+      // muss das Paket aus bun.lock rekonstruieren, BEVOR die Preview ready ist.
+      const h2 = await provider.start(ctx);
+      activeHandle = h2;
+      await waitForHttp(`http://localhost:${h2.previewHostPort}/`);
+      const second = await runMsb([
+        'exec',
+        'macvibes-delta',
+        '--',
+        'bun',
+        '-e',
+        "console.log(require('mv-testpkg'))",
+      ]);
+      expect(second.trim()).toBe('delta-lebt');
+
+      // Mechanismus unverändert: node_modules bleibt Symlink in den Fork.
+      const stat = lstatSync(join(ctx.workspaceDir, 'node_modules'), { throwIfNoEntry: false });
+      expect(stat?.isSymbolicLink()).toBe(true);
 
       await h2.stop();
       activeHandle = null;

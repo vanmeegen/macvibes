@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createProjectBranch, ensureBareRepo } from '../gitService';
-import { ensureWorkspace, workspaceDirFor } from '../workspaceService';
+import { bunCacheDirFor, ensureWorkspace, workspaceDirFor } from '../workspaceService';
 import { createTempDir, createTemplatesFixture, removeDir } from './testUtils';
 
 const tempDirs: string[] = [];
@@ -25,6 +25,12 @@ async function setup(): Promise<{ home: string; bare: string }> {
   await createProjectBranch(bare, 'marco/dashboard', join(templates, 'pwa'));
   return { home, bare };
 }
+
+describe('bunCacheDirFor (persistenter Bun-Cache pro Projekt, ADR 0002)', () => {
+  test('liegt im Projekt-Volume neben workspace und agent-config', () => {
+    expect(bunCacheDirFor('/home/x/macvibes', 'p1')).toBe('/home/x/macvibes/volumes/p1/bun-cache');
+  });
+});
 
 describe('ensureWorkspace (R9 Volume-Persistenz)', () => {
   test('klont den Projekt-Branch beim ersten Mal in das Projekt-Volume', async () => {
