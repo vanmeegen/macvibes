@@ -76,6 +76,46 @@ Gateway auf einem festen Port (`MACVIBES_PREVIEW_GATEWAY_PORT`, Default **4173**
 Damit die Preview von unterwegs sichtbar ist, muss neben der UI (5173 bzw. prod 4000) **einmalig auch Port 4173** im Router/WireGuard geforwardet werden — die
 dynamischen VM-Ports müssen dann nicht mehr freigegeben werden.
 
+## HTTPS im LAN (Caddy — nötig für Mikrofon/Web Audio)
+
+Browser geben Mikrofon, AudioWorklet & Co. nur in einem **Secure Context**
+frei — im LAN heißt das HTTPS. Dafür terminiert ein
+[Caddy](https://caddyserver.com) mit lokaler CA vor den unveränderten
+http-Backends. **Caddy ist eine eigene Installations-Voraussetzung:**
+
+```bash
+brew install caddy
+
+# ~/macvibes/Caddyfile anlegen (IP anpassen):
+#   {
+#     local_certs
+#     storage file_system ~/macvibes/caddy-storage   # WICHTIG: sonst erzeugen
+#   }                                                # verschiedene Startarten
+#   https://<lan-ip>, https://localhost {            # unterschiedliche CAs!
+#     reverse_proxy localhost:4000                   # Web/API (prod)
+#   }
+#   https://<lan-ip>:8443, https://localhost:8443 {
+#     reverse_proxy localhost:4173                   # Preview-iframe
+#   }
+#   https://<lan-ip>:5443, https://localhost:5443 {
+#     reverse_proxy localhost:5173                   # Dev-Modus (Vite)
+#   }
+
+cp ~/macvibes/Caddyfile /opt/homebrew/etc/Caddyfile
+brew services start caddy   # Autostart beim Login
+caddy trust                 # macOS der lokalen CA vertrauen (einmalig)
+
+# In apps/server/.env:
+#   MACVIBES_PREVIEW_GATEWAY_HTTPS_PORT=8443
+```
+
+Andere Geräte (z. B. iPad) müssen der CA einmalig vertrauen: das
+Root-Zertifikat aus `~/macvibes/caddy-storage/pki/authorities/local/root.crt`
+aufs Gerät bringen, Profil installieren und unter _Einstellungen → Allgemein →
+Info → Zertifikatsvertrauen_ aktivieren. Danach `https://<lan-ip>` verwenden.
+Ohne Caddy läuft macvibes unverändert über http — nur eben ohne
+Mikrofon-/Audio-APIs auf Fremdgeräten.
+
 ## Diktieren (Mikro-Button im Chat)
 
 Der Mikro-Button neben dem Eingabefeld nutzt **Chromes lokale On-Device-
