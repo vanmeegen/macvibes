@@ -27,7 +27,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import type { ChatMessage } from '../api/types';
 import type { ChatStore } from '../models/ChatStore';
 import { derivePreviewView } from '../models/PreviewModel';
-import { agentWorkingLabel, sandboxStatusLabel, type ProjectsStore } from '../models/ProjectsStore';
+import { agentWorkingLabel, projectStatusChip, type ProjectsStore } from '../models/ProjectsStore';
 import type { SpeechStore } from '../models/SpeechStore';
 
 export interface ChatPageProps {
@@ -262,14 +262,17 @@ export const ChatPage = observer(function ChatPage({
             </TextField>
           )}
           {project !== null && (
+            // turnActive live aus dem ChatStore (Subscription) — Project.turnActive
+            // aus der Projektliste hinkt hier hinterher (2-s-Polling).
             <Chip
               size="small"
-              label={sandboxStatusLabel(project.sandboxStatus)}
-              color={project.sandboxStatus === 'running' ? 'success' : 'default'}
+              label={projectStatusChip(project.sandboxStatus, chatStore.turnActive).label}
+              color={projectStatusChip(project.sandboxStatus, chatStore.turnActive).color}
               variant="outlined"
               sx={{ mr: 2 }}
               data-testselector="chat-sandbox-status"
               data-status={project.sandboxStatus}
+              data-turn-active={chatStore.turnActive ? 'true' : 'false'}
             />
           )}
           {project !== null && (
