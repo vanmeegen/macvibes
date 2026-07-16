@@ -142,6 +142,13 @@ beforeAll(async () => {
         MACVIBES_AGENT_CWD: '/work',
       }),
     },
+    // Echtes Gateway: deckt den preview-status-Push-Pfad (ADR 0001) live ab.
+    subscribePreviewStatus: (sandbox, listener) =>
+      gateway.subscribe(sandbox, (notification) => {
+        if (notification.kind === 'message' && notification.message.kind === 'preview-status') {
+          listener(notification.message.status);
+        }
+      }),
   });
 
   handle = await provider.start({

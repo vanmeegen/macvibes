@@ -1,6 +1,8 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
+import { httpProbe } from '../../sandbox/httpProbe';
 import { DaemonSession } from './daemonSession';
 import type { QueryHandle } from './daemonSession';
+import { PreviewStatusReporter } from './previewStatusReporter';
 import { parseHostToDaemon } from './protocol';
 import type { DaemonToHostMessage } from './protocol';
 
@@ -79,6 +81,37 @@ const session = new DaemonSession({
     });
   },
 });
+
+/**
+ * Preview-Status-Push (ADR 0001): monit lokal lesen, Status über die stehende
+ * Daemon-Verbindung melden — kein fragiles monit-Port-Mapping auf dem Host.
+ * Ohne MACVIBES_PREVIEW_PORT (z. B. alte Provider-Version) läuft der Daemon
+ * ohne Reporter weiter; der Host fällt dann auf seine HTTP-Probe zurück.
+ */
+const previewPort = Number(process.env['MACVIBES_PREVIEW_PORT'] ?? '');
+const monitPort = Number(process.env['MACVIBES_MONIT_PORT'] ?? '2812');
+if (Number.isFinite(previewPort) && previewPort > 0) {
+  const reporter = new PreviewStatusReporter({
+    fetchMonitText: async () => {
+      const response = await fetch(`http://127.0.0.1:${monitPort}/_status?format=text`, {
+        signal: AbortSignal.timeout(1500),
+      });
+      if (!response.ok) throw new Error(`monit-Status ${response.status}`);
+      return response.text();
+    },
+    probe: () => httpProbe(`http://127.0.0.1:${previewPort}/`),
+    send: (status) => {
+      if (socket !== null && socket.readyState === WebSocket.OPEN) {
+        socket.send(
+          JSON.stringify({ kind: 'preview-status', status } satisfies DaemonToHostMessage),
+        );
+      }
+    },
+  });
+  reporter.start();
+} else {
+  console.error('Agent-Daemon: MACVIBES_PREVIEW_PORT fehlt — kein Preview-Status-Push.');
+}
 
 /**
  * Heartbeat-Intervall: hält den NAT-Flow VM→Host warm. microsandbox lässt

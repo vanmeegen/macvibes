@@ -3,13 +3,9 @@ import { dirname, join } from 'node:path';
 import { agentConfigDirFor, ensureWorkspace, projectVolumeDir } from '../services/workspaceService';
 import { baselineBootstrapScript, baselineExists, baselineSnapshotName } from './baselineService';
 import { httpProbe } from './httpProbe';
-import {
-  gateReadyWithProbe,
-  previewStatusFromMonitText,
-  statusWithProbeFallback,
-} from './monitStatus';
 import { MicrosandboxError, runMsb, waitForExecReady } from './msb';
 import { PreviewStatusPoller } from './previewStatusPoller';
+import { PushedPreviewStatus } from './previewStatusPush';
 import { PortAllocator } from './portService';
 import { MONIT_HTTPD_PORT, VM_BIN_DIR, VM_ETC_DIR, buildVmServices } from './vmServices';
 import type { PreviewStatus, SandboxContext, SandboxHandle, SandboxProvider } from './provider';
@@ -33,7 +29,18 @@ export interface MicrosandboxProviderConfig {
   memoryMib: number;
   /** Agent-Daemon-Transport — Pflicht: die VM läuft immer unter tini+monit. */
   agentDaemon: AgentDaemonProviderConfig;
+  /**
+   * Abo auf die preview-status-Pushes des VM-Daemons (ADR 0001) — in der
+   * Produktion das Agent-Gateway. Rückgabe: Abbestellen.
+   */
+  subscribePreviewStatus: (
+    sandbox: string,
+    listener: (status: PreviewStatus) => void,
+  ) => () => void;
 }
+
+/** Ab wann ein Daemon-Status-Push als veraltet gilt (Daemon pusht alle ≤5 s). */
+const PUSH_STALE_MS = 15_000;
 
 /** Sandbox-Name eines Projekts — vom Provider und vom Runner genutzt. */
 export function microsandboxSandboxName(projectId: string): string {
@@ -94,13 +101,17 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
 
     const name = microsandboxSandboxName(context.projectId);
     const hostPort = await this.ports.allocate(context.previewPort);
-    // monit-Status-API — nur auf dem Host (127.0.0.1) gemappt, füttert previewStatus.
-    const statusHostPort = await this.ports.allocate(MONIT_HTTPD_PORT);
 
     const services = buildVmServices({
       devCommand: context.devCommand,
       previewPort: context.previewPort,
-      daemonEnv: this.config.agentDaemon.envFor(name),
+      daemonEnv: {
+        ...this.config.agentDaemon.envFor(name),
+        // Preview-Status-Push (ADR 0001): der Daemon liest monit + Dev-Server
+        // in der VM lokal — dafür braucht er die Ports.
+        MACVIBES_PREVIEW_PORT: String(context.previewPort),
+        MACVIBES_MONIT_PORT: String(MONIT_HTTPD_PORT),
+      },
     });
 
     // Service-Konfiguration pro Projekt aufs Volume schreiben (ro-Mount).
@@ -139,11 +150,11 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       `${this.config.agentDaemon.bundleDir}:${VM_BIN_DIR}:ro`,
       '-w',
       GUEST_WORKDIR,
-      // 0.0.0.0: Preview ist im LAN erreichbar (R7/NFR).
+      // 0.0.0.0: Preview ist im LAN erreichbar (R7/NFR). Bewusst das EINZIGE
+      // Port-Mapping — msb-Forwarder können still sterben (ADR 0001), der
+      // Status kommt deshalb über die Daemon-Verbindung statt über ein Mapping.
       '-p',
       `0.0.0.0:${hostPort}:${context.previewPort}`,
-      '-p',
-      `127.0.0.1:${statusHostPort}:${MONIT_HTTPD_PORT}`,
       // Egress: öffentliches Internet (bun/npm) + Host-Gateway für den
       // Credential-Proxy (host.microsandbox.internal, B5c). Private Netze
       // sonst gesperrt — der Agent kommt nicht ins LAN.
@@ -164,23 +175,14 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     // ohne dieses Warten scheitern frühe execs ("no agent endpoint found").
     await waitForExecReady(name);
 
-    const probePreview = (): Promise<boolean> => httpProbe(`http://localhost:${hostPort}/`);
+    // Preview-Status: frische Daemon-Pushes zählen (monit-Detailtiefe), ohne
+    // sie entscheidet die HTTP-Probe auf den Preview-Port (ADR 0001).
+    const pushed = new PushedPreviewStatus({ staleMs: PUSH_STALE_MS });
+    const unsubscribeStatus = this.config.subscribePreviewStatus(name, (status) =>
+      pushed.receive(status),
+    );
     const poller = new PreviewStatusPoller({
-      // Fällt die monit-API aus (z. B. verlorenes Port-Mapping), entscheidet
-      // die Preview-Probe: antwortet sie, ist der Dev-Server gesund (ready).
-      fetchStatus: (): Promise<PreviewStatus> =>
-        statusWithProbeFallback(async () => {
-          const response = await fetch(`http://127.0.0.1:${statusHostPort}/_status?format=text`, {
-            signal: AbortSignal.timeout(1500),
-          });
-          if (!response.ok) throw new Error(`monit-Status ${response.status}`);
-          // 'ready' erst, wenn der Dev-Server WIRKLICH HTTP beantwortet — monit
-          // sieht nur den Prozess (siehe gateReadyWithProbe).
-          return gateReadyWithProbe(
-            previewStatusFromMonitText(await response.text()),
-            probePreview,
-          );
-        }, probePreview),
+      fetchStatus: pushed.fetchStatus(() => httpProbe(`http://localhost:${hostPort}/`)),
       onStatusChange: (status) => console.log(`Preview ${context.projectId}: ${status}`),
     });
     poller.start();
@@ -189,9 +191,9 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       previewHostPort: hostPort,
       previewStatus: (): PreviewStatus => poller.getStatus(),
       stop: async () => {
+        unsubscribeStatus();
         poller.stop();
         this.ports.release(hostPort);
-        this.ports.release(statusHostPort);
         await this.stopVm(name);
       },
     };

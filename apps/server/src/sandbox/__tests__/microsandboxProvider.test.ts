@@ -82,6 +82,8 @@ function providerConfig(home: string, bare: string): MicrosandboxProviderConfig 
         MACVIBES_AGENT_CWD: '/work',
       }),
     },
+    // Kein Gateway im Test: keine Pushes — der Status kommt aus der Probe.
+    subscribePreviewStatus: () => () => undefined,
   };
 }
 

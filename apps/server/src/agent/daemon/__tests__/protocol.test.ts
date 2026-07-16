@@ -94,6 +94,26 @@ describe('parseDaemonToHost', () => {
     }
   });
 
+  test('preview-status wird geparst (ADR 0001: Status über die Daemon-Verbindung)', () => {
+    expect(parseDaemonToHost(JSON.stringify({ kind: 'preview-status', status: 'ready' }))).toEqual({
+      kind: 'preview-status',
+      status: 'ready',
+    });
+    expect(
+      parseDaemonToHost(JSON.stringify({ kind: 'preview-status', status: 'restarting' })),
+    ).toEqual({ kind: 'preview-status', status: 'restarting' });
+    expect(parseDaemonToHost(JSON.stringify({ kind: 'preview-status', status: 'failed' }))).toEqual(
+      { kind: 'preview-status', status: 'failed' },
+    );
+  });
+
+  test('preview-status mit unbekanntem Status ergibt null (nichts vom Netz durchreichen)', () => {
+    expect(
+      parseDaemonToHost(JSON.stringify({ kind: 'preview-status', status: 'explodiert' })),
+    ).toBeNull();
+    expect(parseDaemonToHost(JSON.stringify({ kind: 'preview-status' }))).toBeNull();
+  });
+
   test('unbekannte Event-Typen und kaputte Nachrichten ergeben null', () => {
     expect(parseDaemonToHost('{ kaputt')).toBeNull();
     expect(

@@ -1,4 +1,5 @@
 import type { AgentEvent } from '../events';
+import type { PreviewStatus } from '../../sandbox/provider';
 
 /**
  * WS-Protokoll Host ↔ Agent-Daemon (in der VM). Der Daemon wählt sich beim
@@ -44,7 +45,25 @@ export type DaemonToHostMessage =
    * bleibt scheinbar offen) und Sends verschwinden spurlos (Live-Befund).
    */
   | { kind: 'turn-started'; turnId: string }
-  | { kind: 'event'; turnId: string; event: AgentEvent };
+  | { kind: 'event'; turnId: string; event: AgentEvent }
+  /**
+   * Preview-Status aus der VM (ADR 0001): der Daemon liest monit lokal und
+   * pusht über die bestehende Verbindung — kein monit-Port-Mapping mehr.
+   */
+  | { kind: 'preview-status'; status: PreviewStatus };
+
+/** Wire-Whitelist — nichts Unbekanntes vom Netz durchreichen. */
+const PREVIEW_STATUS_VALUES: readonly PreviewStatus[] = [
+  'starting',
+  'ready',
+  'restarting',
+  'failed',
+  'stopped',
+];
+
+function isPreviewStatus(value: unknown): value is PreviewStatus {
+  return typeof value === 'string' && (PREVIEW_STATUS_VALUES as readonly string[]).includes(value);
+}
 
 function parseJsonObject(raw: string): Record<string, unknown> | null {
   let value: unknown;
@@ -115,6 +134,10 @@ export function parseDaemonToHost(raw: string): DaemonToHostMessage | null {
     const event = parseAgentEvent(msg['event']);
     if (event === null) return null;
     return { kind: 'event', turnId: msg['turnId'], event };
+  }
+
+  if (msg['kind'] === 'preview-status' && isPreviewStatus(msg['status'])) {
+    return { kind: 'preview-status', status: msg['status'] };
   }
 
   return null;

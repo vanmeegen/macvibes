@@ -120,6 +120,13 @@ const sandboxProvider = useMicrosandbox
           MACVIBES_AGENT_CWD: '/work',
         }),
       },
+      // Preview-Status kommt als Push über die Daemon-Verbindung (ADR 0001).
+      subscribePreviewStatus: (sandbox, listener) =>
+        agentGateway.subscribe(sandbox, (notification) => {
+          if (notification.kind === 'message' && notification.message.kind === 'preview-status') {
+            listener(notification.message.status);
+          }
+        }),
     })
   : new ProcessSandboxProvider({
       macvibesHome: config.macvibesHome,
