@@ -144,6 +144,9 @@ const sandboxManager = new SandboxManager({
   onStatusChange: (projectId, status) => {
     console.log(`Sandbox ${projectId}: ${status}`);
   },
+  // Grace-Stopp aufschieben, solange ein Agent-Turn läuft — lange (z. B.
+  // lokale qwen-)Turns überleben so das Zurücknavigieren zur Projektliste.
+  isBusy: (projectId) => chatServiceRef?.isTurnActive(projectId) ?? false,
   // Offenen Stand vor jedem Stopp sichern (R9).
   onBeforeStop: async (projectId) => {
     const workspaceDir = workspaceDirFor(config.macvibesHome, projectId);

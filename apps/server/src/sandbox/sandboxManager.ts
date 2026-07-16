@@ -17,6 +17,11 @@ export interface SandboxManagerOptions {
   /** Hook vor jedem Stopp — Auto-Commit eines offenen Stands (R8/R9). */
   onBeforeStop?: (projectId: string) => Promise<void>;
   onStatusChange?: (projectId: string, status: SandboxStatus) => void;
+  /**
+   * Läuft gerade ein Agent-Turn? Der Grace-Stopp schiebt sich dann um eine
+   * weitere Grace-Period auf, statt den Turn mitten drin zu killen.
+   */
+  isBusy?: (projectId: string) => boolean;
 }
 
 type Timer = ReturnType<typeof setTimeout>;
@@ -88,10 +93,23 @@ export class SandboxManager {
   leave(projectId: string): void {
     const entry = this.entries.get(projectId);
     if (!entry || (entry.status !== 'running' && entry.status !== 'starting')) return;
+    this.armGrace(entry);
+  }
+
+  /**
+   * Grace-Timer scharf stellen. Läuft beim Ablauf noch ein Agent-Turn
+   * (isBusy), verschiebt sich der Stopp um eine weitere Grace-Period —
+   * ein Turn wird nie mitten drin gekillt, nur weil die Chat-Page zu ist.
+   */
+  private armGrace(entry: SandboxEntry): void {
     this.clearGrace(entry);
     entry.graceTimer = setTimeout(() => {
       entry.graceTimer = null;
-      void this.stop(projectId);
+      if (this.options.isBusy?.(entry.context.projectId)) {
+        this.armGrace(entry);
+        return;
+      }
+      void this.stop(entry.context.projectId);
     }, this.options.graceMs);
   }
 

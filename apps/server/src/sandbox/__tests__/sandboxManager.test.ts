@@ -37,7 +37,12 @@ interface Setup {
 }
 
 function setup(
-  overrides: { graceMs?: number; idleMs?: number; maxSandboxes?: number } = {},
+  overrides: {
+    graceMs?: number;
+    idleMs?: number;
+    maxSandboxes?: number;
+    isBusy?: (projectId: string) => boolean;
+  } = {},
 ): Setup {
   const provider = new FakeProvider();
   const statusLog: string[] = [];
@@ -47,6 +52,7 @@ function setup(
     graceMs: overrides.graceMs ?? 40,
     idleMs: overrides.idleMs ?? 10_000,
     maxSandboxes: overrides.maxSandboxes ?? 8,
+    ...(overrides.isBusy !== undefined ? { isBusy: overrides.isBusy } : {}),
     onBeforeStop: async (projectId) => {
       beforeStopLog.push(projectId);
     },
@@ -151,6 +157,37 @@ describe('leave / Grace-Period (R9)', () => {
     expect(manager.status('p1')).toBe('running');
     expect(provider.stopCalls).toEqual([]);
     expect(provider.startCalls).toEqual(['p1']);
+  });
+
+  test('Grace-Stopp wird aufgeschoben, solange ein Turn läuft', async () => {
+    let busy = true;
+    const { provider, manager } = setup({ graceMs: 20, isBusy: () => busy });
+    await manager.enter(ctx('p1'));
+    manager.leave('p1');
+
+    // Mehrere Grace-Zyklen lang beschäftigt — kein Stopp trotz Ablauf.
+    await Bun.sleep(90);
+    expect(manager.status('p1')).toBe('running');
+    expect(provider.stopCalls).toEqual([]);
+
+    // Turn endet → der nächste Grace-Zyklus stoppt die Sandbox.
+    busy = false;
+    await Bun.sleep(90);
+    expect(manager.status('p1')).toBe('stopped');
+    expect(provider.stopCalls).toEqual(['p1']);
+  });
+
+  test('erneutes Betreten während des aufgeschobenen Grace-Stopps hält die Sandbox am Leben', async () => {
+    const busy = true;
+    const { provider, manager } = setup({ graceMs: 20, isBusy: () => busy });
+    await manager.enter(ctx('p1'));
+    manager.leave('p1');
+    await Bun.sleep(50);
+    await manager.enter(ctx('p1'));
+    await Bun.sleep(90);
+    // Wieder betreten: Grace ist abgeräumt, busy spielt keine Rolle mehr.
+    expect(manager.status('p1')).toBe('running');
+    expect(provider.stopCalls).toEqual([]);
   });
 });
 
