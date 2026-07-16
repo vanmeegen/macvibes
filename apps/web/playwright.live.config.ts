@@ -14,7 +14,8 @@ export default defineConfig({
   timeout: 420_000,
   reporter: [['list']],
   use: {
-    baseURL: 'http://localhost:4000',
+    // Ziel-Server des Live-Walkthroughs — per Env auf andere Hosts/Ports lenkbar.
+    baseURL: process.env.MACVIBES_BASE_URL ?? 'http://localhost:4000',
     testIdAttribute: 'data-testselector',
     trace: 'retain-on-failure',
     viewport: { width: 1440, height: 900 },
