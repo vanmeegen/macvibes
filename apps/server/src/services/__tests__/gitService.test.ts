@@ -5,6 +5,7 @@ import {
   createProjectBranch,
   deleteBranch,
   ensureBareRepo,
+  forkBranch,
   listBranches,
 } from '../gitService';
 import { createTempDir, createTemplatesFixture, removeDir } from './testUtils';
@@ -58,6 +59,30 @@ describe('createProjectBranch', () => {
     await expect(createProjectBranch(bare, 'marco/dashboard', templatePath)).rejects.toThrow(
       GitError,
     );
+  });
+});
+
+describe('forkBranch („Kopieren und Anpassen")', () => {
+  test('neuer Branch zeigt auf den HEAD des Quell-Branches (voller Stand, volle Historie)', async () => {
+    const { bare, templatePath } = await setup();
+    await createProjectBranch(bare, 'marco/dashboard', templatePath);
+
+    await forkBranch(bare, 'gast/dashboard-kopie', 'marco/dashboard');
+
+    expect((await listBranches(bare)).sort()).toEqual(['gast/dashboard-kopie', 'marco/dashboard']);
+    const proc = Bun.spawn(['git', 'rev-parse', 'marco/dashboard', 'gast/dashboard-kopie'], {
+      cwd: bare,
+      stdout: 'pipe',
+    });
+    const [a, b] = (await new Response(proc.stdout).text()).trim().split('\n');
+    expect(a).toBe(b);
+  });
+
+  test('schlägt fehl, wenn der Quell-Branch fehlt oder das Ziel existiert', async () => {
+    const { bare, templatePath } = await setup();
+    await createProjectBranch(bare, 'marco/dashboard', templatePath);
+    await expect(forkBranch(bare, 'gast/kopie', 'marco/fehlt')).rejects.toThrow(GitError);
+    await expect(forkBranch(bare, 'marco/dashboard', 'marco/dashboard')).rejects.toThrow(GitError);
   });
 });
 

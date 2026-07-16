@@ -41,7 +41,7 @@ test('lehnt doppelte Projektnamen desselben Users verständlich ab', async ({ pa
   await expect(projectsPage.dialogError).toBeVisible();
 });
 
-test('Filter: „Nur meine" ist Default, „Alle" zeigt fremde Projekte ohne Kartenmenü', async ({
+test('Filter: „Nur meine" ist Default; fremde Karten nur mit „Kopieren und Anpassen"', async ({
   page,
 }) => {
   const projectsPage = new ProjectsPage(page);
@@ -58,12 +58,44 @@ test('Filter: „Nur meine" ist Default, „Alle" zeigt fremde Projekte ohne Kar
   await expect(projectsPage.newProjectFab).toBeVisible();
   await expect(projectsPage.cardByName(foreignProject)).not.toBeVisible();
 
-  // „Alle": sichtbar, aber ohne Kartenmenü (Umbenennen/Löschen); Owner wird angezeigt.
+  // „Alle": sichtbar mit Menü — aber fremd nur Kopieren, kein Umbenennen/Löschen.
   await projectsPage.filterAll.click();
   const foreignCard = projectsPage.cardByName(foreignProject);
   await expect(foreignCard).toBeVisible();
   await expect(foreignCard).toContainText(ownerName);
-  await expect(projectsPage.menuButtonIn(foreignCard)).toHaveCount(0);
+  await projectsPage.menuButtonIn(foreignCard).click();
+  await expect(projectsPage.copyMenuItem).toBeVisible();
+  await expect(projectsPage.renameMenuItem).toHaveCount(0);
+  await expect(projectsPage.deleteMenuItem).toHaveCount(0);
+});
+
+test('„Kopieren und Anpassen": fremdes Projekt forken, Fork gehört einem selbst', async ({
+  page,
+}) => {
+  const projectsPage = new ProjectsPage(page);
+
+  // User A legt ein Projekt an.
+  await registerNewUser(page);
+  const original = uniqueProjectName('Original');
+  await projectsPage.createProject(original, 'pwa');
+  await projectsPage.goto();
+  await projectsPage.logout();
+
+  // User B kopiert es über das Kartenmenü.
+  const copierName = await registerNewUser(page);
+  await projectsPage.filterAll.click();
+  const copyName = uniqueProjectName('Mein Fork');
+  await projectsPage.copyProject(original, copyName);
+  // Anlegen führt direkt in den Chat des neuen Projekts.
+  await page.waitForURL('**/projects/**');
+
+  // Zurück zur Liste: der Fork gehört User B und hat das eigene Kartenmenü.
+  await projectsPage.goto();
+  const forkCard = projectsPage.cardByName(copyName);
+  await expect(forkCard).toBeVisible();
+  await expect(forkCard).toContainText(copierName);
+  await projectsPage.menuButtonIn(forkCard).click();
+  await expect(projectsPage.renameMenuItem).toBeVisible();
 });
 
 test('benennt ein eigenes Projekt über das Kartenmenü um', async ({ page }) => {

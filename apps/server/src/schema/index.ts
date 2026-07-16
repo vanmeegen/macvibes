@@ -15,6 +15,7 @@ import {
 import { DomainError } from '../services/errors';
 import { AGENT_MODELS, type AgentModelInfo } from '../agent/agentModel';
 import {
+  copyProject,
   createProject,
   deleteProject,
   getProject,
@@ -300,6 +301,23 @@ builder.mutationType({
         await deleteProject(ctx.db, user, String(args.id), ctx.config.macvibesHome);
         return true;
       },
+    }),
+    /**
+     * „Kopieren und Anpassen": forkt ein beliebiges Projekt (auch fremde) auf
+     * den eigenen Namen — der neue Branch setzt auf dem Entwicklungsstand des
+     * Originals auf. Bewusst KEINE Ownership-Prüfung: jeder darf kopieren.
+     */
+    copyProject: t.field({
+      type: ProjectRef,
+      args: {
+        sourceId: t.arg.id({ required: true }),
+        name: t.arg.string({ required: true }),
+      },
+      resolve: (_root, args, ctx) =>
+        copyProject(ctx.db, ctx.config, requireUser(ctx), {
+          sourceProjectId: String(args.sourceId),
+          name: args.name,
+        }),
     }),
     /** Benennt ein Projekt um — nur der Anzeigename, der Git-Branch bleibt. */
     renameProject: t.field({

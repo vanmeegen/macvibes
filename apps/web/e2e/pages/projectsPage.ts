@@ -59,6 +59,10 @@ export class ProjectsPage {
   }
 
   /** Menü-Einträge rendern in einem Portal, daher page-weit selektieren. */
+  get copyMenuItem(): Locator {
+    return this.page.locator('[data-testselector^="project-copy-"]');
+  }
+
   get renameMenuItem(): Locator {
     return this.page.locator('[data-testselector^="project-rename-"]');
   }
@@ -124,6 +128,14 @@ export class ProjectsPage {
     await this.renameMenuItem.click();
     await this.renameNameInput.fill(newName);
     await this.renameConfirmButton.click();
+  }
+
+  /** „Kopieren und Anpassen" über das Kartenmenü (fremde wie eigene Projekte). */
+  async copyProject(sourceName: string, newName: string): Promise<void> {
+    await this.menuButtonIn(this.cardByName(sourceName)).click();
+    await this.copyMenuItem.click();
+    await this.page.getByTestId('copy-project-name').fill(newName);
+    await this.page.getByTestId('copy-confirm').click();
   }
 
   async openProject(name: string): Promise<void> {

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { DomainError } from '../errors';
 import { ensureBareRepo, listBranches } from '../gitService';
 import {
+  copyProject,
   createProject,
   deleteProject,
   getProject,
@@ -99,6 +100,86 @@ describe('createProject', () => {
     await expect(
       createProject(db, config, marco, { name: '!!!', templateDir: 'pwa' }),
     ).rejects.toThrow(DomainError);
+  });
+});
+
+describe('copyProject („Kopieren und Anpassen")', () => {
+  test('forkt ein FREMDES Projekt auf den eigenen Namen — Branch zeigt auf dessen HEAD', async () => {
+    const { db, config, marco } = await setup();
+    const gast = await createUser(db, 'gast');
+    const source = await createProject(db, config, marco, {
+      name: 'Dashboard',
+      templateDir: 'pwa',
+    });
+
+    const copy = await copyProject(db, config, gast, {
+      sourceProjectId: source.id,
+      name: 'Mein Dashboard-Fork',
+    });
+
+    expect(copy.owner.username).toBe('gast');
+    expect(copy.branchName).toBe('gast/mein-dashboard-fork');
+    // Template-Metadaten kommen vom Quell-Projekt (Baseline/devCommand/Port).
+    expect(copy.templateDir).toBe(source.templateDir);
+    expect(copy.devCommand).toBe(source.devCommand);
+    expect(copy.previewPort).toBe(source.previewPort);
+    // Der Fork zeigt exakt auf den HEAD des Quell-Branches.
+    const proc = Bun.spawn(['git', 'rev-parse', source.branchName, copy.branchName], {
+      cwd: config.bareRepoPath,
+      stdout: 'pipe',
+    });
+    const [a, b] = (await new Response(proc.stdout).text()).trim().split('\n');
+    expect(a).toBe(b);
+    expect(await listProjects(db)).toHaveLength(2);
+  });
+
+  test('löst Slug-Kollisionen im eigenen Namensraum auf', async () => {
+    const { db, config, marco } = await setup();
+    const gast = await createUser(db, 'gast');
+    const source = await createProject(db, config, marco, {
+      name: 'Dashboard',
+      templateDir: 'pwa',
+    });
+    await createProject(db, config, gast, { name: 'Dashboard', templateDir: 'pwa' });
+
+    const copy = await copyProject(db, config, gast, {
+      sourceProjectId: source.id,
+      name: 'Dashboard!',
+    });
+    // Name kollidiert als Slug mit gasts eigenem "Dashboard" → Suffix.
+    expect(copy.branchName).toBe('gast/dashboard-2');
+  });
+
+  test('lehnt doppelten Projektnamen desselben Users ab', async () => {
+    const { db, config, marco } = await setup();
+    const source = await createProject(db, config, marco, {
+      name: 'Dashboard',
+      templateDir: 'pwa',
+    });
+    await expect(
+      copyProject(db, config, marco, { sourceProjectId: source.id, name: 'Dashboard' }),
+    ).rejects.toThrow('bereits ein Projekt');
+  });
+
+  test('meldet unbekannte Quell-Projekte als Fehler', async () => {
+    const { db, config, marco } = await setup();
+    await expect(
+      copyProject(db, config, marco, { sourceProjectId: 'fehlt', name: 'Egal' }),
+    ).rejects.toThrow('Projekt nicht gefunden');
+  });
+
+  test('rollt den Branch zurück, wenn der DB-Insert scheitert', async () => {
+    const { db, config, marco } = await setup();
+    const source = await createProject(db, config, marco, {
+      name: 'Dashboard',
+      templateDir: 'pwa',
+    });
+    // Insert-Fehler provozieren: users-Zeile mit kaputter id.
+    const kaputt = { ...marco, id: 'gibt-es-nicht' };
+    await expect(
+      copyProject(db, config, kaputt, { sourceProjectId: source.id, name: 'Kopie' }),
+    ).rejects.toThrow();
+    expect(await listBranches(config.bareRepoPath)).toEqual(['marco/dashboard']);
   });
 });
 

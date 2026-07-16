@@ -88,6 +88,26 @@ export async function createProjectBranch(
   }
 }
 
+/**
+ * Forkt einen Branch im Bare-Repo („Kopieren und Anpassen"): der neue Branch
+ * zeigt auf den HEAD des Quell-Branches — voller Entwicklungsstand samt
+ * Historie, NICHT die Template-Baseline.
+ */
+export async function forkBranch(
+  bareRepoPath: string,
+  newBranch: string,
+  sourceBranch: string,
+): Promise<void> {
+  const existing = await listBranches(bareRepoPath);
+  if (!existing.includes(sourceBranch)) {
+    throw new GitError(`Quell-Branch ${sourceBranch} existiert nicht`);
+  }
+  if (existing.includes(newBranch)) {
+    throw new GitError(`Branch ${newBranch} existiert bereits`);
+  }
+  await runGit(['branch', newBranch, sourceBranch], bareRepoPath);
+}
+
 /** Entfernt einen Branch aus dem Bare-Repo (nur für Rollback beim Anlegen). */
 export async function deleteBranch(bareRepoPath: string, branchName: string): Promise<void> {
   await runGit(['update-ref', '-d', `refs/heads/${branchName}`], bareRepoPath);

@@ -221,6 +221,66 @@ describe('ProjectsStore', () => {
   });
 });
 
+describe('copyProject („Kopieren und Anpassen" — für JEDEN User)', () => {
+  beforeEach(() => {
+    mockGql.mockReset();
+    window.localStorage.clear();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+
+  function storeWithForeignProject(): ProjectsStore {
+    const store = new ProjectsStore(makeAuthStore('alice'));
+    runInAction(() => {
+      store.projects = [
+        makeProject({
+          id: 'p-bob',
+          name: 'Bobs Dashboard',
+          owner: { id: 'u2', username: 'bob', role: 'user', approved: true, createdAt: 't1' },
+        }),
+      ];
+    });
+    return store;
+  }
+
+  it('requestCopy öffnet den Dialog mit Namensvorschlag „<Name> Kopie"', () => {
+    const store = storeWithForeignProject();
+    store.requestCopy('p-bob');
+    expect(store.pendingCopyProject?.id).toBe('p-bob');
+    expect(store.copyName).toBe('Bobs Dashboard Kopie');
+  });
+
+  it('confirmCopy ruft die Mutation, hängt das neue Projekt an und liefert dessen ID', async () => {
+    const store = storeWithForeignProject();
+    store.requestCopy('p-bob');
+    store.setCopyName('Mein Fork');
+    const created = makeProject({ id: 'p-neu', name: 'Mein Fork' });
+    mockGql.mockResolvedValueOnce({ copyProject: created });
+
+    const newId = await store.confirmCopy();
+
+    expect(newId).toBe('p-neu');
+    expect(store.projects.map((p) => p.id)).toContain('p-neu');
+    expect(store.pendingCopyProject).toBeNull();
+    expect(mockGql).toHaveBeenCalledWith(expect.stringContaining('copyProject'), {
+      sourceId: 'p-bob',
+      name: 'Mein Fork',
+    });
+  });
+
+  it('lässt den Dialog bei Server-Fehler offen (Name korrigierbar)', async () => {
+    const store = storeWithForeignProject();
+    store.requestCopy('p-bob');
+    store.setCopyName('Doppelt');
+    mockGql.mockRejectedValueOnce(new Error('Du hast bereits ein Projekt namens „Doppelt"'));
+
+    const newId = await store.confirmCopy();
+
+    expect(newId).toBeNull();
+    expect(store.pendingCopyProject?.id).toBe('p-bob');
+    expect(store.copyError).toContain('bereits ein Projekt');
+  });
+});
+
 describe('canManage — Kartenmenü für Eigentümer und Admins', () => {
   const foreignProject = makeProject({
     id: 'p-bob',

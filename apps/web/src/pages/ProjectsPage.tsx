@@ -1,4 +1,5 @@
 import AddIcon from '@mui/icons-material/Add';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
@@ -102,49 +103,58 @@ const ProjectCard = observer(function ProjectCard({
           </Stack>
         </CardContent>
       </CardActionArea>
-      {projectsStore.canManage(project) && (
-        <>
-          <IconButton
-            aria-label="Projektmenü"
-            size="small"
-            onClick={handleMenuOpen}
-            sx={{ position: 'absolute', right: 8, bottom: 8 }}
-            data-testselector={`project-menu-${project.id}`}
+      <IconButton
+        aria-label="Projektmenü"
+        size="small"
+        onClick={handleMenuOpen}
+        sx={{ position: 'absolute', right: 8, bottom: 8 }}
+        data-testselector={`project-menu-${project.id}`}
+      >
+        <MoreVertIcon fontSize="small" />
+      </IconButton>
+      <Menu anchorEl={menuAnchor} open={menuAnchor !== null} onClose={() => setMenuAnchor(null)}>
+        {/* Kopieren darf JEDER — der Fork landet im eigenen Namensraum. */}
+        <MenuItem
+          onClick={() => {
+            setMenuAnchor(null);
+            projectsStore.requestCopy(project.id);
+          }}
+          data-testselector={`project-copy-${project.id}`}
+        >
+          <ListItemIcon>
+            <ContentCopyIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText>Kopieren und Anpassen</ListItemText>
+        </MenuItem>
+        {projectsStore.canManage(project) && (
+          <MenuItem
+            onClick={() => {
+              setMenuAnchor(null);
+              projectsStore.requestRename(project.id);
+            }}
+            data-testselector={`project-rename-${project.id}`}
           >
-            <MoreVertIcon fontSize="small" />
-          </IconButton>
-          <Menu
-            anchorEl={menuAnchor}
-            open={menuAnchor !== null}
-            onClose={() => setMenuAnchor(null)}
+            <ListItemIcon>
+              <EditIcon fontSize="small" />
+            </ListItemIcon>
+            <ListItemText>Umbenennen</ListItemText>
+          </MenuItem>
+        )}
+        {projectsStore.canManage(project) && (
+          <MenuItem
+            onClick={() => {
+              setMenuAnchor(null);
+              projectsStore.requestDelete(project.id);
+            }}
+            data-testselector={`project-delete-${project.id}`}
           >
-            <MenuItem
-              onClick={() => {
-                setMenuAnchor(null);
-                projectsStore.requestRename(project.id);
-              }}
-              data-testselector={`project-rename-${project.id}`}
-            >
-              <ListItemIcon>
-                <EditIcon fontSize="small" />
-              </ListItemIcon>
-              <ListItemText>Umbenennen</ListItemText>
-            </MenuItem>
-            <MenuItem
-              onClick={() => {
-                setMenuAnchor(null);
-                projectsStore.requestDelete(project.id);
-              }}
-              data-testselector={`project-delete-${project.id}`}
-            >
-              <ListItemIcon>
-                <DeleteIcon fontSize="small" />
-              </ListItemIcon>
-              <ListItemText>Löschen</ListItemText>
-            </MenuItem>
-          </Menu>
-        </>
-      )}
+            <ListItemIcon>
+              <DeleteIcon fontSize="small" />
+            </ListItemIcon>
+            <ListItemText>Löschen</ListItemText>
+          </MenuItem>
+        )}
+      </Menu>
     </Card>
   );
 });
@@ -241,6 +251,75 @@ const CreateProjectDialog = observer(function CreateProjectDialog({
           data-testselector="new-project-submit"
         >
           Erstellen
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+});
+
+const CopyProjectDialog = observer(function CopyProjectDialog({
+  projectsStore,
+  onCopied,
+}: {
+  projectsStore: ProjectsStore;
+  /** Nach erfolgreichem Fork: direkt in den Chat des neuen Projekts. */
+  onCopied: (projectId: string) => void;
+}): JSX.Element {
+  const project = projectsStore.pendingCopyProject;
+  const submit = async (): Promise<void> => {
+    const projectId = await projectsStore.confirmCopy();
+    if (projectId !== null) {
+      onCopied(projectId);
+    }
+  };
+  return (
+    // disableRestoreFocus: sonst klaut MUIs Focus-Restore dem Namensfeld den
+    // Autofokus beim Öffnen des Dialogs.
+    <Dialog
+      open={project !== null}
+      onClose={projectsStore.cancelCopy}
+      fullWidth
+      maxWidth="sm"
+      disableRestoreFocus
+    >
+      <DialogTitle>„{project?.name ?? ''}" kopieren und anpassen</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ mt: 1 }}>
+          <DialogContentText>
+            Legt ein neues Projekt unter deinem Namen an — aufsetzend auf dem aktuellen
+            Entwicklungsstand des Originals (das Original bleibt unberührt).
+          </DialogContentText>
+          {projectsStore.copyError !== null && (
+            <Alert severity="error" data-testselector="copy-project-error">
+              {projectsStore.copyError}
+            </Alert>
+          )}
+          <TextField
+            label="Name des neuen Projekts"
+            value={projectsStore.copyName}
+            onChange={(e) => projectsStore.setCopyName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && projectsStore.canConfirmCopy) {
+                e.preventDefault();
+                void submit();
+              }
+            }}
+            autoFocus
+            inputProps={{ 'data-testselector': 'copy-project-name' }}
+          />
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={projectsStore.cancelCopy} color="inherit" data-testselector="copy-cancel">
+          Abbrechen
+        </Button>
+        <Button
+          variant="contained"
+          onClick={() => void submit()}
+          disabled={!projectsStore.canConfirmCopy}
+          data-testselector="copy-confirm"
+        >
+          Kopieren
         </Button>
       </DialogActions>
     </Dialog>
@@ -469,6 +548,10 @@ export const ProjectsPage = observer(function ProjectsPage({
         model={createProjectModel}
         projectsStore={projectsStore}
         onCreated={(projectId) => navigate(`/projects/${projectId}`)}
+      />
+      <CopyProjectDialog
+        projectsStore={projectsStore}
+        onCopied={(projectId) => navigate(`/projects/${projectId}`)}
       />
       <RenameProjectDialog projectsStore={projectsStore} />
       <DeleteConfirmDialog projectsStore={projectsStore} />

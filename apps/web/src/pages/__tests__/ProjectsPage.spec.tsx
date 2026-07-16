@@ -175,24 +175,39 @@ describe('ProjectsPage', () => {
   });
 
   describe('Projektmenü (Umbenennen/Löschen)', () => {
-    it('zeigt normalen Usern das Menü nur auf eigenen Projektkarten', async () => {
+    it('normale User: Menü auf ALLEN Karten, fremde nur mit „Kopieren und Anpassen"', async () => {
       const { projectsStore } = renderPage('user');
       await screen.findByText('Mein Vibe-Projekt');
       runInAction(() => projectsStore.setFilter('all'));
       await screen.findByText('Bobs Projekt');
 
-      expect(screen.getByTestId('project-menu-p1')).toBeInTheDocument();
-      expect(screen.queryByTestId('project-menu-p2')).not.toBeInTheDocument();
+      // Fremde Karte: Menü da, aber nur Kopieren — kein Umbenennen/Löschen.
+      fireEvent.click(screen.getByTestId('project-menu-p2'));
+      expect(await screen.findByTestId('project-copy-p2')).toBeInTheDocument();
+      expect(screen.queryByTestId('project-rename-p2')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('project-delete-p2')).not.toBeInTheDocument();
     });
 
-    it('zeigt Admins das Menü auch auf fremden Projektkarten', async () => {
+    it('eigene Karte: Kopieren, Umbenennen und Löschen im Menü', async () => {
+      renderPage('user');
+      await screen.findByText('Mein Vibe-Projekt');
+
+      fireEvent.click(screen.getByTestId('project-menu-p1'));
+      expect(await screen.findByTestId('project-copy-p1')).toBeInTheDocument();
+      expect(screen.getByTestId('project-rename-p1')).toBeInTheDocument();
+      expect(screen.getByTestId('project-delete-p1')).toBeInTheDocument();
+    });
+
+    it('Admins sehen auf fremden Karten zusätzlich Umbenennen/Löschen', async () => {
       const { projectsStore } = renderPage('admin');
       await screen.findByText('Mein Vibe-Projekt');
       runInAction(() => projectsStore.setFilter('all'));
       await screen.findByText('Bobs Projekt');
 
-      expect(screen.getByTestId('project-menu-p1')).toBeInTheDocument();
-      expect(screen.getByTestId('project-menu-p2')).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('project-menu-p2'));
+      expect(await screen.findByTestId('project-copy-p2')).toBeInTheDocument();
+      expect(screen.getByTestId('project-rename-p2')).toBeInTheDocument();
+      expect(screen.getByTestId('project-delete-p2')).toBeInTheDocument();
     });
 
     it('öffnet über das Menü den Umbenennen-Dialog mit vorgefülltem Namen und benennt um', async () => {
@@ -221,6 +236,61 @@ describe('ProjectsPage', () => {
       expect(mockGql).toHaveBeenCalledWith(expect.stringContaining('renameProject'), {
         id: 'p1',
         name: 'Umbenannt',
+      });
+    });
+
+    it('„Kopieren und Anpassen": Dialog mit Namensvorschlag, Anlegen führt in den neuen Chat', async () => {
+      const copied = { ...projects[0], id: 'p-kopie', name: 'Bobs Projekt Kopie' };
+      const authStore = new AuthStore();
+      runInAction(() => {
+        authStore.currentUser = {
+          id: 'u1',
+          username: 'alice',
+          role: 'user',
+          approved: true,
+          createdAt: 't0',
+        };
+        authStore.initialized = true;
+      });
+      const projectsStore = new ProjectsStore(authStore);
+      const createProjectModel = new CreateProjectModel(projectsStore);
+      mockGql.mockImplementation(async (query: string) =>
+        query.includes('copyProject') ? { copyProject: copied } : { projects, templates },
+      );
+      render(
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route
+              path="/"
+              element={
+                <ProjectsPage
+                  authStore={authStore}
+                  projectsStore={projectsStore}
+                  createProjectModel={createProjectModel}
+                />
+              }
+            />
+            <Route path="/projects/:id" element={<div data-testselector="chat-page-stub" />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+      await screen.findByText('Mein Vibe-Projekt');
+      runInAction(() => projectsStore.setFilter('all'));
+      await screen.findByText('Bobs Projekt');
+
+      fireEvent.click(screen.getByTestId('project-menu-p2'));
+      fireEvent.click(await screen.findByTestId('project-copy-p2'));
+
+      const nameInput = document.querySelector<HTMLInputElement>(
+        '[data-testselector="copy-project-name"]',
+      );
+      expect(nameInput?.value).toBe('Bobs Projekt Kopie');
+
+      fireEvent.click(screen.getByTestId('copy-confirm'));
+      expect(await screen.findByTestId('chat-page-stub')).toBeInTheDocument();
+      expect(mockGql).toHaveBeenCalledWith(expect.stringContaining('copyProject'), {
+        sourceId: 'p2',
+        name: 'Bobs Projekt Kopie',
       });
     });
 

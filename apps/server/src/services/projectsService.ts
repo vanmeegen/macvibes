@@ -11,7 +11,13 @@ import { AGENT_MODELS, DEFAULT_AGENT_MODEL, isKnownAgentModel } from '../agent/a
 import type { Db } from '../db/client';
 import { projects, users, type ProjectRow, type UserRow } from '../db/schema';
 import { DomainError } from './errors';
-import { createProjectBranch, deleteBranch, ensureBareRepo, listBranches } from './gitService';
+import {
+  createProjectBranch,
+  deleteBranch,
+  ensureBareRepo,
+  forkBranch,
+  listBranches,
+} from './gitService';
 import { loadTemplates } from './templatesService';
 import { projectVolumeDir } from './workspaceService';
 
@@ -68,37 +74,14 @@ export async function createProject(
   owner: UserRow,
   input: { name: string; templateDir: string },
 ): Promise<ProjectWithOwner> {
-  const nameResult = projectNameSchema.safeParse(input.name);
-  if (!nameResult.success) {
-    throw new DomainError(nameResult.error.issues[0]?.message ?? 'Ungültiger Projektname');
-  }
-  const name = nameResult.data;
-
   const templates = await loadTemplates(config.templatesDir);
   const template = templates.find((t) => t.dir === input.templateDir);
   if (!template) {
     throw new DomainError(`Unbekanntes Template: ${input.templateDir}`);
   }
 
-  const duplicate = await db
-    .select({ id: projects.id, name: projects.name })
-    .from(projects)
-    .where(eq(projects.ownerId, owner.id));
-  if (duplicate.some((p) => p.name === name)) {
-    throw new DomainError(`Du hast bereits ein Projekt namens „${name}"`);
-  }
-
   await ensureBareRepo(config.bareRepoPath);
-
-  // Slug-Kollisionen nur innerhalb des User-Namensraums auflösen (R1).
-  const prefix = `${owner.username}/`;
-  const takenSlugs = new Set(
-    (await listBranches(config.bareRepoPath))
-      .filter((branch) => branch.startsWith(prefix))
-      .map((branch) => branch.slice(prefix.length)),
-  );
-  const slug = resolveSlugCollision(deriveBranchSlug(name), takenSlugs);
-  const branchName = buildBranchName(owner.username, slug);
+  const { name, branchName } = await resolveNewProjectName(db, config, owner, input.name);
 
   await createProjectBranch(
     config.bareRepoPath,
@@ -128,6 +111,89 @@ export async function createProject(
     return { ...project, owner };
   } catch (error) {
     // Kein halb-angelegtes Projekt hinterlassen (R1): Branch zurückrollen.
+    await deleteBranch(config.bareRepoPath, branchName);
+    throw error;
+  }
+}
+
+/**
+ * Validiert den Wunschnamen, prüft Duplikate im Namensraum des Owners und
+ * liefert einen kollisionsfreien Branch-Namen — gemeinsamer Unterbau von
+ * createProject und copyProject.
+ */
+async function resolveNewProjectName(
+  db: Db,
+  config: ProjectsConfig,
+  owner: UserRow,
+  rawName: string,
+): Promise<{ name: string; branchName: string }> {
+  const nameResult = projectNameSchema.safeParse(rawName);
+  if (!nameResult.success) {
+    throw new DomainError(nameResult.error.issues[0]?.message ?? 'Ungültiger Projektname');
+  }
+  const name = nameResult.data;
+
+  const duplicate = await db
+    .select({ id: projects.id, name: projects.name })
+    .from(projects)
+    .where(eq(projects.ownerId, owner.id));
+  if (duplicate.some((p) => p.name === name)) {
+    throw new DomainError(`Du hast bereits ein Projekt namens „${name}"`);
+  }
+
+  // Slug-Kollisionen nur innerhalb des User-Namensraums auflösen (R1).
+  const prefix = `${owner.username}/`;
+  const takenSlugs = new Set(
+    (await listBranches(config.bareRepoPath))
+      .filter((branch) => branch.startsWith(prefix))
+      .map((branch) => branch.slice(prefix.length)),
+  );
+  const slug = resolveSlugCollision(deriveBranchSlug(name), takenSlugs);
+  return { name, branchName: buildBranchName(owner.username, slug) };
+}
+
+/**
+ * „Kopieren und Anpassen": forkt ein beliebiges (auch fremdes) Projekt auf
+ * den eigenen Namen. Der neue Branch zeigt auf den HEAD des Quell-Branches —
+ * voller Entwicklungsstand statt Template-Baseline; die Template-Metadaten
+ * (Baseline-Snapshot, devCommand, Preview-Port) erbt die Kopie vom Original.
+ */
+export async function copyProject(
+  db: Db,
+  config: ProjectsConfig,
+  owner: UserRow,
+  input: { sourceProjectId: string; name: string },
+): Promise<ProjectWithOwner> {
+  const source = await getProject(db, input.sourceProjectId);
+  if (!source) {
+    throw new DomainError('Projekt nicht gefunden');
+  }
+  await ensureBareRepo(config.bareRepoPath);
+  const { name, branchName } = await resolveNewProjectName(db, config, owner, input.name);
+
+  await forkBranch(config.bareRepoPath, branchName, source.branchName);
+
+  try {
+    const inserted = await db
+      .insert(projects)
+      .values({
+        id: crypto.randomUUID(),
+        name,
+        branchName,
+        templateDir: source.templateDir,
+        devCommand: source.devCommand,
+        previewPort: source.previewPort,
+        ownerId: owner.id,
+        agentModel: DEFAULT_AGENT_MODEL,
+      })
+      .returning();
+    const project = inserted[0];
+    if (!project) {
+      throw new Error('Projekt-Insert lieferte keine Zeile zurück');
+    }
+    return { ...project, owner };
+  } catch (error) {
+    // Kein halb-angelegtes Projekt hinterlassen: Branch zurückrollen.
     await deleteBranch(config.bareRepoPath, branchName);
     throw error;
   }

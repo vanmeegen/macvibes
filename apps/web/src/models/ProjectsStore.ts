@@ -47,6 +47,27 @@ const DELETE_PROJECT_MUTATION = /* GraphQL */ `
   }
 `;
 
+const COPY_PROJECT_MUTATION = /* GraphQL */ `
+  mutation CopyProject($sourceId: ID!, $name: String!) {
+    copyProject(sourceId: $sourceId, name: $name) {
+      id
+      name
+      branchName
+      templateDir
+      owner {
+        id
+        username
+      }
+      agentModel
+      createdAt
+      lastActivityAt
+      sandboxStatus
+      previewHostPort
+      previewStatus
+    }
+  }
+`;
+
 const RENAME_PROJECT_MUTATION = /* GraphQL */ `
   mutation RenameProject($id: ID!, $name: String!) {
     renameProject(id: $id, name: $name) {
@@ -159,6 +180,12 @@ export class ProjectsStore {
   loading = false;
   /** Projekt-ID, für die gerade der Lösch-Bestätigungsdialog offen ist. */
   pendingDeleteId: string | null = null;
+  /** Projekt-ID, für die gerade der Kopieren-Dialog offen ist. */
+  pendingCopyId: string | null = null;
+  /** Eingabewert im Kopieren-Dialog (vorgefüllt mit „<Name> Kopie"). */
+  copyName = '';
+  /** Fehler im Kopieren-Dialog — der Dialog bleibt offen, Name korrigierbar. */
+  copyError: string | null = null;
   /** Projekt-ID, für die gerade der Umbenennen-Dialog offen ist. */
   pendingRenameId: string | null = null;
   /** Eingabewert im Umbenennen-Dialog (vorgefüllt mit dem aktuellen Namen). */
@@ -207,6 +234,65 @@ export class ProjectsStore {
 
   requestDelete(id: string): void {
     this.pendingDeleteId = id;
+  }
+
+  get pendingCopyProject(): Project | null {
+    if (this.pendingCopyId === null) {
+      return null;
+    }
+    return this.projects.find((p) => p.id === this.pendingCopyId) ?? null;
+  }
+
+  get canConfirmCopy(): boolean {
+    return this.copyName.trim().length > 0;
+  }
+
+  requestCopy(id: string): void {
+    const project = this.projects.find((p) => p.id === id);
+    this.pendingCopyId = id;
+    this.copyName = project ? `${project.name} Kopie` : '';
+    this.copyError = null;
+  }
+
+  cancelCopy(): void {
+    this.pendingCopyId = null;
+    this.copyError = null;
+  }
+
+  setCopyName(name: string): void {
+    this.copyName = name;
+    this.copyError = null;
+  }
+
+  /**
+   * „Kopieren und Anpassen": legt den Fork an und liefert die neue Projekt-ID
+   * (für die Navigation in den Chat). Bei Server-Fehler (z. B. doppelter Name)
+   * bleibt der Dialog offen.
+   */
+  async confirmCopy(): Promise<string | null> {
+    const sourceId = this.pendingCopyId;
+    const name = this.copyName.trim();
+    if (sourceId === null || name.length === 0) {
+      return null;
+    }
+    try {
+      const data = await gqlRequest<{ copyProject: Project }>(COPY_PROJECT_MUTATION, {
+        sourceId,
+        name,
+      });
+      runInAction(() => {
+        this.projects = [data.copyProject, ...this.projects];
+        this.pendingCopyId = null;
+        this.copyError = null;
+      });
+      return data.copyProject.id;
+    } catch (err) {
+      console.error('ProjectsStore.confirmCopy fehlgeschlagen', err);
+      runInAction(() => {
+        this.copyError = toErrorMessage(err);
+      });
+      return null;
+    }
   }
 
   get pendingRenameProject(): Project | null {
