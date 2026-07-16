@@ -172,7 +172,8 @@ export function projectStatusChip(
 export function sandboxStatusLabel(status: string): string {
   switch (status) {
     case 'running':
-      return 'läuft';
+      // „bereit" statt „läuft": klare Abgrenzung zum Turn-Status „arbeitet".
+      return 'bereit';
     case 'starting':
       return 'startet';
     case 'stopped':

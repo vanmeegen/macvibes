@@ -76,7 +76,7 @@ describe('projectStatusChip — „arbeitet" hat Vorrang vor dem Sandbox-Status'
   });
 
   it('zeigt sonst den Sandbox-Status wie bisher', () => {
-    expect(projectStatusChip('running', false)).toEqual({ label: 'läuft', color: 'success' });
+    expect(projectStatusChip('running', false)).toEqual({ label: 'bereit', color: 'success' });
     expect(projectStatusChip('starting', false)).toEqual({ label: 'startet', color: 'default' });
     expect(projectStatusChip('stopped', false)).toEqual({ label: 'gestoppt', color: 'default' });
   });
