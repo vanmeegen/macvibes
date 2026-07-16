@@ -3,7 +3,11 @@ import { dirname, join } from 'node:path';
 import { agentConfigDirFor, ensureWorkspace, projectVolumeDir } from '../services/workspaceService';
 import { baselineBootstrapScript, baselineExists, baselineSnapshotName } from './baselineService';
 import { httpProbe } from './httpProbe';
-import { gateReadyWithProbe, previewStatusFromMonitText } from './monitStatus';
+import {
+  gateReadyWithProbe,
+  previewStatusFromMonitText,
+  statusWithProbeFallback,
+} from './monitStatus';
 import { MicrosandboxError, runMsb, waitForExecReady } from './msb';
 import { PreviewStatusPoller } from './previewStatusPoller';
 import { PortAllocator } from './portService';
@@ -160,18 +164,23 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     // ohne dieses Warten scheitern frühe execs ("no agent endpoint found").
     await waitForExecReady(name);
 
+    const probePreview = (): Promise<boolean> => httpProbe(`http://localhost:${hostPort}/`);
     const poller = new PreviewStatusPoller({
-      fetchStatus: async (): Promise<PreviewStatus> => {
-        const response = await fetch(`http://127.0.0.1:${statusHostPort}/_status?format=text`, {
-          signal: AbortSignal.timeout(1500),
-        });
-        if (!response.ok) throw new Error(`monit-Status ${response.status}`);
-        // 'ready' erst, wenn der Dev-Server WIRKLICH HTTP beantwortet — monit
-        // sieht nur den Prozess (siehe gateReadyWithProbe).
-        return gateReadyWithProbe(previewStatusFromMonitText(await response.text()), () =>
-          httpProbe(`http://localhost:${hostPort}/`),
-        );
-      },
+      // Fällt die monit-API aus (z. B. verlorenes Port-Mapping), entscheidet
+      // die Preview-Probe: antwortet sie, ist der Dev-Server gesund (ready).
+      fetchStatus: (): Promise<PreviewStatus> =>
+        statusWithProbeFallback(async () => {
+          const response = await fetch(`http://127.0.0.1:${statusHostPort}/_status?format=text`, {
+            signal: AbortSignal.timeout(1500),
+          });
+          if (!response.ok) throw new Error(`monit-Status ${response.status}`);
+          // 'ready' erst, wenn der Dev-Server WIRKLICH HTTP beantwortet — monit
+          // sieht nur den Prozess (siehe gateReadyWithProbe).
+          return gateReadyWithProbe(
+            previewStatusFromMonitText(await response.text()),
+            probePreview,
+          );
+        }, probePreview),
       onStatusChange: (status) => console.log(`Preview ${context.projectId}: ${status}`),
     });
     poller.start();

@@ -48,6 +48,25 @@ export async function gateReadyWithProbe(
   throw new Error('Dev-Server-Prozess läuft, antwortet noch nicht auf HTTP');
 }
 
+/**
+ * Fallback, wenn die monit-Status-API wegbricht (Live-Befund 2026-07-16: msb
+ * verlor das Host-Port-Mapping der monit-API, der Dev-Server lief einwandfrei
+ * weiter): antwortet die Preview auf HTTP, ist sie gesund → 'ready' statt
+ * ewigem 'restarting'. Antwortet sie nicht, propagiert der monit-Fehler —
+ * der Poller macht daraus wie bisher starting/restarting.
+ */
+export async function statusWithProbeFallback(
+  fetchMonitStatus: () => Promise<PreviewStatus>,
+  probe: () => Promise<boolean>,
+): Promise<PreviewStatus> {
+  try {
+    return await fetchMonitStatus();
+  } catch (error) {
+    if (await probe()) return 'ready';
+    throw error;
+  }
+}
+
 /** Findet die status-Zeile im Abschnitt `Process '<service>'`. */
 function serviceStatusLine(text: string, service: string): string | null {
   const lines = text.split('\n');

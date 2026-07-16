@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { gateReadyWithProbe, previewStatusFromMonitText } from '../monitStatus';
+import {
+  gateReadyWithProbe,
+  previewStatusFromMonitText,
+  statusWithProbeFallback,
+} from '../monitStatus';
 
 function monitText(devserverStatus: string): string {
   return [
@@ -71,6 +75,39 @@ describe('previewStatusFromMonitText', () => {
     };
     expect(await gateReadyWithProbe('starting', probe)).toBe('starting');
     expect(await gateReadyWithProbe('failed', probe)).toBe('failed');
+    expect(probed).toBe(false);
+  });
+
+  // Live-Befund 2026-07-16: msb verlor das Host-Port-Mapping der monit-API,
+  // während der Dev-Server weiter einwandfrei antwortete. Ohne Fallback blieb
+  // der Status für immer "restarting" — das Preview-Overlay kam nie zurück.
+  test('statusWithProbeFallback: monit weg + Preview antwortet → ready', async () => {
+    const status = await statusWithProbeFallback(
+      () => Promise.reject(new Error('connect ECONNREFUSED')),
+      () => Promise.resolve(true),
+    );
+    expect(status).toBe('ready');
+  });
+
+  test('statusWithProbeFallback: monit weg + Preview antwortet nicht → Fehler propagiert', async () => {
+    await expect(
+      statusWithProbeFallback(
+        () => Promise.reject(new Error('connect ECONNREFUSED')),
+        () => Promise.resolve(false),
+      ),
+    ).rejects.toThrow('ECONNREFUSED');
+  });
+
+  test('statusWithProbeFallback: monit erreichbar → dessen Status zählt, keine Extra-Probe', async () => {
+    let probed = false;
+    const status = await statusWithProbeFallback(
+      () => Promise.resolve('failed'),
+      () => {
+        probed = true;
+        return Promise.resolve(true);
+      },
+    );
+    expect(status).toBe('failed');
     expect(probed).toBe(false);
   });
 
