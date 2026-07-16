@@ -3,7 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { gqlRequest } from '../../api/graphqlClient';
 import type { Project, Template } from '../../api/types';
 import { AuthStore } from '../AuthStore';
-import { agentWorkingLabel, PROJECT_FILTER_STORAGE_KEY, ProjectsStore } from '../ProjectsStore';
+import {
+  agentWorkingLabel,
+  PROJECT_FILTER_STORAGE_KEY,
+  ProjectsStore,
+  projectStatusChip,
+} from '../ProjectsStore';
 
 vi.mock('../../api/graphqlClient', () => ({
   gqlRequest: vi.fn(),
@@ -23,6 +28,7 @@ function makeProject(overrides: Partial<Project> & { id: string }): Project {
     sandboxStatus: 'stopped',
     previewHostPort: null,
     previewStatus: 'stopped',
+    turnActive: false,
     ...overrides,
   };
 }
@@ -61,6 +67,18 @@ describe('agentWorkingLabel — sichtbares Boot-Feedback statt gefühltem Hänge
 
   it('zeigt bei laufender Sandbox den normalen Agenten-Status', () => {
     expect(agentWorkingLabel('running')).toBe('Agent arbeitet …');
+  });
+});
+
+describe('projectStatusChip — „arbeitet" hat Vorrang vor dem Sandbox-Status', () => {
+  it('zeigt „arbeitet", wenn ein Agent-Turn läuft (Sandbox läuft dann ohnehin)', () => {
+    expect(projectStatusChip('running', true)).toEqual({ label: 'arbeitet', color: 'warning' });
+  });
+
+  it('zeigt sonst den Sandbox-Status wie bisher', () => {
+    expect(projectStatusChip('running', false)).toEqual({ label: 'läuft', color: 'success' });
+    expect(projectStatusChip('starting', false)).toEqual({ label: 'startet', color: 'default' });
+    expect(projectStatusChip('stopped', false)).toEqual({ label: 'gestoppt', color: 'default' });
   });
 });
 

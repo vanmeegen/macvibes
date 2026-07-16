@@ -28,6 +28,7 @@ const projects: Project[] = [
     sandboxStatus: 'stopped',
     previewHostPort: null,
     previewStatus: 'stopped',
+    turnActive: false,
   },
   {
     id: 'p2',
@@ -41,6 +42,7 @@ const projects: Project[] = [
     sandboxStatus: 'stopped',
     previewHostPort: null,
     previewStatus: 'stopped',
+    turnActive: false,
   },
 ];
 
@@ -172,6 +174,38 @@ describe('ProjectsPage', () => {
 
     await screen.findByText('Mein Vibe-Projekt');
     expect(screen.getByTestId('current-username')).toHaveTextContent('alice');
+  });
+
+  it('zeigt „arbeitet" im Status-Chip, wenn der Agent des Projekts gerade einen Turn hat', async () => {
+    const working = [{ ...projects[0]!, sandboxStatus: 'running', turnActive: true }];
+    mockGql.mockResolvedValue({ projects: working, templates });
+
+    const authStore = new AuthStore();
+    runInAction(() => {
+      authStore.currentUser = {
+        id: 'u1',
+        username: 'alice',
+        role: 'user',
+        approved: true,
+        createdAt: 't0',
+      };
+      authStore.initialized = true;
+    });
+    const projectsStore = new ProjectsStore(authStore);
+    render(
+      <MemoryRouter>
+        <ProjectsPage
+          authStore={authStore}
+          projectsStore={projectsStore}
+          createProjectModel={new CreateProjectModel(projectsStore)}
+        />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('Mein Vibe-Projekt');
+    const chip = screen.getByTestId('project-status-p1');
+    expect(chip).toHaveTextContent('arbeitet');
+    expect(chip).toHaveAttribute('data-turn-active', 'true');
   });
 
   describe('Projektmenü (Umbenennen/Löschen)', () => {

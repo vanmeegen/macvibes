@@ -23,6 +23,7 @@ const PROJECTS_AND_TEMPLATES_QUERY = /* GraphQL */ `
       createdAt
       lastActivityAt
       sandboxStatus
+      turnActive
       previewHostPort
       previewStatus
     }
@@ -62,6 +63,7 @@ const COPY_PROJECT_MUTATION = /* GraphQL */ `
       createdAt
       lastActivityAt
       sandboxStatus
+      turnActive
       previewHostPort
       previewStatus
     }
@@ -148,6 +150,22 @@ export function agentWorkingLabel(sandboxStatus: string): string {
     default:
       return 'Agent arbeitet …';
   }
+}
+
+/**
+ * Status-Chip der Projektkarte: ein laufender Agent-Turn („arbeitet") hat
+ * Vorrang vor dem Sandbox-Status — gerade langlaufende Turns (lokale Modelle,
+ * Grace-Verlängerung) sind sonst von außen unsichtbar.
+ */
+export function projectStatusChip(
+  sandboxStatus: string,
+  turnActive: boolean,
+): { label: string; color: 'success' | 'warning' | 'default' } {
+  if (turnActive) return { label: 'arbeitet', color: 'warning' };
+  return {
+    label: sandboxStatusLabel(sandboxStatus),
+    color: sandboxStatus === 'running' ? 'success' : 'default',
+  };
 }
 
 /** Deutsche Anzeige des Sandbox-Status. */

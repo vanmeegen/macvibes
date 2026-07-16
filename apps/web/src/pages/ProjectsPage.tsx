@@ -41,7 +41,7 @@ import type { Project } from '../api/types';
 import type { AuthStore } from '../models/AuthStore';
 import type { CreateProjectModel } from '../models/CreateProjectModel';
 import type { ProjectFilter, ProjectsStore } from '../models/ProjectsStore';
-import { formatTimestamp, sandboxStatusLabel } from '../models/ProjectsStore';
+import { formatTimestamp, projectStatusChip } from '../models/ProjectsStore';
 
 export interface ProjectsPageProps {
   authStore: AuthStore;
@@ -84,11 +84,12 @@ const ProjectCard = observer(function ProjectCard({
               </Typography>
               <Chip
                 size="small"
-                label={sandboxStatusLabel(project.sandboxStatus)}
-                color={project.sandboxStatus === 'running' ? 'success' : 'default'}
+                label={projectStatusChip(project.sandboxStatus, project.turnActive).label}
+                color={projectStatusChip(project.sandboxStatus, project.turnActive).color}
                 variant="outlined"
                 data-testselector={`project-status-${project.id}`}
                 data-status={project.sandboxStatus}
+                data-turn-active={project.turnActive ? 'true' : 'false'}
               />
             </Stack>
             <Typography variant="body2" color="text.secondary">

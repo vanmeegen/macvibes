@@ -65,6 +65,10 @@ ProjectRef.implement({
     sandboxStatus: t.string({
       resolve: (project, _args, ctx) => ctx.sandboxManager.status(project.id),
     }),
+    /** Läuft gerade ein Agent-Turn? Fürs "arbeitet" auf der Projektkarte. */
+    turnActive: t.boolean({
+      resolve: (project, _args, ctx) => ctx.chatService.isTurnActive(project.id),
+    }),
     previewHostPort: t.int({
       nullable: true,
       resolve: (project, _args, ctx) => ctx.sandboxManager.previewHostPort(project.id),

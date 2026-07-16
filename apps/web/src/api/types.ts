@@ -29,6 +29,8 @@ export interface Project {
   createdAt: string;
   lastActivityAt: string;
   sandboxStatus: string;
+  /** Läuft gerade ein Agent-Turn in diesem Projekt? */
+  turnActive: boolean;
   previewHostPort: number | null;
   previewStatus: string;
 }
