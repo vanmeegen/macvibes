@@ -153,14 +153,16 @@ export async function renameProject(
   if (!project) {
     throw new DomainError('Projekt nicht gefunden');
   }
-  if (project.ownerId !== currentUser.id) {
-    throw new DomainError('Nur der Eigentümer kann ein Projekt umbenennen');
+  if (project.ownerId !== currentUser.id && currentUser.role !== 'admin') {
+    throw new DomainError('Nur der Eigentümer oder ein Admin kann ein Projekt umbenennen');
   }
 
+  // Duplikate im Namensraum des EIGENTÜMERS prüfen — auch wenn ein Admin
+  // ein fremdes Projekt umbenennt.
   const siblings = await db
     .select({ id: projects.id, name: projects.name })
     .from(projects)
-    .where(eq(projects.ownerId, currentUser.id));
+    .where(eq(projects.ownerId, project.ownerId));
   if (siblings.some((p) => p.id !== id && p.name === name)) {
     throw new DomainError(`Du hast bereits ein Projekt namens „${name}"`);
   }
@@ -179,8 +181,8 @@ export async function deleteProject(
   if (!project) {
     throw new DomainError('Projekt nicht gefunden');
   }
-  if (project.ownerId !== currentUser.id) {
-    throw new DomainError('Nur der Eigentümer kann ein Projekt löschen');
+  if (project.ownerId !== currentUser.id && currentUser.role !== 'admin') {
+    throw new DomainError('Nur der Eigentümer oder ein Admin kann ein Projekt löschen');
   }
   await db.delete(projects).where(eq(projects.id, id));
   // Volumes (Workspace + Agent-Config) entfernen; der Git-Branch bleibt

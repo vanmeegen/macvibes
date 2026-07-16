@@ -102,7 +102,7 @@ const ProjectCard = observer(function ProjectCard({
           </Stack>
         </CardContent>
       </CardActionArea>
-      {projectsStore.isOwn(project) && (
+      {projectsStore.canManage(project) && (
         <>
           <IconButton
             aria-label="Projektmenü"

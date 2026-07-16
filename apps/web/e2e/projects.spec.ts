@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
-import { registerNewUser, uniqueProjectName } from './fixtures';
+import { getAdminCredentials, registerNewUser, uniqueProjectName } from './fixtures';
+import { LoginPage } from './pages/loginPage';
 import { ProjectsPage } from './pages/projectsPage';
 
 // R1 — Projekt anlegen, R2 — Übersicht & Öffnen, R3 — Templates
@@ -79,6 +80,32 @@ test('benennt ein eigenes Projekt über das Kartenmenü um', async ({ page }) =>
 
   await expect(projectsPage.cardByName(newName)).toBeVisible();
   await expect(projectsPage.cardByName(name)).not.toBeVisible();
+});
+
+test('Admin kann fremde Projekte umbenennen und löschen', async ({ page }) => {
+  // Normaler User legt ein Projekt an …
+  await registerNewUser(page);
+  const projectsPage = new ProjectsPage(page);
+  const name = uniqueProjectName('Fremd');
+  const newName = uniqueProjectName('Vom Admin');
+  await projectsPage.createProject(name, 'pwa');
+  await projectsPage.goto();
+  await projectsPage.logout();
+
+  // … der Admin sieht es unter „Alle" mit Kartenmenü und darf beides.
+  const { username, password } = await getAdminCredentials();
+  const loginPage = new LoginPage(page);
+  await loginPage.goto();
+  await loginPage.login(username, password);
+  await expect(projectsPage.newProjectFab).toBeVisible();
+  await projectsPage.filterAll.click();
+  await expect(projectsPage.cardByName(name)).toBeVisible();
+
+  await projectsPage.renameProject(name, newName);
+  await expect(projectsPage.cardByName(newName)).toBeVisible();
+
+  await projectsPage.deleteProject(newName);
+  await expect(projectsPage.cardByName(newName)).not.toBeVisible();
 });
 
 test('löscht ein eigenes Projekt nach Bestätigung', async ({ page }) => {

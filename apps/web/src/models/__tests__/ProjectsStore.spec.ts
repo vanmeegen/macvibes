@@ -221,6 +221,30 @@ describe('ProjectsStore', () => {
   });
 });
 
+describe('canManage — Kartenmenü für Eigentümer und Admins', () => {
+  const foreignProject = makeProject({
+    id: 'p-bob',
+    owner: { id: 'u2', username: 'bob', role: 'user', approved: true, createdAt: 't1' },
+  });
+
+  it('erlaubt normalen Usern nur eigene Projekte', () => {
+    const store = new ProjectsStore(makeAuthStore('alice'));
+    expect(store.canManage(makeProject({ id: 'p-alice' }))).toBe(true);
+    expect(store.canManage(foreignProject)).toBe(false);
+  });
+
+  it('erlaubt Admins auch fremde Projekte', () => {
+    const authStore = makeAuthStore('alice');
+    runInAction(() => {
+      if (authStore.currentUser) {
+        authStore.currentUser.role = 'admin';
+      }
+    });
+    const store = new ProjectsStore(authStore);
+    expect(store.canManage(foreignProject)).toBe(true);
+  });
+});
+
 describe('renameProject (Menü auf der Projektkarte)', () => {
   beforeEach(() => {
     mockGql.mockReset();

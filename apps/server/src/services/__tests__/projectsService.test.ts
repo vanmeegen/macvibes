@@ -120,7 +120,7 @@ describe('renameProject', () => {
     expect(await listBranches(config.bareRepoPath)).toEqual(['marco/dashboard']);
   });
 
-  test('verweigert Umbenennen für fremde Projekte', async () => {
+  test('verweigert Umbenennen für fremde Projekte (Nicht-Admin)', async () => {
     const { db, config, marco } = await setup();
     const gast = await createUser(db, 'gast');
     const project = await createProject(db, config, marco, {
@@ -131,6 +131,35 @@ describe('renameProject', () => {
       'Nur der Eigentümer',
     );
     expect((await getProject(db, project.id))?.name).toBe('Dashboard');
+  });
+
+  test('erlaubt Admins das Umbenennen fremder Projekte', async () => {
+    // marco ist als erster User Admin; gast ist ein normaler User.
+    const { db, config, marco } = await setup();
+    const gast = await createUser(db, 'gast');
+    const project = await createProject(db, config, gast, {
+      name: 'Gast-Projekt',
+      templateDir: 'pwa',
+    });
+
+    const renamed = await renameProject(db, marco, project.id, 'Vom Admin umbenannt');
+
+    expect(renamed.name).toBe('Vom Admin umbenannt');
+    expect(renamed.owner.username).toBe('gast');
+  });
+
+  test('prüft Duplikate beim Admin-Rename im Namensraum des Eigentümers', async () => {
+    const { db, config, marco } = await setup();
+    const gast = await createUser(db, 'gast');
+    await createProject(db, config, gast, { name: 'Bestand', templateDir: 'pwa' });
+    const second = await createProject(db, config, gast, { name: 'Anderes', templateDir: 'pwa' });
+    // marco (Admin) hat selbst ein Projekt „Bestand" — das darf NICHT stören …
+    await createProject(db, config, marco, { name: 'Bestand', templateDir: 'pwa' });
+
+    // … aber gasts eigenes „Bestand" kollidiert.
+    await expect(renameProject(db, marco, second.id, 'Bestand')).rejects.toThrow(
+      'bereits ein Projekt',
+    );
   });
 
   test('lehnt doppelten Namen desselben Users ab', async () => {
@@ -203,7 +232,7 @@ describe('deleteProject', () => {
     expect(await listProjects(db)).toHaveLength(0);
   });
 
-  test('verweigert Löschen für fremde Projekte (Volumes bleiben)', async () => {
+  test('verweigert Löschen für fremde Projekte (Nicht-Admin, Volumes bleiben)', async () => {
     const { db, config, marco, home } = await setup();
     const gast = await createUser(db, 'gast');
     const project = await createProject(db, config, marco, {
@@ -215,5 +244,22 @@ describe('deleteProject', () => {
     await expect(deleteProject(db, gast, project.id, home)).rejects.toThrow('Nur der Eigentümer');
     expect(await listProjects(db)).toHaveLength(1);
     expect(existsSync(volumeDir)).toBe(true);
+  });
+
+  test('erlaubt Admins das Löschen fremder Projekte', async () => {
+    // marco ist als erster User Admin; gast ist ein normaler User.
+    const { db, config, marco, home } = await setup();
+    const gast = await createUser(db, 'gast');
+    const project = await createProject(db, config, gast, {
+      name: 'Gast-Projekt',
+      templateDir: 'pwa',
+    });
+    const volumeDir = projectVolumeDir(home, project.id);
+    mkdirSync(volumeDir, { recursive: true });
+
+    await deleteProject(db, marco, project.id, home);
+
+    expect(await getProject(db, project.id)).toBeNull();
+    expect(existsSync(volumeDir)).toBe(false);
   });
 });

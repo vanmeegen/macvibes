@@ -191,6 +191,11 @@ export class ProjectsStore {
     return project.owner.username === this.authStore.currentUser?.username;
   }
 
+  /** Kartenmenü (Umbenennen/Löschen): Eigentümer immer, Admins überall. */
+  canManage(project: Project): boolean {
+    return this.isOwn(project) || this.authStore.isAdmin;
+  }
+
   setFilter(filter: ProjectFilter): void {
     this.filter = filter;
     try {

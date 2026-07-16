@@ -61,7 +61,10 @@ describe('ProjectsPage', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
   });
 
-  function renderPage(): { authStore: AuthStore; projectsStore: ProjectsStore } {
+  function renderPage(role: 'admin' | 'user' = 'admin'): {
+    authStore: AuthStore;
+    projectsStore: ProjectsStore;
+  } {
     mockGql.mockResolvedValue({ projects, templates });
 
     const authStore = new AuthStore();
@@ -69,7 +72,7 @@ describe('ProjectsPage', () => {
       authStore.currentUser = {
         id: 'u1',
         username: 'alice',
-        role: 'admin',
+        role,
         approved: true,
         createdAt: 't0',
       };
@@ -172,14 +175,24 @@ describe('ProjectsPage', () => {
   });
 
   describe('Projektmenü (Umbenennen/Löschen)', () => {
-    it('zeigt das Menü nur auf eigenen Projektkarten', async () => {
-      const { projectsStore } = renderPage();
+    it('zeigt normalen Usern das Menü nur auf eigenen Projektkarten', async () => {
+      const { projectsStore } = renderPage('user');
       await screen.findByText('Mein Vibe-Projekt');
       runInAction(() => projectsStore.setFilter('all'));
       await screen.findByText('Bobs Projekt');
 
       expect(screen.getByTestId('project-menu-p1')).toBeInTheDocument();
       expect(screen.queryByTestId('project-menu-p2')).not.toBeInTheDocument();
+    });
+
+    it('zeigt Admins das Menü auch auf fremden Projektkarten', async () => {
+      const { projectsStore } = renderPage('admin');
+      await screen.findByText('Mein Vibe-Projekt');
+      runInAction(() => projectsStore.setFilter('all'));
+      await screen.findByText('Bobs Projekt');
+
+      expect(screen.getByTestId('project-menu-p1')).toBeInTheDocument();
+      expect(screen.getByTestId('project-menu-p2')).toBeInTheDocument();
     });
 
     it('öffnet über das Menü den Umbenennen-Dialog mit vorgefülltem Namen und benennt um', async () => {
