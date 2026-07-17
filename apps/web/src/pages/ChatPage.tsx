@@ -185,14 +185,16 @@ export const ChatPage = observer(function ChatPage({
     return () => projectsStore.stopPolling();
   }, [projectsStore]);
 
-  // Öffnen startet die Sandbox, Verlassen startet die Grace-Period (R9, nur Owner).
+  // Öffnen startet die Sandbox, Verlassen startet die Grace-Period (R9) —
+  // auch für Nur-Lese-Besucher, sonst gäbe es bei fremden Projekten keine
+  // Live-Preview (R10). Chatten bleibt Owner-only.
   useEffect(() => {
-    if (projectId === null || !isOwner) return;
+    if (projectId === null) return;
     void projectsStore.enterProject(projectId);
     return () => {
       void projectsStore.leaveProject(projectId);
     };
-  }, [projectsStore, projectId, isOwner]);
+  }, [projectsStore, projectId]);
 
   // Chat-Historie + Live-Stream (alle angemeldeten Besucher, R10).
   useEffect(() => {

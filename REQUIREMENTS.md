@@ -271,6 +271,9 @@ Einfacher lokaler Login; Projekte sind Usern zugeordnet.
 - [ ] Fremde Projekte sind lesend zugänglich: Projektliste, Chat-Verlauf und
       Preview dürfen betrachtet werden — **live**: Zuschauer sehen laufende
       Agent-Turns und Preview-Updates in Echtzeit über dieselbe Subscription.
+- [ ] Das Öffnen eines fremden Projekts startet dessen Sandbox (sonst gäbe es
+      keine Live-Preview); Chat-Eingabe, Warmup und „letzte Aktivität" bleiben
+      dem Owner vorbehalten.
 
 ## 5. Nicht-funktionale Anforderungen
 

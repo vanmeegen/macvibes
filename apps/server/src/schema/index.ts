@@ -130,6 +130,15 @@ async function getProjectOwned(
   return project;
 }
 
+/** Lädt ein Projekt ohne Ownership-Prüfung (R10, lesender Zugriff). */
+async function getProjectAny(ctx: GraphQLContext, id: string): Promise<ProjectWithOwner> {
+  const project = await getProject(ctx.db, id);
+  if (!project) {
+    throw new DomainError('Projekt nicht gefunden');
+  }
+  return project;
+}
+
 async function touchProject(db: Db, id: string): Promise<void> {
   await db.update(projects).set({ lastActivityAt: new Date() }).where(eq(projects.id, id));
 }
@@ -344,8 +353,10 @@ builder.mutationType({
         id: t.arg.id({ required: true }),
       },
       resolve: async (_root, args, ctx) => {
+        // Auch Nur-Lese-Besucher starten die Sandbox — sonst gäbe es für
+        // fremde Projekte keine Live-Preview (R10). Chatten bleibt Owner-only.
         const user = requireUser(ctx);
-        const project = await getProjectOwned(ctx, user, String(args.id));
+        const project = await getProjectAny(ctx, String(args.id));
         const workspaceDir = workspaceDirFor(ctx.config.macvibesHome, project.id);
         await ctx.sandboxManager.enter({
           projectId: project.id,
@@ -355,10 +366,14 @@ builder.mutationType({
           devCommand: project.devCommand,
           previewPort: project.previewPort,
         });
-        // Config-Warmup anstoßen (fire-and-forget), während der User tippt —
-        // der erste echte Turn trägt dann nicht mehr den claude-First-Run.
-        void ctx.chatService.prewarm(project.id, workspaceDir);
-        await touchProject(ctx.db, project.id);
+        if (project.ownerId === user.id) {
+          // Config-Warmup anstoßen (fire-and-forget), während der User tippt —
+          // der erste echte Turn trägt dann nicht mehr den claude-First-Run.
+          // Nur für den Owner: Besucher dürfen weder den Agent-Daemon belegen
+          // noch die letzte Aktivität des Projekts verfälschen.
+          void ctx.chatService.prewarm(project.id, workspaceDir);
+          await touchProject(ctx.db, project.id);
+        }
         return project;
       },
     }),
@@ -367,8 +382,8 @@ builder.mutationType({
         id: t.arg.id({ required: true }),
       },
       resolve: async (_root, args, ctx) => {
-        const user = requireUser(ctx);
-        await getProjectOwned(ctx, user, String(args.id));
+        requireUser(ctx);
+        await getProjectAny(ctx, String(args.id));
         ctx.sandboxManager.leave(String(args.id));
         return true;
       },

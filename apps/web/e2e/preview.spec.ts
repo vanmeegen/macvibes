@@ -36,22 +36,30 @@ test('Preview: Dev-Server der Sandbox wird im iframe erreichbar', async ({ page,
   ).toContainText(/Deine App/i, { timeout: 60_000 });
 });
 
-test('Preview zeigt klaren Zustand, wenn die Sandbox gestoppt ist', async ({ page }) => {
+test('Fremdes Projekt: Öffnen startet die Sandbox, Preview wird sichtbar (R10)', async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
   const projectsPage = new ProjectsPage(page);
   const chatPage = new ChatPage(page);
 
   await registerNewUser(page);
-  const name = uniqueProjectName('Preview Aus');
+  const name = uniqueProjectName('Preview Fremd');
   await projectsPage.createProject(name, 'pwa');
   await projectsPage.goto(); // Anlegen führt in den Chat — zurück zur Liste zum Abmelden.
   await projectsPage.logout();
 
-  // Nur-Lese-Besucher startet keine Sandbox → Preview klar als nicht verfügbar markiert.
+  // Grace-Period (E2E: 1,5 s) abwarten, damit die Sandbox des Owners sicher
+  // gestoppt ist — der Besucher muss sie selbst hochfahren.
+  await page.waitForTimeout(3_000);
+
+  // Nur-Lese-Besucher: Chat bleibt gesperrt, aber die Sandbox bootet,
+  // damit die Live-Preview betrachtet werden kann (R10).
   await registerNewUser(page);
   await projectsPage.filterAll.click();
   await projectsPage.openProject(name);
 
   await expect(chatPage.readonlyHint).toBeVisible();
-  await expect(page.getByTestId('chat-preview-unavailable')).toBeVisible();
-  await expect(page.getByTestId('chat-preview')).toHaveCount(0);
+  await expect(page.getByTestId('chat-preview')).toBeVisible({ timeout: 120_000 });
+  await expect(page.getByTestId('chat-preview-unavailable')).toHaveCount(0);
 });
