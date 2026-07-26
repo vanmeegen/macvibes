@@ -5,6 +5,19 @@ import type {
   SandboxProvider,
   SandboxStatus,
 } from './provider';
+import { DomainError } from '../services/errors';
+
+/**
+ * Alle Plätze belegt und keiner davon verdrängbar (F20). Erbt von DomainError,
+ * damit die Meldung den Nutzer erreicht, statt als interner Fehler maskiert zu
+ * werden — der Aufrufer soll warten, nicht eine fremde, arbeitende VM verlieren.
+ */
+export class SandboxCapacityError extends DomainError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SandboxCapacityError';
+  }
+}
 
 export interface SandboxManagerOptions {
   provider: SandboxProvider;
@@ -35,6 +48,8 @@ interface SandboxEntry {
   idleTimer: Timer | null;
   /** Läuft der Start gerade? Zweite enter()-Aufrufe warten darauf (Race-Fix). */
   startPromise: Promise<void> | null;
+  /** Läuft der Stopp gerade? enter() wartet darauf, statt zu überschreiben (F17). */
+  stopPromise: Promise<void> | null;
 }
 
 export class SandboxManager {
@@ -43,7 +58,14 @@ export class SandboxManager {
   constructor(private readonly options: SandboxManagerOptions) {}
 
   async enter(context: SandboxContext): Promise<void> {
-    const existing = this.entries.get(context.projectId);
+    let existing = this.entries.get(context.projectId);
+    // Ein laufender Stopp muss ZUERST fertig werden (F17): sonst startet hier
+    // eine neue VM unter demselben msb-Namen, während stop() noch auf den
+    // Auto-Commit wartet — und räumt sie anschließend gleich wieder ab.
+    if (existing && existing.status === 'stopping' && existing.stopPromise) {
+      await existing.stopPromise;
+      existing = this.entries.get(context.projectId);
+    }
     if (existing && existing.status === 'starting' && existing.startPromise) {
       // Start läuft schon — darauf warten, damit der Agent nicht auf eine noch
       // nicht exec-bereite VM losfeuert ("no agent endpoint found", Race-Fix).
@@ -66,6 +88,7 @@ export class SandboxManager {
       graceTimer: null,
       idleTimer: null,
       startPromise: null,
+      stopPromise: null,
     };
     this.entries.set(context.projectId, entry);
 
@@ -138,27 +161,38 @@ export class SandboxManager {
 
   async stop(projectId: string): Promise<void> {
     const entry = this.entries.get(projectId);
-    if (!entry || (entry.status !== 'running' && entry.status !== 'starting')) return;
+    if (!entry) return;
+    // Läuft der Stopp schon, denselben abwarten statt ihn zu doppeln (F17).
+    if (entry.status === 'stopping' && entry.stopPromise) return entry.stopPromise;
+    if (entry.status !== 'running' && entry.status !== 'starting') return;
 
     this.clearGrace(entry);
     this.clearIdle(entry);
     this.setStatus(entry, 'stopping');
 
-    if (this.options.onBeforeStop) {
-      try {
-        await this.options.onBeforeStop(projectId);
-      } catch (error) {
-        // Auto-Commit-Fehler dürfen den Stopp nicht blockieren, aber nie
-        // stillschweigend verschwinden (Konvention: keine verschluckten Fehler).
-        console.error(`onBeforeStop für ${projectId} schlug fehl:`, error);
+    const stopWork = (async () => {
+      if (this.options.onBeforeStop) {
+        try {
+          await this.options.onBeforeStop(projectId);
+        } catch (error) {
+          // Auto-Commit-Fehler dürfen den Stopp nicht blockieren, aber nie
+          // stillschweigend verschwinden (Konvention: keine verschluckten Fehler).
+          console.error(`onBeforeStop für ${projectId} schlug fehl:`, error);
+        }
       }
-    }
 
+      try {
+        await entry.handle?.stop();
+      } finally {
+        entry.handle = null;
+        this.setStatus(entry, 'stopped');
+      }
+    })();
+    entry.stopPromise = stopWork;
     try {
-      await entry.handle?.stop();
+      await stopWork;
     } finally {
-      entry.handle = null;
-      this.setStatus(entry, 'stopped');
+      entry.stopPromise = null;
     }
   }
 
@@ -203,7 +237,20 @@ export class SandboxManager {
       );
 
     while (active().length >= this.options.maxSandboxes) {
-      const victim = active().reduce((oldest, e) =>
+      // Beschäftigte Sandboxes sind tabu (F20): `enter` ist bewusst ohne
+      // Ownership erreichbar, sonst könnte ein Nutzer die Plätze mit fremden
+      // Projekten füllen und dabei laufende Turns anderer abbrechen.
+      // Ownership selbst bleibt außen vor — sonst blockiert ein Einzelner
+      // die gesamte Kapazität.
+      const candidates = active().filter(
+        (e) => this.options.isBusy?.(e.context.projectId) !== true,
+      );
+      if (candidates.length === 0) {
+        throw new SandboxCapacityError(
+          'Alle Sandbox-Plätze sind belegt und beschäftigt — bitte kurz warten.',
+        );
+      }
+      const victim = candidates.reduce((oldest, e) =>
         e.lastActivityAt < oldest.lastActivityAt ? e : oldest,
       );
       await this.stop(victim.context.projectId);

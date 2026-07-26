@@ -229,6 +229,86 @@ describe('LRU-Limit (R9, max Sandboxes)', () => {
   });
 });
 
+/**
+ * F20: `enter` ist über den bewusst ungeschützten enterProject-Resolver für
+ * JEDES Projekt erreichbar. Die Eviction kannte weder Eigentümer noch
+ * `isBusy` — ein Nutzer konnte die Plätze mit fremden Projekten füllen und
+ * dabei laufende Turns anderer beenden.
+ */
+describe('LRU-Eviction schont beschäftigte Sandboxes (F20)', () => {
+  test('verdrängt keine Sandbox mit laufendem Turn, sondern lehnt ab', async () => {
+    const { provider, manager } = setup({
+      maxSandboxes: 1,
+      graceMs: 10_000,
+      isBusy: (id) => id === 'p1',
+    });
+    await manager.enter(ctx('p1'));
+
+    await expect(manager.enter(ctx('p2'))).rejects.toThrow(/belegt|beschäftigt/i);
+
+    expect(manager.status('p1')).toBe('running');
+    expect(provider.stopCalls).toEqual([]);
+  });
+
+  test('eine untätige Sandbox wird weiterhin verdrängt', async () => {
+    const { provider, manager } = setup({
+      maxSandboxes: 1,
+      graceMs: 10_000,
+      isBusy: () => false,
+    });
+    await manager.enter(ctx('p1'));
+    await manager.enter(ctx('p2'));
+
+    expect(provider.stopCalls).toEqual(['p1']);
+    expect(manager.status('p2')).toBe('running');
+  });
+});
+
+/**
+ * F17: `enter` kurzschloss nur bei starting/running. Ein Eintrag im Status
+ * `stopping` — während stop() noch auf den Auto-Commit-Hook wartet — wurde
+ * ersetzt und eine neue VM unter demselben msb-Namen gestartet; das alte
+ * stop() räumte danach die NEUE VM ab.
+ */
+describe('enter wartet auf ein laufendes stop (F17)', () => {
+  test('startet erst neu, wenn der Stopp samt Auto-Commit durch ist', async () => {
+    // Kein Nullable: TS würde die Zuweisung in der Closure nicht sehen.
+    let releaseStop = (): void => {};
+    const { provider, manager, beforeStopLog } = setup({
+      graceMs: 10_000,
+    });
+    // onBeforeStop künstlich verzögern (steht für den Auto-Commit).
+    const slowManager = manager as unknown as {
+      options: { onBeforeStop?: (id: string) => Promise<void> };
+    };
+    const original = slowManager.options.onBeforeStop;
+    slowManager.options.onBeforeStop = async (id) => {
+      await original?.(id);
+      await new Promise<void>((resolve) => {
+        releaseStop = resolve;
+      });
+    };
+
+    await manager.enter(ctx('p1'));
+    const stopping = manager.stop('p1');
+    await Bun.sleep(10);
+    expect(manager.status('p1')).toBe('stopping');
+
+    const entering = manager.enter(ctx('p1'));
+    await Bun.sleep(10);
+    // Solange der Stopp hängt, darf kein zweiter Start passiert sein.
+    expect(provider.startCalls).toEqual(['p1']);
+
+    releaseStop();
+    await stopping;
+    await entering;
+
+    expect(provider.startCalls).toEqual(['p1', 'p1']);
+    expect(beforeStopLog).toEqual(['p1']);
+    expect(manager.status('p1')).toBe('running');
+  });
+});
+
 describe('stopAll', () => {
   test('stoppt alle laufenden Sandboxes', async () => {
     const { provider, manager } = setup();
