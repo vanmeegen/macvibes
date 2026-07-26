@@ -25,8 +25,18 @@ test('Preview: Dev-Server der Sandbox wird im iframe erreichbar', async ({ page,
   // Der Dev-Server antwortet wirklich — über das Gateway durchgereicht
   // (Template-agnostisch: nur Status zählt). 127.0.0.1 statt localhost: der
   // Dev-Server bindet IPv4, node-fetch würde localhost sonst zu ::1 auflösen.
-  const response = await request.get((src ?? '').replace('localhost', '127.0.0.1'));
+  // Das Gateway verlangt seit F19 eine gültige Session; der request-Fixture
+  // hat keine Browser-Cookies, deshalb reichen wir sie explizit durch.
+  const session = (await page.context().cookies()).find((c) => c.name === 'macvibes_session');
+  expect(session).toBeDefined();
+  const response = await request.get((src ?? '').replace('localhost', '127.0.0.1'), {
+    headers: { cookie: `macvibes_session=${session?.value ?? ''}` },
+  });
   expect(response.ok()).toBeTruthy();
+
+  // Ohne Session bleibt dieselbe URL verschlossen (F19).
+  const anonym = await request.get((src ?? '').replace('localhost', '127.0.0.1'));
+  expect(anonym.status()).toBe(401);
 
   // Und die Seite RENDERT im iframe: erst damit laufen die root-absoluten
   // Asset-Requests (/@vite/client, /_bun/…) über die Referer-Routing-Logik

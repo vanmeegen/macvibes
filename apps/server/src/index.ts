@@ -187,6 +187,11 @@ const previewGateway = startPreviewGateway({
   port: config.sandbox.previewGatewayPort,
   hostname: config.hostname,
   previewPortFor: (projectId) => sandboxManager.previewHostPort(projectId),
+  // Previews sind nur für angemeldete Nutzer sichtbar (F19). Ownership wird
+  // bewusst NICHT geprüft — fremde Projekte dürfen live betrachtet werden
+  // (R10), genau wie beim Chat-Verlauf.
+  authenticate: async (token) =>
+    token !== null && (await resolveSession(db, config, token)) !== null,
 });
 console.log(`Preview-Gateway auf http://${config.hostname}:${previewGateway.port}`);
 

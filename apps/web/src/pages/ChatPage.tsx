@@ -531,6 +531,12 @@ export const ChatPage = observer(function ChatPage({
               src={preview.url}
               title="Live-Preview"
               data-testselector="chat-preview"
+              // Der Inhalt stammt vom Agenten und ist nicht vertrauenswürdig
+              // (F13). allow-same-origin ist nötig für HMR-WebSocket und
+              // localStorage der Preview; bewusst NICHT gesetzt sind
+              // allow-top-navigation und allow-popups-to-escape-sandbox —
+              // sonst könnte die Preview die macvibes-Seite wegnavigieren.
+              sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads"
               sx={{ border: 0, width: '100%', height: '100%' }}
             />
           ) : (
