@@ -7,15 +7,26 @@ import { expect, test, type Page } from '@playwright/test';
  *
  * Voraussetzungen:
  * - Server läuft (Port 4000) mit msb + Credentials (apps/server/.env).
- * - Ein freigeschalteter Nutzer; Default browsertest/test1234!, übersteuerbar
- *   per MACVIBES_LIVE_USER / MACVIBES_LIVE_PASS.
+ * - Ein freigeschalteter Nutzer, dessen Zugangsdaten aus der Umgebung kommen:
+ *   MACVIBES_LIVE_USER / MACVIBES_LIVE_PASS. Bewusst OHNE Default (F15) — ein
+ *   Passwort im Repo wäre auf der laufenden Instanz sofort gültig.
  *
  * Prüft die Dinge, die das normale E2E (Fake-Agent, Prozess-Provider)
  * prinzipbedingt nicht kann: echter Claude-Kontext über Stop hinweg,
  * VM-Preview durchs Gateway, Trennung zweier echter Projekte.
  */
-const USER = process.env.MACVIBES_LIVE_USER ?? 'browsertest';
-const PASS = process.env.MACVIBES_LIVE_PASS ?? 'test1234!';
+const USER = process.env.MACVIBES_LIVE_USER ?? '';
+const PASS = process.env.MACVIBES_LIVE_PASS ?? '';
+
+test.beforeAll(() => {
+  if (USER === '' || PASS === '') {
+    throw new Error(
+      'MACVIBES_LIVE_USER und MACVIBES_LIVE_PASS müssen gesetzt sein — der ' +
+        'Live-Walkthrough läuft gegen die echte Instanz und hat bewusst keine ' +
+        'Default-Zugangsdaten im Repo (F15).',
+    );
+  }
+});
 const SHOTS = 'test-results/live';
 const STAMP = Date.now().toString(36);
 const PWA = `walk-pwa-${STAMP}`;
