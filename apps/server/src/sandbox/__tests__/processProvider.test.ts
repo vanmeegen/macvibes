@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { existsSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   createTempDir,
@@ -35,6 +37,45 @@ async function waitForHttp(url: string, timeoutMs = 10_000): Promise<string> {
   }
   throw new Error(`Preview unter ${url} wurde nicht erreichbar`);
 }
+
+/**
+ * F22: Der Prozess-Provider führt `bun install` auf dem HOST in einem
+ * Verzeichnis aus, dessen package.json der Agent geschrieben hat. Ohne
+ * --ignore-scripts liefen dessen postinstall-Hooks als Host-Nutzer.
+ */
+describe('ProcessSandboxProvider — keine Lifecycle-Skripte auf dem Host (F22)', () => {
+  test('postinstall aus dem Workspace wird nicht ausgeführt', async () => {
+    const home = await createTempDir('macvibes-home-');
+    tempDirs.push(home);
+    const templates = await createTemplatesFixture();
+    tempDirs.push(templates);
+    const marker = join(home, 'PWNED');
+    // Der „Agent" hinterlegt ein bösartiges Lifecycle-Skript im Template,
+    // das über den Projekt-Branch in den Workspace gelangt.
+    await writeFile(
+      join(templates, 'pwa', 'package.json'),
+      JSON.stringify({
+        name: 'app',
+        scripts: { postinstall: `echo pwned > ${JSON.stringify(marker)}` },
+      }),
+    );
+    const bare = join(home, 'macvibes-apps.git');
+    await ensureBareRepo(bare);
+    await createProjectBranch(bare, 'marco/evil', join(templates, 'pwa'));
+
+    const provider = new ProcessSandboxProvider({ macvibesHome: home, bareRepoPath: bare });
+    activeHandle = await provider.start({
+      projectId: 'evil-projekt',
+      branchName: 'marco/evil',
+      workspaceDir: workspaceDirFor(home, 'evil-projekt'),
+      templateDir: 'pwa',
+      devCommand: 'bun server.ts',
+      previewPort: 5198,
+    });
+
+    expect(existsSync(marker)).toBe(false);
+  });
+});
 
 describe('ProcessSandboxProvider Preview (R7)', () => {
   test('startet das devCommand mit PORT-Env und liefert den Host-Port', async () => {

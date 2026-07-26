@@ -22,6 +22,7 @@ import {
   msbAvailable,
 } from './sandbox/microsandboxProvider';
 import { ProcessSandboxProvider } from './sandbox/processProvider';
+import { selectBackends, type BackendSelection } from './sandbox/backendSelection';
 import { SandboxManager } from './sandbox/sandboxManager';
 import { schema } from './schema';
 import type { GraphQLContext } from './schema/builder';
@@ -90,9 +91,22 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 // chatService entsteht erst nach dem Manager — Hooks greifen über diese Referenz.
 let chatServiceRef: ChatService | null = null;
 
-const useMicrosandbox =
-  config.sandbox.backend === 'microsandbox' ||
-  (config.sandbox.backend === 'auto' && (await msbAvailable()));
+// Fail-closed (F9): der echte Agent läuft nur in einer MicroVM. Fehlt das
+// Isolat, bricht der Start ab, statt still auf den Host-Prozess zu wechseln.
+let backends: BackendSelection;
+try {
+  backends = selectBackends({
+    configured: config.sandbox.backend,
+    agent: config.agent.backend,
+    msbAvailable: await msbAvailable(),
+    allowHostAgent:
+      Bun.env.MACVIBES_ALLOW_HOST_AGENT === '1' || Bun.env.MACVIBES_ALLOW_HOST_AGENT === 'true',
+  });
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
+const useMicrosandbox = backends.sandbox === 'microsandbox';
 
 // Agent-Transport in die VM: persistenter SDK-Daemon (architektur.md, A+C).
 // Gateway für die eingehenden Daemon-Verbindungen + gebündelter Daemon,
@@ -177,11 +191,11 @@ const previewGateway = startPreviewGateway({
 console.log(`Preview-Gateway auf http://${config.hostname}:${previewGateway.port}`);
 
 function selectAgentRunner() {
-  if (config.agent.backend === 'fake') {
+  if (backends.agent === 'fake') {
     console.log('Agent-Backend: fake (MACVIBES_AGENT=fake)');
     return new FakeAgentRunner(config.agent.fakeDelayMs);
   }
-  if (useMicrosandbox) {
+  if (backends.agent === 'daemon') {
     // Persistenter SDK-Daemon in der VM, Kommandos über das WS-Gateway —
     // kein msb exec im Agent-Pfad (architektur.md, chatproblems.md).
     console.log('Agent-Backend: claude-Daemon in VM (WS-Gateway, Supervisor: tini+monit)');
@@ -191,7 +205,10 @@ function selectAgentRunner() {
       connectTimeoutMs: 60_000,
     });
   }
-  console.log('Agent-Backend: claude als Host-Prozess (kein VM-Isolat!)');
+  console.warn(
+    'Agent-Backend: claude als HOST-PROZESS ohne VM-Isolat — ' +
+      'nur wegen MACVIBES_ALLOW_HOST_AGENT=1. Der Agent hat damit die Rechte des Server-Nutzers.',
+  );
   return new ClaudeAgentRunner();
 }
 

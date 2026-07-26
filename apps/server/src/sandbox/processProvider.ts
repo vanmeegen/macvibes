@@ -36,8 +36,12 @@ export class ProcessSandboxProvider implements SandboxProvider {
     // Delta-Install bei jedem Start (ADR 0002, Parität zur MicroVM): bei
     // vollständigem node_modules ein No-Op, sonst heilt er fehlende Pakete
     // aus bun.lock (z. B. ein bun add einer früheren Session).
+    // --ignore-scripts ist Pflicht (F22): die package.json stammt aus dem
+    // Workspace, den der nicht vertrauenswürdige Agent beschreibt — ohne das
+    // liefen seine preinstall/postinstall-Hooks als Host-Nutzer.
     if (existsSync(join(workspaceDir, 'package.json'))) {
-      await Bun.spawn(['bun', 'install', '--silent'], { cwd: workspaceDir }).exited;
+      await Bun.spawn(['bun', 'install', '--silent', '--ignore-scripts'], { cwd: workspaceDir })
+        .exited;
     }
 
     const spawn = (): SupervisedProcess => {
