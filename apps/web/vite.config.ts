@@ -12,6 +12,14 @@ export default defineConfig({
   server: {
     host: true,
     port: webPort,
+    // F7: `host: true` bindet 0.0.0.0, und Vites /@fs/-Handler liefert ohne
+    // Grenze alles unterhalb des Repo-Roots aus — darunter die SQLite-DB mit
+    // Session-Tokens im Klartext. `strict` beschränkt auf die erlaubten
+    // Wurzeln, `deny` sperrt zusätzlich die sensiblen Muster.
+    fs: {
+      strict: true,
+      deny: ['**/.env', '**/.env.*', '**/*.db', '**/*.db-wal', '**/*.db-shm', '**/data/**'],
+    },
     proxy: {
       '/graphql': {
         target: `http://localhost:${apiPort}`,

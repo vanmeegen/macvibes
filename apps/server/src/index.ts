@@ -8,8 +8,9 @@ import { startEgressProxy } from './http/egressProxy';
 import { startPreviewGateway } from './http/previewGateway';
 import { readSessionToken } from './http/cookies';
 import { serveWebUi } from './http/staticFiles';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { AGENT_GATEWAY_PATH, AgentGateway } from './agent/agentGateway';
 import { ClaudeAgentRunner } from './agent/claudeRunner';
 import { buildDaemonBundle } from './agent/daemonBundle';
@@ -86,6 +87,21 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
     void localRouterReady.then((router) => router.stop()).finally(() => process.exit(0));
   });
+}
+
+/** Meldet eine group/other-lesbare .env — dort steht der Claude-Token (F26). */
+function warnIfEnvFileReadable(envPath: string): void {
+  if (!existsSync(envPath)) return;
+  try {
+    if ((statSync(envPath).mode & 0o077) !== 0) {
+      console.warn(
+        `WARNUNG: ${envPath} ist auch für andere lokale Konten lesbar und enthält ` +
+          `den Claude-Token. Bitte "chmod 600 ${envPath}" ausführen.`,
+      );
+    }
+  } catch {
+    // Rechte nicht ermittelbar — kein Grund, den Start zu stören.
+  }
 }
 
 // chatService entsteht erst nach dem Manager — Hooks greifen über diese Referenz.
@@ -306,6 +322,10 @@ const server = Bun.serve({
     );
   },
 });
+
+// F26: Die .env trägt den Claude-Token im Klartext. Nicht automatisch
+// korrigieren (es ist eine Nutzerdatei), aber unübersehbar melden.
+warnIfEnvFileReadable(fileURLToPath(new URL('../.env', import.meta.url)));
 
 console.log(`macvibes-Server läuft auf http://${server.hostname}:${server.port}`);
 console.log(`GraphQL: http://${server.hostname}:${server.port}/graphql`);

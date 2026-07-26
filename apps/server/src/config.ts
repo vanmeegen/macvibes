@@ -96,9 +96,22 @@ const DEFAULT_TEMPLATES_DIR = resolve(
 );
 const DEFAULT_WEB_DIST_DIR = resolve(fileURLToPath(new URL('../../web/dist', import.meta.url)));
 
-export function resolveDbPath(): string {
+/**
+ * Pfad der SQLite-DB.
+ *
+ * Neue Installationen legen sie unter `<macvibesHome>/data` an, NICHT mehr
+ * unter dem Repo-Root (F7): der Vite-Dev-Server bindet 0.0.0.0 und lieferte
+ * über `/@fs/` alles unterhalb des Repos aus — inklusive der DB mit
+ * Session-Tokens im Klartext. Eine vorhandene Alt-DB wird weiter benutzt,
+ * damit niemand beim Update stillschweigend seine Daten verliert.
+ */
+export function resolveDbPath(macvibesHome?: string): string {
   if (Bun.env.DB_PATH) return Bun.env.DB_PATH;
-  return Bun.env.MACVIBES_TEST_MODE === '1' ? './data/app-test.db' : './data/app.db';
+  const name = Bun.env.MACVIBES_TEST_MODE === '1' ? 'app-test.db' : 'app.db';
+  const legacy = `./data/${name}`;
+  if (existsSync(legacy)) return legacy;
+  const home = macvibesHome ?? Bun.env.MACVIBES_HOME ?? join(homedir(), 'macvibes');
+  return join(home, 'data', name);
 }
 
 /** MACVIBES_MODEL_ROUTES parsen — nie werfen, ungültige Werte klar melden. */
@@ -140,7 +153,7 @@ export function loadConfig(): ServerConfig {
     bareRepoPath: join(macvibesHome, 'macvibes-apps.git'),
     templatesDir: Bun.env.MACVIBES_TEMPLATES_DIR ?? DEFAULT_TEMPLATES_DIR,
     adminUsername: Bun.env.MACVIBES_ADMIN_USERNAME || undefined,
-    dbPath: resolveDbPath(),
+    dbPath: resolveDbPath(macvibesHome),
     sessionTtlMs: 3 * 24 * 60 * 60 * 1000,
     webDistDir: Bun.env.MACVIBES_WEB_DIST ?? DEFAULT_WEB_DIST_DIR,
     sandbox: {
