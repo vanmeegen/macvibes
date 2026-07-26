@@ -17,7 +17,14 @@ beforeAll(() => {
     port: 0,
     fetch: (req) => new Response(`upstream-ok ${new URL(req.url).pathname}`),
   });
-  proxy = startEgressProxy({ port: 0, token: TOKEN });
+  // Für die Tunnel-Mechanik wird die Zielprüfung injiziert — sonst blockte
+  // die Policy den lokalen Fake-Upstream (127.0.0.1) zu Recht. Die Policy
+  // selbst prüfen die Tests weiter unten gegen den ungefilterten Proxy.
+  proxy = startEgressProxy({
+    port: 0,
+    token: TOKEN,
+    checkTarget: async (host) => ({ ok: true, address: host }),
+  });
 });
 
 afterAll(() => {
@@ -78,5 +85,98 @@ describe('EgressProxy (CONNECT-Tunnel für VM-Traffic)', () => {
         `Host: 127.0.0.1:${upstream.port}\r\nProxy-Authorization: Basic ${auth}\r\nConnection: close\r\n\r\n`,
     );
     expect(out).toContain('upstream-ok /plain');
+  });
+});
+
+/**
+ * F3: Ohne Zielprüfung tunnelt der Proxy alles, was der HOST erreicht — der
+ * Agent besitzt die Credentials per Design. Diese Suite fährt bewusst OHNE
+ * injizierte Prüfung, also gegen die echte Policy.
+ */
+describe('EgressProxy — Zielpolicy (F3)', () => {
+  let guarded: EgressProxyHandle;
+
+  beforeAll(() => {
+    guarded = startEgressProxy({ port: 0, token: TOKEN });
+  });
+  afterAll(() => guarded.stop());
+
+  function rawTo(port: number, payload: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      let buffer = '';
+      void Bun.connect({
+        hostname: '127.0.0.1',
+        port,
+        socket: {
+          open(s): void {
+            s.write(payload);
+          },
+          data(_s, chunk): void {
+            buffer += new TextDecoder().decode(chunk);
+          },
+          close(): void {
+            resolve(buffer);
+          },
+          error(_s, err): void {
+            reject(err);
+          },
+        },
+      });
+      setTimeout(() => resolve(buffer), 3000);
+    });
+  }
+
+  const auth = (): string => Buffer.from(`mv:${TOKEN}`).toString('base64');
+
+  test('CONNECT auf den Loopback des Hosts wird abgelehnt', async () => {
+    const target = `127.0.0.1:${upstream.port}`;
+    const out = await rawTo(
+      guarded.port,
+      `CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\nProxy-Authorization: Basic ${auth()}\r\n\r\n` +
+        `GET /tunnel-test HTTP/1.1\r\nHost: ${target}\r\nConnection: close\r\n\r\n`,
+    );
+    expect(out).toContain('403');
+    expect(out).not.toContain('upstream-ok');
+  });
+
+  test('CONNECT auf einen nicht erlaubten Port wird abgelehnt', async () => {
+    const out = await rawTo(
+      guarded.port,
+      `CONNECT example.com:22 HTTP/1.1\r\nHost: example.com:22\r\nProxy-Authorization: Basic ${auth()}\r\n\r\n`,
+    );
+    expect(out).toContain('403');
+  });
+
+  test('absolute-form auf den Loopback wird abgelehnt', async () => {
+    const out = await rawTo(
+      guarded.port,
+      `GET http://127.0.0.1:${upstream.port}/plain HTTP/1.1\r\n` +
+        `Host: 127.0.0.1:${upstream.port}\r\nProxy-Authorization: Basic ${auth()}\r\nConnection: close\r\n\r\n`,
+    );
+    expect(out).toContain('403');
+    expect(out).not.toContain('upstream-ok');
+  });
+
+  /**
+   * Der Scan hat diesen Smuggling-Kandidaten nur deshalb widerlegt, weil F3
+   * demselben Angreifer ohnehin einen freien Tunnel gab. Mit der Policy wird
+   * er scharf — deshalb gehört die Kopfprüfung in dasselbe Paket.
+   */
+  test('nacktes LF im Kopf wird abgelehnt, keine zweite Request-Line', async () => {
+    const out = await rawTo(
+      guarded.port,
+      `CONNECT example.com:443 HTTP/1.1\nProxy-Authorization: Basic ${auth()}\n` +
+        `CONNECT 127.0.0.1:${upstream.port} HTTP/1.1\r\n\r\n`,
+    );
+    expect(out).toContain('400');
+    expect(out).not.toContain('upstream-ok');
+  });
+
+  test('kaputte Request-Line wird abgelehnt', async () => {
+    const out = await rawTo(
+      guarded.port,
+      `CONNECT example.com:443\r\nProxy-Authorization: Basic ${auth()}\r\n\r\n`,
+    );
+    expect(out).toContain('400');
   });
 });

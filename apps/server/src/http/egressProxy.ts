@@ -11,12 +11,78 @@
  */
 
 import type { Socket, TCPSocketListener } from 'bun';
+import { lookup } from 'node:dns/promises';
+import { checkTarget, defaultEgressPolicy, type EgressPolicy } from './egressPolicy';
+
+/** Ergebnis der Zielprüfung: bei ok die Adresse, zu der verbunden wird. */
+export type TargetDecision = { ok: true; address: string } | { ok: false; reason: string };
+
+/** Prüft ein Ziel und liefert die zu verwendende IP (F3). */
+export type TargetChecker = (host: string, port: number) => Promise<TargetDecision>;
 
 export interface EgressProxyOptions {
   port: number;
   /** Shared Secret (Basic-Auth-Passwort in der Proxy-URL der VM). */
   token: string;
   hostname?: string;
+  /**
+   * Zielprüfung — Default ist die echte Policy (DNS auf dem Host + Sperrliste).
+   * Als DI-Naht überschreibbar, damit Tests die Tunnel-Mechanik gegen einen
+   * lokalen Fake-Upstream prüfen können, ohne die Policy aufzuweichen.
+   */
+  checkTarget?: TargetChecker;
+}
+
+/**
+ * Löst den Namen auf dem Host auf, prüft ALLE Adressen gegen die Policy und
+ * gibt die geprüfte IP zurück. Verbunden wird anschließend genau zu dieser
+ * Adresse — nicht erneut zum Namen, sonst bliebe ein DNS-Rebinding-Fenster.
+ */
+export function createTargetChecker(policy: EgressPolicy = defaultEgressPolicy()): TargetChecker {
+  return async (host, port) => {
+    let addresses: string[];
+    try {
+      addresses = (await lookup(host, { all: true })).map((entry) => entry.address);
+    } catch {
+      addresses = [];
+    }
+    const verdict = checkTarget(host, port, addresses, policy);
+    if (!verdict.ok) return verdict;
+    return { ok: true, address: addresses[0] as string };
+  };
+}
+
+/**
+ * Strikte Zerlegung des Requestkopfes. Sobald es eine Zielpolicy gibt, wird
+ * die Nachlässigkeit hier sicherheitsrelevant: mit einem nackten \n ließe
+ * sich eine zweite Request-Line einschmuggeln, die am Policy-Check vorbeiläuft.
+ */
+export function parseProxyHead(
+  head: string,
+): { requestLine: string; headerLines: string[] } | null {
+  if (head.includes('\n') || head.includes('\r')) {
+    // Nach dem Split an \r\n darf kein einzelnes \r oder \n mehr vorkommen.
+    const lines = head.split('\r\n');
+    if (lines.some((line) => line.includes('\n') || line.includes('\r'))) return null;
+  }
+  const lines = head.split('\r\n');
+  const requestLine = lines[0] ?? '';
+  const parts = requestLine.split(' ');
+  if (parts.length !== 3) return null;
+  const [method = '', , version = ''] = parts;
+  if (!/^[A-Za-z]+$/.test(method)) return null;
+  if (!/^HTTP\/1\.[01]$/.test(version)) return null;
+
+  const headerLines = lines.slice(1);
+  for (const line of headerLines) {
+    if (line === '') continue;
+    // Keine Obs-Fold-Fortsetzungszeilen und nur gültige Header-Namen.
+    if (/^[ \t]/.test(line)) return null;
+    const colon = line.indexOf(':');
+    if (colon <= 0) return null;
+    if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(line.slice(0, colon))) return null;
+  }
+  return { requestLine, headerLines };
 }
 
 export interface EgressProxyHandle {
@@ -32,6 +98,31 @@ interface ConnState {
 
 export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle {
   const expectedAuth = `Basic ${Buffer.from(`mv:${options.token}`).toString('base64')}`;
+  const checkTargetFn = options.checkTarget ?? createTargetChecker();
+
+  const refuse = (client: Socket<ConnState>, reason: string): void => {
+    console.warn(`EgressProxy: Ziel abgelehnt — ${reason}`);
+    client.write(
+      `HTTP/1.1 403 Forbidden\r\nConnection: close\r\ncontent-length: 0\r\nx-macvibes-reason: ${reason.replace(/[\r\n]/g, ' ')}\r\n\r\n`,
+    );
+    client.end();
+  };
+
+  /** Prüft das Ziel und verbindet nur bei positivem Bescheid (F3). */
+  const connectChecked = (
+    client: Socket<ConnState>,
+    host: string,
+    port: number,
+    onOpen: (upstream: Socket) => void,
+  ): void => {
+    void checkTargetFn(host, port).then((decision) => {
+      if (!decision.ok) {
+        refuse(client, decision.reason);
+        return;
+      }
+      connectUpstream(client, decision.address, port, onOpen);
+    });
+  };
 
   const connectUpstream = (
     client: Socket<ConnState>,
@@ -89,9 +180,13 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
         const rest = state.buf.subarray(headerEnd + 4);
         state.buf = Buffer.alloc(0);
 
-        const lines = head.split('\r\n');
-        const requestLine = lines[0] ?? '';
-        const headerLines = lines.slice(1);
+        const parsed = parseProxyHead(head);
+        if (parsed === null) {
+          socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+          socket.end();
+          return;
+        }
+        const { requestLine, headerLines } = parsed;
         const auth =
           headerLines
             .find((l) => l.toLowerCase().startsWith('proxy-authorization:'))
@@ -112,7 +207,7 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
           const sep = target.lastIndexOf(':');
           const host = sep > 0 ? target.slice(0, sep) : target;
           const port = sep > 0 ? Number(target.slice(sep + 1)) : 443;
-          connectUpstream(socket, host, port, (up) => {
+          connectChecked(socket, host, port, (up) => {
             socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
             state.established = true;
             if (rest.length > 0) up.write(rest);
@@ -134,7 +229,7 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
           const newHead =
             `${method} ${url.pathname}${url.search} HTTP/1.1\r\n` +
             `${forwarded.join('\r\n')}\r\n\r\n`;
-          connectUpstream(socket, url.hostname, port, (up) => {
+          connectChecked(socket, url.hostname, port, (up) => {
             state.established = true;
             up.write(newHead);
             if (rest.length > 0) up.write(rest);
