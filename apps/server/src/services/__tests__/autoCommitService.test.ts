@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { writeFile } from 'node:fs/promises';
+import { chmod, mkdir, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { FakeAgentRunner } from '../../agent/fakeRunner';
 import { autoCommit, buildCommitMessage, createTurnEndAutoCommit } from '../autoCommitService';
 import { ChatService } from '../chatService';
-import { createProjectBranch, ensureBareRepo, runGit } from '../gitService';
-import { ensureWorkspace } from '../workspaceService';
+import { createProjectBranch, ensureBareRepo, runGit, type ProjectRepo } from '../gitService';
+import { ensureWorkspace, projectRepoFor } from '../workspaceService';
 import {
   createTempDir,
   createTemplatesFixture,
@@ -37,7 +38,12 @@ async function waitFor(
   throw new Error('waitFor: Bedingung nicht erfüllt');
 }
 
-async function setupWorkspace(): Promise<{ home: string; bare: string; workspace: string }> {
+async function setupWorkspace(): Promise<{
+  home: string;
+  bare: string;
+  workspace: string;
+  repo: ProjectRepo;
+}> {
   const home = await createTempDir('macvibes-home-');
   tempDirs.push(home);
   const templates = await createTemplatesFixture();
@@ -51,7 +57,7 @@ async function setupWorkspace(): Promise<{ home: string; bare: string; workspace
     projectId: 'projekt-1',
     branchName: 'marco/projekt',
   });
-  return { home, bare, workspace };
+  return { home, bare, workspace, repo: projectRepoFor(home, 'projekt-1') };
 }
 
 async function commitCount(bare: string, branch: string): Promise<number> {
@@ -75,11 +81,11 @@ describe('buildCommitMessage (R8)', () => {
 
 describe('autoCommit (R8)', () => {
   test('committet Änderungen und pusht in den Projekt-Branch', async () => {
-    const { bare, workspace } = await setupWorkspace();
+    const { bare, workspace, repo } = await setupWorkspace();
     const before = await commitCount(bare, 'marco/projekt');
 
     await writeFile(join(workspace, 'neu.txt'), 'vom Agenten erzeugt');
-    const result = await autoCommit(workspace, 'Agent: Neues Feature');
+    const result = await autoCommit(repo, 'Agent: Neues Feature');
 
     expect(result).toBe('committed');
     expect(await commitCount(bare, 'marco/projekt')).toBe(before + 1);
@@ -88,13 +94,73 @@ describe('autoCommit (R8)', () => {
   });
 
   test('erzeugt keinen leeren Commit ohne Änderungen', async () => {
-    const { bare, workspace } = await setupWorkspace();
+    const { bare, repo } = await setupWorkspace();
     const before = await commitCount(bare, 'marco/projekt');
 
-    const result = await autoCommit(workspace, 'Agent: Nichts passiert');
+    const result = await autoCommit(repo, 'Agent: Nichts passiert');
 
     expect(result).toBe('nothing-to-commit');
     expect(await commitCount(bare, 'marco/projekt')).toBe(before);
+  });
+});
+
+/**
+ * F1 (HIGH, Host-RCE): Der Workspace wird read-write in die Sandbox gemountet,
+ * der Host committet darin. Kann der Gast git-Metadaten unterschieben, führt
+ * der Host beim nächsten Auto-Commit dessen Hooks als Host-Nutzer aus.
+ */
+describe('autoCommit — Härtung gegen gast-geschriebene git-Metadaten (F1)', () => {
+  /** Legt einen vom „Gast" kontrollierten gitDir mit pre-commit-Hook an. */
+  async function plantEvilGitDir(home: string, marker: string): Promise<string> {
+    const evil = join(home, 'evil-gitdir');
+    await mkdir(join(evil, 'hooks'), { recursive: true });
+    const hook = join(evil, 'hooks', 'pre-commit');
+    await writeFile(hook, `#!/bin/sh\necho pwned > ${JSON.stringify(marker)}\n`);
+    await chmod(hook, 0o755);
+    return evil;
+  }
+
+  test('eine untergeschobene .git-DATEI im Workspace lenkt den Host nicht um', async () => {
+    const { home, workspace, repo } = await setupWorkspace();
+    const marker = join(home, 'PWNED');
+    const evil = await plantEvilGitDir(home, marker);
+    // Der Agent überschreibt .git im Arbeitsbaum und zeigt auf seinen gitDir.
+    await writeFile(join(workspace, '.git'), `gitdir: ${evil}\n`);
+    await writeFile(join(workspace, 'neu.txt'), 'Agentenarbeit');
+
+    await autoCommit(repo, 'Agent: Änderung');
+
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  test('ein Hook im echten gitDir wird ebenfalls nicht ausgeführt', async () => {
+    const { home, workspace, repo } = await setupWorkspace();
+    const marker = join(home, 'PWNED-eigen');
+    await mkdir(join(repo.gitDir, 'hooks'), { recursive: true });
+    const hook = join(repo.gitDir, 'hooks', 'pre-commit');
+    await writeFile(hook, `#!/bin/sh\necho pwned > ${JSON.stringify(marker)}\n`);
+    await chmod(hook, 0o755);
+    await writeFile(join(workspace, 'neu.txt'), 'Agentenarbeit');
+
+    await autoCommit(repo, 'Agent: Änderung');
+
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  test('verweigert ein gitDir innerhalb des Arbeitsbaums', async () => {
+    const { workspace } = await setupWorkspace();
+
+    // Genau die Konfiguration, die F1 ermöglicht: der Gast kontrolliert alles
+    // unterhalb des Arbeitsbaums, also auch die git-Metadaten.
+    await expect(
+      autoCommit({ gitDir: join(workspace, '.git'), workTree: workspace }, 'Agent: X'),
+    ).rejects.toThrow(/Arbeitsbaum/);
+  });
+
+  test('verweigert relative Pfade', async () => {
+    await expect(autoCommit({ gitDir: 'git', workTree: 'workspace' }, 'Agent: X')).rejects.toThrow(
+      /absolut/,
+    );
   });
 });
 

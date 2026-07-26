@@ -31,7 +31,7 @@ import { ChatService } from './services/chatService';
 import { ensureBareRepo } from './services/gitService';
 import { startMirrorScheduler } from './services/mirrorService';
 import { startLocalRouter } from './services/localRouterService';
-import { workspaceDirFor } from './services/workspaceService';
+import { projectRepoFor } from './services/workspaceService';
 
 const config = loadConfig();
 const db = createDb(config.dbPath);
@@ -149,10 +149,12 @@ const sandboxManager = new SandboxManager({
   isBusy: (projectId) => chatServiceRef?.isTurnActive(projectId) ?? false,
   // Offenen Stand vor jedem Stopp sichern (R9).
   onBeforeStop: async (projectId) => {
-    const workspaceDir = workspaceDirFor(config.macvibesHome, projectId);
-    if (!existsSync(join(workspaceDir, '.git'))) return;
+    // Kriterium ist das gitDir NEBEN dem Arbeitsbaum (F1) — ein `.git` im
+    // Arbeitsbaum wäre gast-geschrieben und damit kein Beleg für ein Repo.
+    const repo = projectRepoFor(config.macvibesHome, projectId);
+    if (!existsSync(join(repo.gitDir, 'HEAD'))) return;
     try {
-      await autoCommit(workspaceDir, 'Auto-Commit vor Sandbox-Stopp');
+      await autoCommit(repo, 'Auto-Commit vor Sandbox-Stopp');
     } catch (error) {
       console.error(`Auto-Commit vor Stopp von ${projectId} fehlgeschlagen:`, error);
       await chatServiceRef?.postMessage(

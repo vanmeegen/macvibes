@@ -1,5 +1,5 @@
-import { runGit } from './gitService';
-import { workspaceDirFor } from './workspaceService';
+import { runGitInRepo, type ProjectRepo } from './gitService';
+import { projectRepoFor } from './workspaceService';
 import type { ChatService } from './chatService';
 
 export type AutoCommitResult = 'committed' | 'nothing-to-commit';
@@ -19,17 +19,23 @@ export function buildCommitMessage(prompt: string): string {
  * Committet und pusht den aktuellen Workspace-Stand in den Projekt-Branch.
  * Turns ohne Dateiänderungen erzeugen keinen leeren Commit (R8).
  */
-export async function autoCommit(workspaceDir: string, message: string): Promise<AutoCommitResult> {
-  await runGit(['add', '-A'], workspaceDir);
-  const status = await runGit(['status', '--porcelain'], workspaceDir);
+export async function autoCommit(repo: ProjectRepo, message: string): Promise<AutoCommitResult> {
+  await runGitInRepo(repo, ['add', '-A']);
+  const status = await runGitInRepo(repo, ['status', '--porcelain']);
   if (status.trim().length === 0) {
     return 'nothing-to-commit';
   }
-  await runGit(
-    ['-c', 'user.name=macvibes', '-c', 'user.email=macvibes@local', 'commit', '-q', '-m', message],
-    workspaceDir,
-  );
-  await runGit(['push', '-q', 'origin', 'HEAD'], workspaceDir);
+  await runGitInRepo(repo, [
+    '-c',
+    'user.name=macvibes',
+    '-c',
+    'user.email=macvibes@local',
+    'commit',
+    '-q',
+    '-m',
+    message,
+  ]);
+  await runGitInRepo(repo, ['push', '-q', 'origin', 'HEAD']);
   return 'committed';
 }
 
@@ -46,9 +52,9 @@ export function createTurnEndAutoCommit(
   options: AutoCommitHookOptions,
 ): (projectId: string, userPrompt: string) => Promise<void> {
   return async (projectId, userPrompt) => {
-    const workspaceDir = workspaceDirFor(options.macvibesHome, projectId);
+    const repo = projectRepoFor(options.macvibesHome, projectId);
     try {
-      await autoCommit(workspaceDir, buildCommitMessage(userPrompt));
+      await autoCommit(repo, buildCommitMessage(userPrompt));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`Auto-Commit für ${projectId} fehlgeschlagen:`, error);
