@@ -237,11 +237,17 @@ export async function renameProject(
   return { ...project, name };
 }
 
-export async function deleteProject(
+/**
+ * Autorisierung fürs Löschen — getrennt ausführbar, damit der Resolver sie VOR
+ * jedem Seiteneffekt aufrufen kann (F10). Vorher stoppte das Schema die
+ * Sandbox, bevor die Ownership überhaupt geprüft war: ein Fremder konnte damit
+ * eine laufende VM samt erzwungenem Auto-Commit beenden, obwohl die Mutation
+ * anschließend abgelehnt wurde.
+ */
+export async function assertCanDeleteProject(
   db: Db,
   currentUser: UserRow,
   id: string,
-  macvibesHome: string,
 ): Promise<void> {
   const project = await getProject(db, id);
   if (!project) {
@@ -250,6 +256,15 @@ export async function deleteProject(
   if (project.ownerId !== currentUser.id && currentUser.role !== 'admin') {
     throw new DomainError('Nur der Eigentümer oder ein Admin kann ein Projekt löschen');
   }
+}
+
+export async function deleteProject(
+  db: Db,
+  currentUser: UserRow,
+  id: string,
+  macvibesHome: string,
+): Promise<void> {
+  await assertCanDeleteProject(db, currentUser, id);
   await db.delete(projects).where(eq(projects.id, id));
   // Volumes (Workspace + Agent-Config) entfernen; der Git-Branch bleibt
   // bewusst erhalten (R2) — kein Code-Verlust, nur der lokale Stand geht weg.

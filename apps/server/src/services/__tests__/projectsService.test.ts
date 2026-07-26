@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { DomainError } from '../errors';
 import { ensureBareRepo, listBranches } from '../gitService';
 import {
+  assertCanDeleteProject,
   copyProject,
   createProject,
   deleteProject,
@@ -342,5 +343,41 @@ describe('deleteProject', () => {
 
     expect(await getProject(db, project.id)).toBeNull();
     expect(existsSync(volumeDir)).toBe(false);
+  });
+});
+
+/**
+ * F10: Das Schema stoppte die Sandbox, BEVOR die Ownership geprüft war — ein
+ * Fremder konnte damit eine laufende VM beenden und einen Auto-Commit im
+ * fremden Branch erzwingen, obwohl die Mutation danach abgelehnt wurde. Die
+ * Prüfung ist deshalb einzeln aufrufbar.
+ */
+describe('assertCanDeleteProject (F10)', () => {
+  test('lehnt einen Fremden ab, bevor irgendetwas passiert', async () => {
+    const { db, config, marco } = await setup();
+    const fremder = await createUser(db, 'beggi');
+    const project = await createProject(db, config, marco, {
+      name: 'Dashboard',
+      templateDir: 'pwa',
+    });
+
+    await expect(assertCanDeleteProject(db, fremder, project.id)).rejects.toThrow(/Eigentümer/);
+  });
+
+  test('Eigentümer und Admin dürfen', async () => {
+    const { db, config, marco } = await setup();
+    const project = await createProject(db, config, marco, {
+      name: 'Dashboard',
+      templateDir: 'pwa',
+    });
+    const admin = { ...(await createUser(db, 'chefin')), role: 'admin' as const };
+
+    await expect(assertCanDeleteProject(db, marco, project.id)).resolves.toBeUndefined();
+    await expect(assertCanDeleteProject(db, admin, project.id)).resolves.toBeUndefined();
+  });
+
+  test('unbekanntes Projekt wird als solches gemeldet', async () => {
+    const { db, marco } = await setup();
+    await expect(assertCanDeleteProject(db, marco, 'gibtsnicht')).rejects.toThrow(/nicht gefunden/);
   });
 });

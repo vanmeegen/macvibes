@@ -17,6 +17,7 @@ import { AGENT_MODELS, type AgentModelInfo } from '../agent/agentModel';
 import {
   copyProject,
   createProject,
+  assertCanDeleteProject,
   deleteProject,
   getProject,
   listProjects,
@@ -314,6 +315,10 @@ builder.mutationType({
       },
       resolve: async (_root, args, ctx) => {
         const user = requireUser(ctx);
+        // ERST autorisieren, DANN erst Seiteneffekte (F10): der Stopp löst
+        // einen Auto-Commit im fremden Branch aus und wäre sonst auch für
+        // Nicht-Eigentümer auslösbar.
+        await assertCanDeleteProject(ctx.db, user, String(args.id));
         // Sandbox stoppen, bevor die Volumes entfernt werden (R2).
         await ctx.sandboxManager.stop(String(args.id));
         await deleteProject(ctx.db, user, String(args.id), ctx.config.macvibesHome);
