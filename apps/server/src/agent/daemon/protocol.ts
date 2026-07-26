@@ -143,6 +143,9 @@ export function parseDaemonToHost(raw: string): DaemonToHostMessage | null {
   return null;
 }
 
+/** Obergrenze für einzelne Event-Texte aus der VM (F16, 1 MiB). */
+const MAX_EVENT_TEXT_CHARS = 1_048_576;
+
 /**
  * Validiert ein über die Leitung gekommenes AgentEvent strukturell und baut
  * es frisch auf (keine Fremd-Felder aus dem Netz weiterreichen).
@@ -154,7 +157,9 @@ function parseAgentEvent(value: unknown): AgentEvent | null {
   switch (e['type']) {
     case 'text-delta':
     case 'thinking-delta':
-      if (typeof e['text'] !== 'string') return null;
+      // Länge begrenzen (F16): der Daemon ist nicht vertrauenswürdig, und ein
+      // einzelnes Riesen-Delta würde den Deckel im ChatService unterlaufen.
+      if (typeof e['text'] !== 'string' || e['text'].length > MAX_EVENT_TEXT_CHARS) return null;
       return { type: e['type'], text: e['text'] };
     case 'block-stop':
       return { type: 'block-stop' };

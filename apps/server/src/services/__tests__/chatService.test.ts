@@ -6,7 +6,7 @@ import type { AgentEvent } from '../../agent/events';
 import type { AgentRunner, TurnHandle, TurnOptions } from '../../agent/runner';
 import type { Db } from '../../db/client';
 import { projects, type UserRow } from '../../db/schema';
-import { ChatService, type ChatEventPayload } from '../chatService';
+import { ChatService, MAX_MESSAGE_CHARS, type ChatEventPayload } from '../chatService';
 import { createTestDb, createUser } from './testUtils';
 
 async function waitFor(
@@ -941,5 +941,41 @@ describe('Hooks & Session (R8/R9)', () => {
 
     const row = (await db.select().from(projects).where(eq(projects.id, projectId)))[0];
     expect(row?.claudeSessionId).toBe('fake-session');
+  });
+});
+
+/**
+ * F16: Ein kompromittierter Daemon konnte eine Chat-Zeile unbegrenzt wachsen
+ * lassen — jedes Delta schreibt die KOMPLETTE Zeile per UPDATE und broadcastet
+ * sie an alle Abonnenten.
+ */
+describe('Delta-Deckel gegen unbegrenztes Wachstum (F16)', () => {
+  test('bricht in neue Zeilen um, ohne Inhalt zu verlieren', async () => {
+    const chunk = 'x'.repeat(10_000);
+    const anzahl = 30;
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        return {
+          abort: () => {},
+          events: (async function* () {
+            for (let i = 0; i < anzahl; i += 1) {
+              yield { type: 'text-delta', text: chunk } as AgentEvent;
+            }
+            yield { type: 'turn-completed', sessionId: null } as AgentEvent;
+          })(),
+        };
+      },
+    };
+    const { service, projectId } = await setup(runner);
+
+    await service.sendMessage(sendInput(projectId, 'los'));
+    await waitFor(async () => !service.isTurnActive(projectId));
+
+    const zeilen = (await service.listMessages(projectId)).filter((m) => m.role === 'assistant');
+    expect(zeilen.length).toBeGreaterThan(1);
+    for (const zeile of zeilen) {
+      expect(zeile.content.length).toBeLessThanOrEqual(MAX_MESSAGE_CHARS);
+    }
+    expect(zeilen.map((z) => z.content).join('').length).toBe(anzahl * chunk.length);
   });
 });

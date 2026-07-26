@@ -5,6 +5,13 @@ import type { AgentRunner, TurnHandle } from '../agent/runner';
 import type { Db } from '../db/client';
 import { chatMessages, projects, type ChatMessageRow } from '../db/schema';
 
+/**
+ * Obergrenze pro Chat-Zeile (F16). Jedes Delta schreibt die komplette Zeile
+ * per UPDATE und broadcastet sie an alle Abonnenten — ohne Deckel wächst das
+ * unbegrenzt, im Missbrauchsfall bis zur Sättigung von Speicher und Platte.
+ */
+export const MAX_MESSAGE_CHARS = 200_000;
+
 export interface ChatEventPayload {
   message: ChatMessageRow;
   /** Läuft für dieses Projekt gerade (oder gleich, Queue) ein Agent-Turn? */
@@ -213,7 +220,11 @@ export class ChatService {
         state.abortRequested = true;
       }
     }
-    void this.pump(input.projectId);
+    // Kein floating void (F18): ohne Rejection-Handler beendet ein Fehler in
+    // der Pump den ganzen Serverprozess.
+    this.pump(input.projectId).catch((error: unknown) => {
+      console.error(`Chat-Pump für ${input.projectId} abgebrochen:`, error);
+    });
   }
 
   /** Systemseitige Nachricht in Historie + Stream (z. B. Auto-Commit-Fehler, R8). */
@@ -480,6 +491,13 @@ export class ChatService {
       if (current === null) {
         return insert(role, text);
       }
+      // Deckel gegen unbegrenztes Wachstum (F16): ein kompromittierter Daemon
+      // könnte sonst Speicher, Platte und alle SSE-Abonnenten sättigen. Die
+      // Zeile wird abgeschlossen und eine neue begonnen — der Stream bricht
+      // nicht ab, der Inhalt bleibt vollständig.
+      if (current.content.length + text.length > MAX_MESSAGE_CHARS) {
+        return insert(role, text);
+      }
       const updated: ChatMessageRow = { ...current, content: current.content + text };
       await this.db
         .update(chatMessages)
@@ -615,7 +633,17 @@ export class ChatService {
       }
     } catch (error) {
       // Runner-Fehler nie verschlucken — als error-Zeile in die Historie.
-      await insert('error', error instanceof Error ? error.message : String(error));
+      // Der Insert selbst darf aber NICHT werfen (F18): wurde das Projekt
+      // während des Turns gelöscht, scheitert er am Fremdschlüssel, und die
+      // Exception entkäme über die floating pump() als Unhandled Rejection.
+      try {
+        await insert('error', error instanceof Error ? error.message : String(error));
+      } catch (insertError) {
+        console.error(
+          `Fehlermeldung für ${projectId} konnte nicht gespeichert werden (Projekt gelöscht?):`,
+          insertError,
+        );
+      }
     } finally {
       state.currentHandle = null;
     }

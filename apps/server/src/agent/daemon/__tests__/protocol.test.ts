@@ -128,3 +128,21 @@ describe('parseDaemonToHost', () => {
     ).toBeNull();
   });
 });
+
+/**
+ * F16: Der Daemon ist nicht vertrauenswürdig. Ein einzelnes Riesen-Delta
+ * würde den Zeilen-Deckel des ChatService unterlaufen.
+ */
+describe('parseDaemonToHost — Längengrenze für Event-Texte (F16)', () => {
+  function eventMessage(text: string): string {
+    return JSON.stringify({ kind: 'event', turnId: 't1', event: { type: 'text-delta', text } });
+  }
+
+  test('normale Deltas kommen durch', () => {
+    expect(parseDaemonToHost(eventMessage('Hallo'))).not.toBeNull();
+  });
+
+  test('ein Delta über 1 MiB wird verworfen', () => {
+    expect(parseDaemonToHost(eventMessage('x'.repeat(1_048_577)))).toBeNull();
+  });
+});
