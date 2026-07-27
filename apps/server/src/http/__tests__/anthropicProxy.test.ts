@@ -37,7 +37,7 @@ afterAll(() => {
 function makeProxy(overrides: Partial<AnthropicProxyConfig> = {}) {
   return createAnthropicProxy({
     upstreamUrl: `http://localhost:${upstream.port}`,
-    proxyToken: 'geheim-123',
+    verifyToken: (t) => (t === 'geheim-123' ? { sandbox: 'test' } : null),
     oauthToken: 'test-oauth-token',
     apiKey: null,
     ...overrides,

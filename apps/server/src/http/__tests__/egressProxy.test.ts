@@ -22,7 +22,7 @@ beforeAll(() => {
   // selbst prüfen die Tests weiter unten gegen den ungefilterten Proxy.
   proxy = startEgressProxy({
     port: 0,
-    token: TOKEN,
+    verifyToken: (t) => (t === TOKEN ? { sandbox: 'test' } : null),
     checkTarget: async (host) => ({ ok: true, address: host }),
   });
 });
@@ -97,7 +97,10 @@ describe('EgressProxy — Zielpolicy (F3)', () => {
   let guarded: EgressProxyHandle;
 
   beforeAll(() => {
-    guarded = startEgressProxy({ port: 0, token: TOKEN });
+    guarded = startEgressProxy({
+      port: 0,
+      verifyToken: (t) => (t === TOKEN ? { sandbox: 'test' } : null),
+    });
   });
   afterAll(() => guarded.stop());
 

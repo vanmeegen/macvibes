@@ -1,4 +1,5 @@
 import type { Server, ServerWebSocket, WebSocketHandler } from 'bun';
+import type { VmTokenRegistry } from '../sandbox/vmTokens';
 import { AGENT_GATEWAY_PATH, parseDaemonToHost } from './daemon/protocol';
 import type { DaemonToHostMessage, HostToDaemonMessage } from './daemon/protocol';
 
@@ -18,30 +19,40 @@ export interface GatewaySocketData {
  * Host-seitiges WS-Gateway für die Agent-Daemons in den VMs. Jeder Daemon
  * wählt sich AUSGEHEND ein (`/agent?sandbox=<name>&token=<secret>` über
  * host.microsandbox.internal) — kein Port-Forwarding in die VM nötig.
- * Auth über dasselbe Shared Secret wie der Credential-Proxy.
+ *
+ * Auth über ein Token PRO SANDBOX (F4/F12): die Identität wird aus dem Token
+ * abgeleitet, der sandbox-Query-Parameter dient nur noch als Konsistenzprüfung.
+ * Vorher genügte das prozessweite Shared Secret, das jede VM besitzt, und der
+ * frei wählbare Parameter — eine VM konnte sich damit als fremdes Projekt
+ * anmelden, dessen Prompts empfangen und Events in fremde Chats schreiben.
  */
 export class AgentGateway {
-  private readonly token: string;
+  private readonly tokens: VmTokenRegistry;
   private readonly connections = new Map<string, ServerWebSocket<GatewaySocketData>>();
   private readonly listeners = new Map<string, Set<GatewayListener>>();
   private readonly connectWaiters = new Map<string, Set<() => void>>();
 
-  constructor(options: { token: string }) {
-    this.token = options.token;
+  constructor(options: { tokens: VmTokenRegistry }) {
+    this.tokens = options.tokens;
   }
 
   /** Upgrade-Handler für index.ts — undefined, wenn der Socket übernommen wurde. */
   handleUpgrade(request: Request, server: Server<GatewaySocketData>): Response | undefined {
     const url = new URL(request.url);
-    const sandbox = url.searchParams.get('sandbox');
-    const token = url.searchParams.get('token');
-    if (token !== this.token) {
+    const claimed = url.searchParams.get('sandbox');
+    const identity = this.tokens.lookup(url.searchParams.get('token'));
+    if (identity === null) {
       return new Response('Ungültiges Gateway-Token', { status: 401 });
     }
-    if (sandbox === null || sandbox.length === 0) {
-      return new Response('sandbox-Parameter fehlt', { status: 400 });
+    // Der Parameter darf der Identität nicht widersprechen — sonst wäre er
+    // ein stiller Hinweis darauf, dass jemand etwas anderes versucht.
+    if (claimed !== null && claimed !== identity.sandbox) {
+      console.warn(
+        `AgentGateway: Token von ${identity.sandbox} beansprucht Sandbox ${claimed} — abgelehnt.`,
+      );
+      return new Response('Sandbox stimmt nicht zum Token', { status: 401 });
     }
-    const data: GatewaySocketData = { sandbox };
+    const data: GatewaySocketData = { sandbox: identity.sandbox };
     if (server.upgrade(request, { data })) {
       return undefined;
     }

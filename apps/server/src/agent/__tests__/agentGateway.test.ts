@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import type { Server } from 'bun';
+import { createVmTokenRegistry } from '../../sandbox/vmTokens';
 import { AGENT_GATEWAY_PATH, AgentGateway } from '../agentGateway';
 import type { GatewayNotification, GatewaySocketData } from '../agentGateway';
 
-const TOKEN = 'geheim-123';
+// Ein Token PRO Sandbox (F4/F12) — die Registry ist jetzt die Auth-Quelle.
+const tokens = createVmTokenRegistry();
+const TOKEN = tokens.mint('sb-1');
+const TOKEN_SB2 = tokens.mint('sb-2');
 
 interface Harness {
   gateway: AgentGateway;
@@ -15,7 +19,7 @@ const servers: Server<GatewaySocketData>[] = [];
 const sockets: WebSocket[] = [];
 
 function makeHarness(): Harness {
-  const gateway = new AgentGateway({ token: TOKEN });
+  const gateway = new AgentGateway({ tokens });
   const server = Bun.serve({
     port: 0,
     fetch: (request, srv) => {
@@ -84,7 +88,9 @@ describe('AgentGateway', () => {
   test('fehlender sandbox-Parameter wird abgewiesen', async () => {
     const h = makeHarness();
     await expect(
-      openSocket(`ws://localhost:${h.server.port}${AGENT_GATEWAY_PATH}?token=${TOKEN}`),
+      openSocket(
+        `ws://localhost:${h.server.port}${AGENT_GATEWAY_PATH}?token=${TOKEN}&sandbox=sb-2`,
+      ),
     ).rejects.toThrow();
   });
 
@@ -199,5 +205,30 @@ describe('AgentGateway', () => {
     ws.send(JSON.stringify({ kind: 'ready' }));
     await Bun.sleep(50);
     expect(received).toEqual([]);
+  });
+});
+
+/**
+ * F4: Vorher prüfte das Gateway nur das prozessweite Shared Secret — das jede
+ * VM besitzt — und übernahm den frei wählbaren sandbox-Parameter als
+ * Identität. Eine VM konnte sich damit als fremdes Projekt anmelden, dessen
+ * Prompts empfangen und gefälschte Events in fremde Chats schreiben.
+ */
+describe('Sandbox-Identität kommt aus dem Token (F4)', () => {
+  test('fremde Sandbox mit eigenem Token wird abgewiesen', async () => {
+    const h = makeHarness();
+    await expect(openSocket(h.url('sb-2', TOKEN))).rejects.toThrow();
+  });
+
+  test('das eigene Token für die eigene Sandbox geht', async () => {
+    const h = makeHarness();
+    await expect(openSocket(h.url('sb-2', TOKEN_SB2))).resolves.toBeDefined();
+  });
+
+  test('ein widerrufenes Token wird abgewiesen', async () => {
+    const eigene = createVmTokenRegistry();
+    const token = eigene.mint('sb-x');
+    eigene.revoke('sb-x');
+    expect(eigene.lookup(token)).toBeNull();
   });
 });

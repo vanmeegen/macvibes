@@ -22,8 +22,8 @@ export type TargetChecker = (host: string, port: number) => Promise<TargetDecisi
 
 export interface EgressProxyOptions {
   port: number;
-  /** Shared Secret (Basic-Auth-Passwort in der Proxy-URL der VM). */
-  token: string;
+  /** Prüft das Basic-Auth-Passwort (VM-Token, F12); null = ungültig. */
+  verifyToken: (token: string | null) => { sandbox: string } | null;
   hostname?: string;
   /**
    * Zielprüfung — Default ist die echte Policy (DNS auf dem Host + Sperrliste).
@@ -97,7 +97,17 @@ interface ConnState {
 }
 
 export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle {
-  const expectedAuth = `Basic ${Buffer.from(`mv:${options.token}`).toString('base64')}`;
+  /** Zerlegt "Basic base64(mv:<token>)" und gibt das Token zurück. */
+  const tokenFromAuth = (header: string): string | null => {
+    if (!header.toLowerCase().startsWith('basic ')) return null;
+    try {
+      const decoded = Buffer.from(header.slice(6).trim(), 'base64').toString();
+      const sep = decoded.indexOf(':');
+      return sep === -1 ? null : decoded.slice(sep + 1);
+    } catch {
+      return null;
+    }
+  };
   const checkTargetFn = options.checkTarget ?? createTargetChecker();
 
   const refuse = (client: Socket<ConnState>, reason: string): void => {
@@ -192,7 +202,7 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
             .find((l) => l.toLowerCase().startsWith('proxy-authorization:'))
             ?.slice('proxy-authorization:'.length)
             .trim() ?? '';
-        if (auth !== expectedAuth) {
+        if (options.verifyToken(tokenFromAuth(auth)) === null) {
           socket.write(
             'HTTP/1.1 407 Proxy Authentication Required\r\n' +
               'Proxy-Authenticate: Basic realm="macvibes"\r\nConnection: close\r\n\r\n',

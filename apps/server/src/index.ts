@@ -23,6 +23,7 @@ import {
 import { ProcessSandboxProvider } from './sandbox/processProvider';
 import { selectBackends, type BackendSelection } from './sandbox/backendSelection';
 import { SandboxManager } from './sandbox/sandboxManager';
+import { createVmTokenRegistry } from './sandbox/vmTokens';
 import { autoCommit, createTurnEndAutoCommit } from './services/autoCommitService';
 import { ensureAdmin, resolveSession } from './services/authService';
 import { ChatService } from './services/chatService';
@@ -38,16 +39,20 @@ runMigrations(db);
 await ensureAdmin(db, config);
 await ensureBareRepo(config.bareRepoPath);
 
-// Shared Secret VM → Credential-Proxy, pro Serverstart neu (B5c).
-// Zufällig pro Start; für kontrollierte Diagnose per Env überschreibbar.
-const proxyToken = Bun.env.MACVIBES_PROXY_TOKEN ?? crypto.randomUUID();
+// Ein Token PRO SANDBOX statt eines Shared Secrets (F4/F12): Credential-Proxy,
+// Egress-Proxy und Agent-Gateway prüfen alle gegen dieselbe Registry, aber
+// jedes Token gehört genau einer VM und wird beim Stoppen entwertet.
+const vmTokens = createVmTokenRegistry();
 // Egress-Proxy: einziger Weg der VMs ins Internet (msb-Regeln blocken Public).
 const egressPort = Bun.env.MACVIBES_EGRESS_PORT ? Number(Bun.env.MACVIBES_EGRESS_PORT) : 4010;
-const egressProxy = startEgressProxy({ port: egressPort, token: proxyToken });
+const egressProxy = startEgressProxy({
+  port: egressPort,
+  verifyToken: (token) => vmTokens.lookup(token),
+});
 console.log(`Egress-Proxy für VMs auf Port ${egressProxy.port}`);
 const anthropicProxy = createAnthropicProxy({
   upstreamUrl: config.anthropic.upstreamUrl,
-  proxyToken,
+  verifyToken: (token) => vmTokens.lookup(token),
   oauthToken: config.anthropic.oauthToken,
   apiKey: config.anthropic.apiKey,
   keepAliveMs: Bun.env.MACVIBES_PROXY_KEEPALIVE_MS
@@ -123,7 +128,7 @@ const useMicrosandbox = backends.sandbox === 'microsandbox';
 // Agent-Transport in die VM: persistenter SDK-Daemon (architektur.md, A+C).
 // Gateway für die eingehenden Daemon-Verbindungen + gebündelter Daemon,
 // den der Provider read-only in jede VM mountet.
-const agentGateway = new AgentGateway({ token: proxyToken });
+const agentGateway = new AgentGateway({ tokens: vmTokens });
 const daemonBundleDir = join(config.macvibesHome, 'agent-daemon');
 if (useMicrosandbox) {
   await buildDaemonBundle(daemonBundleDir);
@@ -138,13 +143,18 @@ const sandboxProvider = useMicrosandbox
       memoryMib: config.sandbox.memoryMib,
       agentDaemon: {
         bundleDir: daemonBundleDir,
-        envFor: (sandboxName: string) => ({
-          ...buildVmAgentEnv({ serverPort: config.port, proxyToken, egressPort }),
-          MACVIBES_AGENT_GATEWAY_URL:
-            `ws://host.microsandbox.internal:${config.port}${AGENT_GATEWAY_PATH}` +
-            `?sandbox=${encodeURIComponent(sandboxName)}&token=${encodeURIComponent(proxyToken)}`,
-          MACVIBES_AGENT_CWD: '/work',
-        }),
+        envFor: (sandboxName: string) => {
+          // Frisches Token pro VM-Start; ein älteres derselben Sandbox
+          // verfällt dabei automatisch (F12).
+          const vmToken = vmTokens.mint(sandboxName);
+          return {
+            ...buildVmAgentEnv({ serverPort: config.port, proxyToken: vmToken, egressPort }),
+            MACVIBES_AGENT_GATEWAY_URL:
+              `ws://host.microsandbox.internal:${config.port}${AGENT_GATEWAY_PATH}` +
+              `?sandbox=${encodeURIComponent(sandboxName)}&token=${encodeURIComponent(vmToken)}`,
+            MACVIBES_AGENT_CWD: '/work',
+          };
+        },
       },
       // Preview-Status kommt als Push über die Daemon-Verbindung (ADR 0001).
       subscribePreviewStatus: (sandbox, listener) =>

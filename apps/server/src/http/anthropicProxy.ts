@@ -56,7 +56,8 @@ export function injectThinkingDisplay(bodyText: string): string {
 export interface AnthropicProxyConfig {
   upstreamUrl: string;
   /** Shared Secret VM → Proxy (pro Serverstart zufällig). */
-  proxyToken: string;
+  /** Prüft das VM-Token und liefert die Identität (F12); null = ungültig. */
+  verifyToken: (token: string | null) => { sandbox: string } | null;
   /** Abo-Token (claude setup-token) — bevorzugt. */
   oauthToken: string | null;
   /** Alternativ: klassischer API-Key. */
@@ -193,7 +194,7 @@ export function createAnthropicProxy(config: AnthropicProxyConfig): AnthropicPro
   };
 
   return async (request, upstreamPath) => {
-    if (request.headers.get(PROXY_TOKEN_HEADER) !== config.proxyToken) {
+    if (config.verifyToken(request.headers.get(PROXY_TOKEN_HEADER)) === null) {
       return new Response('Ungültiger Proxy-Token', { status: 401 });
     }
 

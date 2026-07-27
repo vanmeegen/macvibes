@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { Server } from 'bun';
 import { join } from 'node:path';
+import { createVmTokenRegistry } from '../vmTokens';
 import { AGENT_GATEWAY_PATH, AgentGateway } from '../../agent/agentGateway';
 import type { GatewaySocketData } from '../../agent/agentGateway';
 import { buildDaemonBundle } from '../../agent/daemonBundle';
@@ -41,12 +42,12 @@ const hasCredentials = oauthToken !== null || apiKey !== null;
 
 const PROJECT_ID = 'daemon-spike';
 const SANDBOX_NAME = `macvibes-${PROJECT_ID}`;
-const TOKEN = crypto.randomUUID();
 
 const tempDirs: string[] = [];
 let templateDir = '';
 let server: Server<GatewaySocketData> | null = null;
 let egress: EgressProxyHandle | null = null;
+let tokens: ReturnType<typeof createVmTokenRegistry>;
 let gateway: AgentGateway;
 let handle: SandboxHandle | null = null;
 let runner: DaemonAgentRunner;
@@ -83,10 +84,12 @@ beforeAll(async () => {
 
   // Host-Seite: Gateway + Credential-Proxy auf EINEM Server (wie index.ts),
   // dazu der Egress-Proxy — ohne ihn hängt claudes Startup (chatproblems #9).
-  gateway = new AgentGateway({ token: TOKEN });
+  // Ein Token pro Sandbox (F4/F12) — die Registry ersetzt das Shared Secret.
+  tokens = createVmTokenRegistry();
+  gateway = new AgentGateway({ tokens });
   const anthropicProxy = createAnthropicProxy({
     upstreamUrl: Bun.env.ANTHROPIC_UPSTREAM_URL ?? 'https://api.anthropic.com',
-    proxyToken: TOKEN,
+    verifyToken: (t) => tokens.lookup(t),
     oauthToken,
     apiKey,
   });
@@ -107,7 +110,7 @@ beforeAll(async () => {
       return new Response('nicht hier', { status: 404 });
     },
   });
-  egress = startEgressProxy({ port: 0, token: TOKEN });
+  egress = startEgressProxy({ port: 0, verifyToken: (t) => tokens.lookup(t) });
 
   // Projekt + Baseline (MIT Daemon-Zubehör: SDK, tini, monit).
   const home = await createTempDir('macvibes-home-');
@@ -134,13 +137,16 @@ beforeAll(async () => {
     memoryMib: 1024,
     agentDaemon: {
       bundleDir,
-      envFor: (sandboxName) => ({
-        ...buildVmAgentEnv({ serverPort, proxyToken: TOKEN, egressPort }),
-        MACVIBES_AGENT_GATEWAY_URL:
-          `ws://host.microsandbox.internal:${serverPort}${AGENT_GATEWAY_PATH}` +
-          `?sandbox=${encodeURIComponent(sandboxName)}&token=${encodeURIComponent(TOKEN)}`,
-        MACVIBES_AGENT_CWD: '/work',
-      }),
+      envFor: (sandboxName) => {
+        const vmToken = tokens.mint(sandboxName);
+        return {
+          ...buildVmAgentEnv({ serverPort, proxyToken: vmToken, egressPort }),
+          MACVIBES_AGENT_GATEWAY_URL:
+            `ws://host.microsandbox.internal:${serverPort}${AGENT_GATEWAY_PATH}` +
+            `?sandbox=${encodeURIComponent(sandboxName)}&token=${encodeURIComponent(vmToken)}`,
+          MACVIBES_AGENT_CWD: '/work',
+        };
+      },
     },
     // Echtes Gateway: deckt den preview-status-Push-Pfad (ADR 0001) live ab.
     subscribePreviewStatus: (sandbox, listener) =>
