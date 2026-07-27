@@ -56,6 +56,10 @@ export default defineConfig({
         // E2E registriert und meldet sich dutzendfach an — das Limit auf
         // login/register (F14) würde die Suite ausbremsen.
         MACVIBES_RATE_LIMIT_DISABLED: '1',
+        // Der Server lädt apps/server/.env mit — ohne dieses Leeren erbte der
+        // E2E-Lauf den echten Bootstrap-Admin-Namen, und der Erst-Nutzer der
+        // Testinstanz würde nicht mehr Admin (F8).
+        MACVIBES_ADMIN_USERNAME: '',
       },
     },
     {

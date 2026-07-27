@@ -139,19 +139,44 @@ describe('Admin-Freischaltung', () => {
 });
 
 describe('ensureAdmin (Bootstrap)', () => {
-  test('befördert den konfigurierten User zu Admin + approved (idempotent)', async () => {
+  /**
+   * F21: ensureAdmin beförderte bei JEDEM Start, wer gerade den konfigurierten
+   * Namen trug — ohne zu prüfen, wer die Zeile wann angelegt hat. Da register
+   * unauthentifiziert ist und den Namen nicht reserviert (und .env.example ihn
+   * verrät), konnte ein Fremder ihn vorbelegen und wurde beim nächsten
+   * Neustart Admin.
+   */
+  test('befördert NICHT, wenn bereits ein Admin existiert (F21)', async () => {
     const db = createTestDb();
-    await register(db, CONFIG, registerInput('marco'));
-    // gast als zweiter, pending
+    await register(db, CONFIG, registerInput('marco')); // wird Erst-Admin
     const { user } = await register(db, CONFIG, registerInput('gast'));
     expect(user.role).toBe('user');
 
     await ensureAdmin(db, { ...CONFIG, adminUsername: 'gast' });
+
+    const rows = await db.select().from(users).where(eq(users.id, user.id));
+    expect(rows[0]?.role).toBe('user');
+    expect(rows[0]?.approved).toBe(false);
+  });
+
+  test('echter Bootstrap: befördert, solange es keinen Admin gibt', async () => {
+    const db = createTestDb();
+    // Registrierung mit gesetztem Bootstrap-Namen: ein anderer Name wird
+    // NICHT automatisch Admin (F8).
+    const { user } = await register(
+      db,
+      { ...CONFIG, adminUsername: 'chefin' },
+      registerInput('gast'),
+    );
+    expect(user.role).toBe('user');
+
+    await ensureAdmin(db, { ...CONFIG, adminUsername: 'gast' });
+
     const rows = await db.select().from(users).where(eq(users.id, user.id));
     expect(rows[0]?.role).toBe('admin');
     expect(rows[0]?.approved).toBe(true);
 
-    // Zweiter Aufruf ändert nichts (kein Fehler).
+    // Idempotent: zweiter Aufruf ändert nichts und wirft nicht.
     await ensureAdmin(db, { ...CONFIG, adminUsername: 'gast' });
     const again = await db.select().from(users).where(eq(users.id, user.id));
     expect(again[0]?.role).toBe('admin');
@@ -217,5 +242,45 @@ describe('logout', () => {
     const token = session!.token;
     await logout(db, token);
     expect(await resolveSession(db, CONFIG, token)).toBeNull();
+  });
+});
+
+/**
+ * F8: Der erste Registrant wurde Admin — bei frischem Deployment, DB-Reset
+ * oder neuem DB_PATH konnte das ein Fremder sein. Ist ein Bootstrap-Name
+ * konfiguriert, bekommt nur er die Rolle.
+ */
+describe('Erst-Admin-Vergabe (F8)', () => {
+  test('ohne Bootstrap-Namen wird der erste Nutzer Admin (Bequemlichkeit)', async () => {
+    const db = createTestDb();
+    const { user } = await register(db, CONFIG, registerInput('marco'));
+    expect(user.role).toBe('admin');
+    expect(user.approved).toBe(true);
+  });
+
+  test('mit Bootstrap-Namen wird ein FREMDER Erstregistrant kein Admin', async () => {
+    const db = createTestDb();
+    const config = { ...CONFIG, adminUsername: 'marco' };
+    const { user } = await register(db, config, registerInput('fremder'));
+    expect(user.role).toBe('user');
+    expect(user.approved).toBe(false);
+  });
+
+  test('mit Bootstrap-Namen wird genau dieser Nutzer Admin', async () => {
+    const db = createTestDb();
+    const config = { ...CONFIG, adminUsername: 'marco' };
+    const { user } = await register(db, config, registerInput('marco'));
+    expect(user.role).toBe('admin');
+  });
+
+  test('es entsteht nie ein zweiter Admin, auch bei paralleler Registrierung', async () => {
+    const db = createTestDb();
+    await Promise.all([
+      register(db, CONFIG, registerInput('eins')),
+      register(db, CONFIG, registerInput('zwei')),
+      register(db, CONFIG, registerInput('drei')),
+    ]);
+    const admins = await db.select().from(users).where(eq(users.role, 'admin'));
+    expect(admins.length).toBe(1);
   });
 });

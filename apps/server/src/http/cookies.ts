@@ -32,6 +32,26 @@ export async function readSessionToken(request: Request): Promise<string | null>
   return cookie?.value ?? null;
 }
 
+/**
+ * Läuft dieser Request über HTTPS? (F23)
+ *
+ * `secure` war hartkodiert false, während das dokumentierte Deployment TLS in
+ * Caddy terminiert — das Cookie war also auch im HTTPS-Betrieb ungeschützt,
+ * und weil Cookies nicht portgebunden sind, greift ein Angreifer im LAN es
+ * über den weiterhin offenen Klartextport ab. Fest auf true wäre aber
+ * genauso falsch: im reinen LAN-http käme das Cookie nie an (Login-Schleife
+ * ohne Fehlermeldung). Deshalb pro Request abgeleitet.
+ */
+export function isSecureRequest(request: Request): boolean {
+  const forwarded = request.headers.get('x-forwarded-proto');
+  if (forwarded !== null) return forwarded.split(',')[0]?.trim() === 'https';
+  try {
+    return new URL(request.url).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 export async function writeSessionCookie(
   request: Request,
   token: string,
@@ -45,8 +65,7 @@ export async function writeSessionCookie(
     domain: null,
     httpOnly: true,
     sameSite: 'lax',
-    // Kein HTTPS in v1 (lokales Netz) — secure-Cookies würden nie ankommen.
-    secure: false,
+    secure: isSecureRequest(request),
   });
 }
 
@@ -59,6 +78,6 @@ export async function clearSessionCookie(request: Request): Promise<void> {
     domain: null,
     httpOnly: true,
     sameSite: 'lax',
-    secure: false,
+    secure: isSecureRequest(request),
   });
 }

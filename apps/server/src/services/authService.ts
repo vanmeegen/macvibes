@@ -71,21 +71,35 @@ export async function register(
     throw new DomainError('Benutzername ist bereits vergeben');
   }
 
-  // Erster Nutzer der Instanz → Admin + freigeschaltet.
-  const anyUser = await db.select({ id: users.id }).from(users).limit(1);
-  const isFirst = anyUser.length === 0;
-
+  // F8: Admin NICHT mehr aus der Registrierungsreihenfolge ableiten.
+  // Bisher wurde der erste Registrant Admin — bei frischem Deployment,
+  // DB-Reset oder neuem DB_PATH konnte das ein Fremder sein, und weil
+  // Emptiness-Check und Insert durch das await auf argon2 getrennt sind,
+  // ergaben zwei parallele Registrierungen sogar zwei Admins.
+  // Der Erst-Admin wird jetzt nur, wer den konfigurierten Bootstrap-Namen
+  // trägt (MACVIBES_ADMIN_USERNAME); ohne Konfiguration bleibt der erste
+  // Nutzer aus Bequemlichkeit Admin, aber nur wenn wirklich noch keiner da
+  // ist — geprüft in derselben Transaktion wie der Insert.
   const passwordHash = await Bun.password.hash(passwordResult.data);
-  const inserted = await db
-    .insert(users)
-    .values({
-      id: crypto.randomUUID(),
-      username: usernameResult.data,
-      passwordHash,
-      role: isFirst ? 'admin' : 'user',
-      approved: isFirst,
-    })
-    .returning();
+  const bootstrapName = config.adminUsername ?? null;
+  // bun:sqlite ist synchron — Prüfung und Insert laufen ohne await dazwischen,
+  // also atomar gegenüber parallelen Registrierungen.
+  const inserted = db.transaction((tx) => {
+    const admins = tx.select({ id: users.id }).from(users).where(eq(users.role, 'admin')).all();
+    const istErsterAdmin =
+      admins.length === 0 && (bootstrapName === null || usernameResult.data === bootstrapName);
+    return tx
+      .insert(users)
+      .values({
+        id: crypto.randomUUID(),
+        username: usernameResult.data,
+        passwordHash,
+        role: istErsterAdmin ? 'admin' : 'user',
+        approved: istErsterAdmin,
+      })
+      .returning()
+      .all();
+  });
   const user = inserted[0];
   if (!user) {
     throw new Error('User-Insert lieferte keine Zeile zurück');
@@ -176,6 +190,21 @@ export async function ensureAdmin(db: Db, config: AuthConfig): Promise<void> {
   const user = found[0];
   if (!user) return;
   if (user.role === 'admin' && user.approved) return;
+
+  // F21: Beförderung nur als echter Bootstrap — solange KEIN Admin existiert.
+  // Vorher wurde bei jedem Start befördert, wer gerade den konfigurierten
+  // Namen trug; da register den Namen nicht reserviert und .env.example ihn
+  // verrät, konnte ein Fremder ihn vorbelegen und wurde beim nächsten
+  // Neustart Admin.
+  const admins = await db.select({ id: users.id }).from(users).where(eq(users.role, 'admin'));
+  const erzwungen = Bun.env.MACVIBES_FORCE_ADMIN === '1' || Bun.env.MACVIBES_FORCE_ADMIN === 'true';
+  if (admins.length > 0 && !erzwungen) {
+    console.warn(
+      `Bootstrap-Admin "${username}" wird NICHT befördert — es gibt bereits einen Admin. ` +
+        'Zum Erzwingen MACVIBES_FORCE_ADMIN=1 setzen.',
+    );
+    return;
+  }
   await db.update(users).set({ role: 'admin', approved: true }).where(eq(users.id, user.id));
 }
 
@@ -201,7 +230,15 @@ export async function resolveSession(
   await db.update(sessions).set({ expiresAt: newExpiry }).where(eq(sessions.id, token));
 
   const userFound = await db.select().from(users).where(eq(users.id, session.userId)).limit(1);
-  return userFound[0] ?? null;
+  const user = userFound[0];
+  if (!user) return null;
+  // Ein zurückgezogenes Approval muss bestehende Sessions kappen — sonst
+  // arbeitet ein abgelehnter Nutzer bis zum TTL-Ende weiter.
+  if (!user.approved) {
+    await db.delete(sessions).where(eq(sessions.id, token));
+    return null;
+  }
+  return user;
 }
 
 export async function logout(db: Db, token: string): Promise<void> {
