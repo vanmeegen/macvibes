@@ -53,6 +53,9 @@ export default defineConfig({
         // Web-Port — der Server muss ihn kennen, sonst weist der CSRF-Schutz
         // jeden Request ab (F6).
         MACVIBES_WEB_PORT: String(E2E_WEB_PORT),
+        // E2E registriert und meldet sich dutzendfach an — das Limit auf
+        // login/register (F14) würde die Suite ausbremsen.
+        MACVIBES_RATE_LIMIT_DISABLED: '1',
       },
     },
     {

@@ -13,6 +13,7 @@ import {
   rejectUser,
 } from '../services/authService';
 import { DomainError } from '../services/errors';
+import { createRateLimiter, rateLimitDisabled, type RateLimiter } from '../services/rateLimiter';
 import { AGENT_MODELS, type AgentModelInfo } from '../agent/agentModel';
 import {
   copyProject,
@@ -99,6 +100,23 @@ ChatEventRef.implement({
     turnActive: t.exposeBoolean('turnActive'),
   }),
 });
+
+/**
+ * Rate-Limit für die unauthentifizierte Fläche (F14): jeder Versuch kostet ein
+ * argon2id-verify bzw. -hash. Zwei Schlüssel — pro IP gegen Dauerfeuer, pro
+ * Username gegen verteiltes Raten auf ein einzelnes Konto.
+ */
+const loginLimiter = createRateLimiter({ windowMs: 5 * 60_000, max: 20 });
+const registerLimiter = createRateLimiter({ windowMs: 60 * 60_000, max: 10 });
+
+function assertWithinLimit(limiter: RateLimiter, keys: string[]): void {
+  if (rateLimitDisabled()) return;
+  for (const key of keys) {
+    if (!limiter.check(key)) {
+      throw new DomainError('Zu viele Versuche — bitte einige Minuten warten.');
+    }
+  }
+}
 
 function requireUser(ctx: GraphQLContext): UserRow {
   if (!ctx.currentUser) {
@@ -246,6 +264,7 @@ builder.mutationType({
         password: t.arg.string({ required: true }),
       },
       resolve: async (_root, args, ctx) => {
+        assertWithinLimit(registerLimiter, [`ip:${ctx.clientIp ?? 'unbekannt'}`]);
         const result = await register(ctx.db, ctx.config, args);
         // Nur der erste (Admin-)Nutzer ist sofort freigeschaltet und bekommt eine
         // Session. Alle anderen sind pending und müssen zuerst zugelassen werden.
@@ -282,6 +301,11 @@ builder.mutationType({
         password: t.arg.string({ required: true }),
       },
       resolve: async (_root, args, ctx) => {
+        // VOR dem argon2-Verify prüfen — das ist der teure Teil (F14).
+        assertWithinLimit(loginLimiter, [
+          `ip:${ctx.clientIp ?? 'unbekannt'}`,
+          `user:${args.username.toLowerCase()}`,
+        ]);
         const result = await login(ctx.db, ctx.config, args.username, args.password);
         await writeSessionCookie(ctx.request, result.token, result.expiresAt);
         return result.user;

@@ -91,10 +91,18 @@ export function createAppYoga(deps: AppYogaDeps) {
       methods: ['GET', 'POST', 'OPTIONS'],
     }),
     plugins: [useCookies(), useCsrfGuard(deps)],
-    context: async ({ request }) => {
+    context: async ({ request, ip }) => {
       const token = await readSessionToken(request);
       const currentUser = token ? await resolveSession(db, config, token) : null;
-      return { db, config, currentUser, request, sandboxManager, chatService };
+      return {
+        db,
+        config,
+        currentUser,
+        request,
+        sandboxManager,
+        chatService,
+        clientIp: ip ?? null,
+      };
     },
   });
 }

@@ -12,6 +12,8 @@ export interface GraphQLContext {
   request: Request;
   sandboxManager: SandboxManager;
   chatService: ChatService;
+  /** Client-IP für das Rate-Limit auf login/register (F14); null = unbekannt. */
+  clientIp: string | null;
 }
 
 export const builder = new SchemaBuilder<{ Context: GraphQLContext }>({});
