@@ -1,0 +1,89 @@
+import { describe, expect, test } from 'bun:test';
+import { allowedOrigins, isCrossSiteRequest } from '../originPolicy';
+
+const base = { configured: [], devWebPort: null };
+
+describe('allowedOrigins (F5)', () => {
+  test('leitet die eigene Origin aus dem Host-Header ab, http und https', () => {
+    expect(allowedOrigins({ ...base, host: 'mac.local:4000' })).toEqual([
+      'http://mac.local:4000',
+      'https://mac.local:4000',
+    ]);
+  });
+
+  test('LAN-Zugriff über die IP funktioniert (nicht auf localhost festgenagelt)', () => {
+    expect(allowedOrigins({ ...base, host: '192.168.1.77:4000' })).toContain(
+      'http://192.168.1.77:4000',
+    );
+  });
+
+  test('im Dev kommt die Vite-Origin dazu (changeOrigin-Falle)', () => {
+    const origins = allowedOrigins({ configured: [], devWebPort: 5173, host: 'localhost:4000' });
+    expect(origins).toContain('http://localhost:5173');
+    expect(origins).toContain('http://localhost:4000');
+  });
+
+  test('konfigurierte Origins werden ergänzt', () => {
+    expect(
+      allowedOrigins({ ...base, host: 'mac.local:4000', configured: ['https://extern.example'] }),
+    ).toContain('https://extern.example');
+  });
+
+  test('ohne Host-Header bleiben nur die konfigurierten übrig', () => {
+    expect(allowedOrigins({ ...base, host: null })).toEqual([]);
+  });
+});
+
+describe('isCrossSiteRequest (F6)', () => {
+  const allowed = ['http://mac.local:4000'];
+
+  test('Sec-Fetch-Site: cross-site wird abgelehnt', () => {
+    expect(
+      isCrossSiteRequest({ method: 'POST', origin: null, secFetchSite: 'cross-site', allowed }),
+    ).toBe(true);
+  });
+
+  test('fremde Origin wird abgelehnt', () => {
+    expect(
+      isCrossSiteRequest({
+        method: 'POST',
+        origin: 'http://boese.example',
+        secFetchSite: null,
+        allowed,
+      }),
+    ).toBe(true);
+  });
+
+  /**
+   * Der eigentliche Angriffsweg: die Preview läuft auf Port 4173 derselben
+   * Site — same-site, also greift SameSite=Lax nicht. Die Origin unterscheidet
+   * sich aber und muss abgelehnt werden.
+   */
+  test('die Preview-Origin auf anderem Port derselben Site wird abgelehnt', () => {
+    expect(
+      isCrossSiteRequest({
+        method: 'POST',
+        origin: 'http://mac.local:4173',
+        secFetchSite: 'same-site',
+        allowed,
+      }),
+    ).toBe(true);
+  });
+
+  test('eigene Origin ist erlaubt', () => {
+    expect(
+      isCrossSiteRequest({
+        method: 'POST',
+        origin: 'http://mac.local:4000',
+        secFetchSite: 'same-origin',
+        allowed,
+      }),
+    ).toBe(false);
+  });
+
+  test('ohne beide Signale wird durchgelassen (curl, Tests)', () => {
+    expect(isCrossSiteRequest({ method: 'POST', origin: null, secFetchSite: null, allowed })).toBe(
+      false,
+    );
+  });
+});

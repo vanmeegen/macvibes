@@ -1,12 +1,10 @@
-import { createYoga } from 'graphql-yoga';
-import { useCookies } from '@whatwg-node/server-plugin-cookies';
 import { loadConfig } from './config';
 import { createDb } from './db/client';
 import { runMigrations } from './db/migrate';
 import { createAnthropicProxy } from './http/anthropicProxy';
 import { startEgressProxy } from './http/egressProxy';
 import { startPreviewGateway } from './http/previewGateway';
-import { readSessionToken } from './http/cookies';
+import { createAppYoga } from './http/createAppYoga';
 import { serveWebUi } from './http/staticFiles';
 import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -25,8 +23,6 @@ import {
 import { ProcessSandboxProvider } from './sandbox/processProvider';
 import { selectBackends, type BackendSelection } from './sandbox/backendSelection';
 import { SandboxManager } from './sandbox/sandboxManager';
-import { schema } from './schema';
-import type { GraphQLContext } from './schema/builder';
 import { autoCommit, createTurnEndAutoCommit } from './services/autoCommitService';
 import { ensureAdmin, resolveSession } from './services/authService';
 import { ChatService } from './services/chatService';
@@ -276,17 +272,14 @@ const chatService = new ChatService(
 );
 chatServiceRef = chatService;
 
-const yoga = createYoga<Record<string, never>, GraphQLContext>({
-  schema,
-  graphqlEndpoint: '/graphql',
-  landingPage: false,
-  maskedErrors: false,
-  plugins: [useCookies()],
-  context: async ({ request }) => {
-    const token = await readSessionToken(request);
-    const currentUser = token ? await resolveSession(db, config, token) : null;
-    return { db, config, currentUser, request, sandboxManager, chatService };
-  },
+const yoga = createAppYoga({
+  db,
+  config,
+  sandboxManager,
+  chatService,
+  // Im Dev laeuft das Web-UI auf einem eigenen Port und proxied /graphql mit
+  // changeOrigin — diese Origin muss erlaubt sein (F5).
+  devWebPort: Bun.env.MACVIBES_WEB_PORT ? Number(Bun.env.MACVIBES_WEB_PORT) : 5173,
 });
 
 const server = Bun.serve({
@@ -305,7 +298,8 @@ const server = Bun.serve({
       return agentGateway.handleUpgrade(request, server);
     }
     if (url.pathname === '/graphql') {
-      return yoga.fetch(request);
+      // Client-IP in den Server-Context — Grundlage fürs Rate-Limit (F14).
+      return yoga.fetch(request, { ip: server.requestIP(request)?.address ?? null });
     }
     // Credential-Proxy für den Agenten in der VM (B5c): /anthropic/* → Claude API.
     if (url.pathname.startsWith('/anthropic/')) {

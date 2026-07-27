@@ -49,6 +49,10 @@ export default defineConfig({
         MACVIBES_FAKE_DELAY_MS: '30',
         // Prozess-Provider: E2E testet die Plattform-Logik, nicht die VM.
         MACVIBES_SANDBOX: 'process',
+        // Der Vite-Proxy setzt changeOrigin, die Origin bleibt aber der
+        // Web-Port — der Server muss ihn kennen, sonst weist der CSRF-Schutz
+        // jeden Request ab (F6).
+        MACVIBES_WEB_PORT: String(E2E_WEB_PORT),
       },
     },
     {
