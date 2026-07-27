@@ -63,8 +63,9 @@ bun run baselines          # Template-Baseline-Snapshots bauen (nur mit msb)
 bun run dev                # http://localhost:5173
 ```
 
-Registrieren mit dem Invite-Code (Default `macvibes`, setzbar über
-`MACVIBES_INVITE_CODE`), Projekt aus einem Template anlegen, in den Chat
+Registrieren, dann von einem Admin freischalten lassen (der erste Nutzer der
+Instanz wird automatisch Admin; ist `MACVIBES_ADMIN_USERNAME` gesetzt, gilt das
+nur für diesen Namen). Danach Projekt aus einem Template anlegen, in den Chat
 schreiben — Claude Code baut in einer eigenen MicroVM, die Preview läuft
 daneben, jeder Turn wird automatisch committet.
 

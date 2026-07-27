@@ -49,7 +49,7 @@ Dienste außer der Claude API.
 | Preview-Start      | `templates.json` liefert pro Template `devCommand` und `previewPort`; wird beim Anlegen ins Projekt übernommen.                                                                                                                                                                                                                        |
 | Ressourcen         | Max **8 parallele Sandboxes**, je **4 GB RAM / 2 vCPUs**, konfigurierbar. Beim Überschreiten wird die am längsten inaktive Sandbox vorzeitig gestoppt (LRU). (Host: M5 Pro, 18 Kerne, 48 GB.)                                                                                                                                          |
 | PWA-Libraries      | Excel: **SheetJS (`xlsx`)**; Charts: **Recharts**.                                                                                                                                                                                                                                                                                     |
-| Auth               | Lokale Accounts: Username + Passwort, Hash via `Bun.password` (argon2id) in SQLite, httpOnly-Session-Cookie (**3 Tage, rollierend**). Registrierung auf der Login-Seite, geschützt durch **Invite-Code** aus der Server-Config. Keine externen Identity-Dienste.                                                                       |
+| Auth               | Lokale Accounts: Username + Passwort, Hash via `Bun.password` (argon2id) in SQLite, httpOnly-Session-Cookie (**3 Tage, rollierend**). Registrierung auf der Login-Seite, jeder neue Account ist **pending** und braucht die Freischaltung durch einen Admin. Keine externen Identity-Dienste.                                          |
 | Rechte             | Fremde Projekte: **lesend** (Liste, Historie, Preview). Anlegen, Löschen und Chat nur für den Owner.                                                                                                                                                                                                                                   |
 | Zugriff            | **LAN**: Server bindet `0.0.0.0` und liefert das gebaute Web-UI selbst aus (`http://<mac>.local:4000`); Preview-iframes verwenden den Hostnamen des Aufrufers.                                                                                                                                                                         |
 
@@ -252,10 +252,11 @@ Einfacher lokaler Login; Projekte sind Usern zugeordnet.
 **Akzeptanzkriterien**
 
 - [ ] Ohne gültige Session wird jede Seite auf die Login-Seite umgeleitet.
-- [ ] Die Login-Seite bietet Anmelden **und** Registrieren (Username + Passwort);
-      ein neuer Username wird sofort registriert und angemeldet.
-- [ ] Registrieren erfordert zusätzlich den **Invite-Code** aus der
-      Server-Config; falscher Code → Fehlermeldung, kein Account.
+- [ ] Die Login-Seite bietet Anmelden **und** Registrieren (Username + Passwort).
+- [ ] Ein neu registrierter Account ist **pending** und kann sich erst nach der
+      Freischaltung durch einen Admin anmelden. (Ersetzt den früheren
+      Invite-Code: das Approval-Gate ist strenger, weil es keinen im Repo
+      dokumentierten Default gibt.)
 - [ ] Die Session gilt **3 Tage** und verlängert sich bei jeder Nutzung
       (rollierend).
 - [ ] Passwörter werden ausschließlich als Hash gespeichert
