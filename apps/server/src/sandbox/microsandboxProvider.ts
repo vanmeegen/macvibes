@@ -199,11 +199,17 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
 
     // Preview-Status: frische Daemon-Pushes zählen (monit-Detailtiefe), ohne
     // sie entscheidet die HTTP-Probe auf den Preview-Port (ADR 0001).
-    const pushed = new PushedPreviewStatus({ staleMs: PUSH_STALE_MS });
+    // Der Push ist der AUSLÖSER (sofortiger Statuswechsel), das Pollen nur noch
+    // der unabhängige Wächter für den Fall, dass der Daemon stumm bleibt.
+    let poller: PreviewStatusPoller | null = null;
+    const pushed = new PushedPreviewStatus({
+      staleMs: PUSH_STALE_MS,
+      onPush: (status) => poller?.notify(status),
+    });
     const unsubscribeStatus = this.config.subscribePreviewStatus(name, (status) =>
       pushed.receive(status),
     );
-    const poller = new PreviewStatusPoller({
+    poller = new PreviewStatusPoller({
       fetchStatus: pushed.fetchStatus(() => httpProbe(`http://localhost:${hostPort}/`)),
       onStatusChange: (status) => console.log(`Preview ${context.projectId}: ${status}`),
     });

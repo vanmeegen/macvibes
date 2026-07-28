@@ -53,6 +53,20 @@ export class PreviewStatusPoller {
     return this.status;
   }
 
+  /**
+   * Statuswechsel von außen — für den Daemon-Push (ADR 0001), der den Zustand
+   * SOFORT meldet, statt bis zum nächsten Poll-Zyklus zu warten. Ohne das war
+   * der Push nur eine Datenquelle, die gesampelt wurde: gemessen ~850 ms
+   * Verzögerung zwischen „Dev-Server antwortet" und „wir melden ready".
+   * Das Pollen bleibt als unabhängiger Wächter bestehen — bleibt der Daemon
+   * stumm, erkennt die HTTP-Probe den Zustand trotzdem.
+   */
+  notify(status: PreviewStatus): void {
+    if (this.stopped) return;
+    this.everReady = this.everReady || status === 'ready';
+    this.setStatus(status);
+  }
+
   private async poll(): Promise<void> {
     if (this.stopped) return;
     try {

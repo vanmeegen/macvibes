@@ -113,3 +113,40 @@ describe('Poll-Takt: eng beim Start, ruhig danach', () => {
     poller.stop();
   });
 });
+
+describe('notify: Push löst den Statuswechsel sofort aus', () => {
+  test('der Zustand wechselt ohne auf den nächsten Poll zu warten', async () => {
+    const gesehen: PreviewStatus[] = [];
+    const poller = new PreviewStatusPoller({
+      fetchStatus: async () => 'starting',
+      startupIntervalMs: 10_000,
+      intervalMs: 10_000,
+      onStatusChange: (s) => gesehen.push(s),
+    });
+    poller.start();
+    await Bun.sleep(20);
+    expect(poller.getStatus()).toBe('starting');
+
+    poller.notify('ready');
+
+    expect(poller.getStatus()).toBe('ready');
+    expect(gesehen).toContain('ready');
+    poller.stop();
+  });
+
+  test('nach einem Push per notify gilt die Preview als schon einmal bereit', async () => {
+    const poller = new PreviewStatusPoller({
+      fetchStatus: async () => {
+        throw new Error('Quelle weg');
+      },
+      startupIntervalMs: 15,
+      intervalMs: 15,
+    });
+    poller.notify('ready');
+    poller.start();
+    await Bun.sleep(60);
+    // everReady ist gesetzt → Ausfall heißt jetzt "restarting", nicht "starting".
+    expect(poller.getStatus()).toBe('restarting');
+    poller.stop();
+  });
+});

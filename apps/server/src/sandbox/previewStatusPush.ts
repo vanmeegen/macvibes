@@ -5,6 +5,11 @@ export interface PushedPreviewStatusOptions {
   staleMs: number;
   /** Zeitquelle (Tests). */
   now?: () => number;
+  /**
+   * Wird bei JEDEM Push sofort gerufen — der Push ist damit Auslöser des
+   * Statuswechsels und nicht mehr bloß eine Quelle, die gepollt wird.
+   */
+  onPush?: (status: PreviewStatus) => void;
 }
 
 /**
@@ -20,6 +25,7 @@ export class PushedPreviewStatus {
 
   receive(status: PreviewStatus): void {
     this.last = { status, at: (this.options.now ?? Date.now)() };
+    this.options.onPush?.(status);
   }
 
   /**
