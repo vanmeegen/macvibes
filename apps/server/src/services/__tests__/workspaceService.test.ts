@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { existsSync, renameSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createProjectBranch, ensureBareRepo } from '../gitService';
@@ -73,21 +73,6 @@ describe('ensureWorkspace — git-Metadaten außerhalb des Mounts (F1)', () => {
     bareRepoPath: bare,
     projectId: 'projekt-1',
     branchName: 'marco/dashboard',
-  });
-
-  test('migriert ein Alt-Volume mit .git im Workspace', async () => {
-    const { home, bare } = await setup();
-    const dir = await ensureWorkspace(params(home, bare));
-    await writeFile(join(dir, 'lokale-arbeit.txt'), 'nicht verlieren!');
-    // Zustand vor der Härtung nachstellen: gitDir zurück in den Arbeitsbaum.
-    renameSync(gitDirFor(home, 'projekt-1'), join(dir, '.git'));
-
-    const again = await ensureWorkspace(params(home, bare));
-
-    expect(again).toBe(dir);
-    expect(existsSync(join(gitDirFor(home, 'projekt-1'), 'HEAD'))).toBe(true);
-    expect(existsSync(join(dir, '.git'))).toBe(false);
-    expect(existsSync(join(dir, 'lokale-arbeit.txt'))).toBe(true);
   });
 
   test('entfernt eine vom Gast nachträglich angelegte .git-Datei', async () => {

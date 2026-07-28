@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { runGit, type ProjectRepo } from './gitService';
 
@@ -69,15 +69,6 @@ export async function ensureWorkspace(params: WorkspaceParams): Promise<string> 
 
   if (existsSync(join(gitDir, 'HEAD'))) {
     removeStrayGitEntry(dir, params.projectId, { expected: false });
-    return dir;
-  }
-
-  // Alt-Volume aus der Zeit vor der Härtung: gitDir aus dem Arbeitsbaum
-  // herausziehen. `origin` zeigt bereits aufs Bare-Repo und bleibt gültig.
-  if (existsSync(join(dir, '.git'))) {
-    renameSync(join(dir, '.git'), gitDir);
-    await runGit(['--git-dir', gitDir, 'config', 'core.bare', 'false']);
-    console.log(`Workspace ${params.projectId}: git-Metadaten nach ${gitDir} migriert`);
     return dir;
   }
 
