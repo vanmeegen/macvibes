@@ -3,7 +3,21 @@ import type { PreviewStatus } from './provider';
 export interface PreviewStatusPollerDeps {
   /** Holt den aktuellen Status (monit-API oder passiver HTTP-Probe). Darf werfen. */
   fetchStatus: () => Promise<PreviewStatus>;
+  /**
+   * Abstand zwischen zwei Abfragen, NACHDEM die Preview einmal bereit war
+   * (Default 2000 ms) — dann geht es nur noch darum, einen Ausfall zu bemerken.
+   */
   intervalMs?: number;
+  /**
+   * Abstand SOLANGE die Preview noch nie bereit war (Default 250 ms).
+   *
+   * Gemessen: die VM ist nach ~200 ms da, der Dev-Server antwortet nach ~560 ms
+   * — mit einem festen 2000-ms-Takt meldeten wir `ready` aber erst nach ~3150 ms.
+   * Rund 2,5 Sekunden davon waren reine Erkennungslatenz, also Warten auf unsere
+   * eigene nächste Frage. Beim Start wird deshalb eng gepollt, danach wieder
+   * ruhig — die schnelle Phase dauert nur die erste Sekunde.
+   */
+  startupIntervalMs?: number;
   onStatusChange?: (status: PreviewStatus) => void;
 }
 
@@ -51,10 +65,13 @@ export class PreviewStatusPoller {
       this.setStatus(this.everReady ? 'restarting' : 'starting');
     }
     if (this.stopped) return;
-    this.timer = setTimeout(() => {
-      this.timer = null;
-      void this.poll();
-    }, this.deps.intervalMs ?? 2000);
+    this.timer = setTimeout(
+      () => {
+        this.timer = null;
+        void this.poll();
+      },
+      this.everReady ? (this.deps.intervalMs ?? 2000) : (this.deps.startupIntervalMs ?? 250),
+    );
   }
 
   private setStatus(status: PreviewStatus): void {

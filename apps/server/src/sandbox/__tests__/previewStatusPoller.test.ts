@@ -86,3 +86,30 @@ describe('PreviewStatusPoller', () => {
     expect(changes).toContain('ready');
   });
 });
+
+describe('Poll-Takt: eng beim Start, ruhig danach', () => {
+  test('pollt vor dem ersten ready deutlich häufiger', async () => {
+    let aufrufe = 0;
+    let status: PreviewStatus = 'starting';
+    const poller = new PreviewStatusPoller({
+      fetchStatus: async () => {
+        aufrufe += 1;
+        return status;
+      },
+      startupIntervalMs: 20,
+      intervalMs: 10_000,
+    });
+    poller.start();
+    await Bun.sleep(150);
+    const beimStart = aufrufe;
+    expect(beimStart).toBeGreaterThan(3);
+
+    // Sobald ready erreicht ist, fällt der Takt auf das ruhige Intervall.
+    status = 'ready';
+    await Bun.sleep(60);
+    const nachReady = aufrufe;
+    await Bun.sleep(150);
+    expect(aufrufe - nachReady).toBeLessThanOrEqual(1);
+    poller.stop();
+  });
+});
