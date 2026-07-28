@@ -41,3 +41,21 @@ describe('VmTokenRegistry (F4, F12)', () => {
     expect(JSON.stringify(registry)).not.toContain(token);
   });
 });
+
+/**
+ * Zweiter Scan, F2: revoke() war definiert und dokumentiert, aber im
+ * Produktivcode nie aufgerufen — ein aus einer VM abgeflossenes Token öffnete
+ * Credential- und Egress-Proxy noch lange nach deren Ende.
+ */
+describe('Widerruf ist wirklich verdrahtet (2. Scan, F2)', () => {
+  test('nach revoke ist das Token an allen Oberflächen wertlos', () => {
+    const registry = createVmTokenRegistry();
+    const token = registry.mint('macvibes-alt');
+    expect(registry.lookup(token)).not.toBeNull();
+    registry.revoke('macvibes-alt');
+    expect(registry.lookup(token)).toBeNull();
+    // Auch ein späterer Neustart derselben Sandbox macht es nicht wieder gültig.
+    registry.mint('macvibes-alt');
+    expect(registry.lookup(token)).toBeNull();
+  });
+});

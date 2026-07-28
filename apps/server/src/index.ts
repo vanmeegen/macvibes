@@ -150,6 +150,7 @@ const sandboxProvider = useMicrosandbox
       memoryMib: config.sandbox.memoryMib,
       agentDaemon: {
         bundleDir: daemonBundleDir,
+        revokeToken: (sandboxName: string) => vmTokens.revoke(sandboxName),
         envFor: (sandboxName: string) => {
           // Frisches Token pro VM-Start; ein älteres derselben Sandbox
           // verfällt dabei automatisch (F12).
@@ -299,9 +300,14 @@ const yoga = createAppYoga({
   config,
   sandboxManager,
   chatService,
-  // Im Dev laeuft das Web-UI auf einem eigenen Port und proxied /graphql mit
-  // changeOrigin — diese Origin muss erlaubt sein (F5).
-  devWebPort: Bun.env.MACVIBES_WEB_PORT ? Number(Bun.env.MACVIBES_WEB_PORT) : 5173,
+  // Im Dev läuft das Web-UI auf einem eigenen Port und proxied /graphql mit
+  // changeOrigin — diese Origin muss erlaubt sein (F5). NUR bei ausdrücklich
+  // gesetztem MACVIBES_WEB_PORT: der frühere Default 5173 war ein Loch, denn
+  // in Produktion läuft dort KEIN Vite, sondern der Port, den sich die erste
+  // Sandbox für ihre Preview greift (templates.json: previewPort 5173). Damit
+  // vertraute die Allowlist ausgerechnet dem vom Agenten kontrollierten
+  // Ursprung — genau der Angriff, den CORS/CSRF verhindern sollen.
+  devWebPort: Bun.env.MACVIBES_WEB_PORT ? Number(Bun.env.MACVIBES_WEB_PORT) : null,
 });
 
 const server = Bun.serve({

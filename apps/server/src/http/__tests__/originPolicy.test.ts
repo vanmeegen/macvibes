@@ -87,3 +87,22 @@ describe('isCrossSiteRequest (F6)', () => {
     );
   });
 });
+
+/**
+ * Zweiter Scan, F1 (HIGH, selbst eingebaut): In Produktion läuft auf 5173 kein
+ * Vite, sondern die Preview der ERSTEN Sandbox (templates.json: previewPort
+ * 5173, der Allokator bevorzugt genau diesen Port). Ein fester Default hätte
+ * damit ausgerechnet dem vom Agenten kontrollierten Ursprung vertraut.
+ */
+describe('Dev-Origin nur bei ausdrücklicher Konfiguration (2. Scan, F1)', () => {
+  test('ohne devWebPort wird 5173 NICHT erlaubt', () => {
+    const origins = allowedOrigins({ host: 'mac.local:4000', configured: [], devWebPort: null });
+    expect(origins).not.toContain('http://mac.local:5173');
+    expect(origins).toContain('http://mac.local:4000');
+  });
+
+  test('mit gesetztem devWebPort weiterhin erlaubt (Dev-Betrieb)', () => {
+    const origins = allowedOrigins({ host: 'mac.local:4000', configured: [], devWebPort: 5173 });
+    expect(origins).toContain('http://mac.local:5173');
+  });
+});
