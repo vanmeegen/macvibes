@@ -1,4 +1,5 @@
-import { desc, eq } from 'drizzle-orm';
+import { createHash } from 'node:crypto';
+import { desc, eq, lt } from 'drizzle-orm';
 import { passwordSchema, usernameSchema } from '@macvibes/shared';
 import type { Db } from '../db/client';
 import { sessions, users, type UserRow } from '../db/schema';
@@ -134,11 +135,31 @@ export async function login(
   return { user, token: session.token, expiresAt: session.expiresAt };
 }
 
+/**
+ * Speicher-Schlüssel einer Session. Der Klartext-Token verlässt den Prozess
+ * nur im Cookie; in der DB steht sein SHA-256. Wer die Datei liest, bekommt
+ * damit keine übernehmbaren Sitzungen mehr — und der Vergleich bleibt ein
+ * einfacher Primärschlüssel-Lookup.
+ */
+export function sessionKey(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
 async function createSession(db: Db, config: AuthConfig, user: UserRow): Promise<Session> {
   const token = newToken();
   const expiresAt = new Date(Date.now() + config.sessionTtlMs);
-  await db.insert(sessions).values({ id: token, userId: user.id, expiresAt });
+  await db.insert(sessions).values({ id: sessionKey(token), userId: user.id, expiresAt });
   return { token, expiresAt };
+}
+
+/**
+ * Räumt abgelaufene Sessions weg. Bisher wurde eine Zeile nur gelöscht, wenn
+ * jemand mit genau diesem Token wiederkam — was bei abgelaufenen Cookies nie
+ * passiert; entsprechend sammelten sie sich an.
+ */
+export async function purgeExpiredSessions(db: Db): Promise<number> {
+  const removed = await db.delete(sessions).where(lt(sessions.expiresAt, new Date())).returning();
+  return removed.length;
 }
 
 /** Alle Nutzer, neueste zuerst — für das Admin-Panel. */
@@ -217,17 +238,18 @@ export async function resolveSession(
   config: AuthConfig,
   token: string,
 ): Promise<UserRow | null> {
-  const found = await db.select().from(sessions).where(eq(sessions.id, token)).limit(1);
+  const key = sessionKey(token);
+  const found = await db.select().from(sessions).where(eq(sessions.id, key)).limit(1);
   const session = found[0];
   if (!session) return null;
 
   if (session.expiresAt.getTime() <= Date.now()) {
-    await db.delete(sessions).where(eq(sessions.id, token));
+    await db.delete(sessions).where(eq(sessions.id, key));
     return null;
   }
 
   const newExpiry = new Date(Date.now() + config.sessionTtlMs);
-  await db.update(sessions).set({ expiresAt: newExpiry }).where(eq(sessions.id, token));
+  await db.update(sessions).set({ expiresAt: newExpiry }).where(eq(sessions.id, key));
 
   const userFound = await db.select().from(users).where(eq(users.id, session.userId)).limit(1);
   const user = userFound[0];
@@ -235,12 +257,12 @@ export async function resolveSession(
   // Ein zurückgezogenes Approval muss bestehende Sessions kappen — sonst
   // arbeitet ein abgelehnter Nutzer bis zum TTL-Ende weiter.
   if (!user.approved) {
-    await db.delete(sessions).where(eq(sessions.id, token));
+    await db.delete(sessions).where(eq(sessions.id, key));
     return null;
   }
   return user;
 }
 
 export async function logout(db: Db, token: string): Promise<void> {
-  await db.delete(sessions).where(eq(sessions.id, token));
+  await db.delete(sessions).where(eq(sessions.id, sessionKey(token)));
 }

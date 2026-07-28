@@ -10,6 +10,8 @@ import {
   register,
   rejectUser,
   resolveSession,
+  purgeExpiredSessions,
+  sessionKey,
 } from '../authService';
 import { DomainError } from '../errors';
 import { createTestDb, TEST_AUTH_CONFIG } from './testUtils';
@@ -198,18 +200,24 @@ describe('resolveSession', () => {
     const { user, session } = await register(db, CONFIG, registerInput());
     const token = session!.token;
 
-    const before = await db.select().from(sessions).where(eq(sessions.id, token));
+    const before = await db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, sessionKey(token)));
     const expiryBefore = before[0]?.expiresAt.getTime() ?? 0;
 
     await db
       .update(sessions)
       .set({ expiresAt: new Date(Date.now() + 1000) })
-      .where(eq(sessions.id, token));
+      .where(eq(sessions.id, sessionKey(token)));
 
     const resolved = await resolveSession(db, CONFIG, token);
     expect(resolved?.id).toBe(user.id);
 
-    const after = await db.select().from(sessions).where(eq(sessions.id, token));
+    const after = await db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, sessionKey(token)));
     const expiryAfter = after[0]?.expiresAt.getTime() ?? 0;
     expect(expiryAfter).toBeGreaterThan(Date.now() + 1000);
     expect(expiryBefore).toBeGreaterThan(0);
@@ -222,10 +230,13 @@ describe('resolveSession', () => {
     await db
       .update(sessions)
       .set({ expiresAt: new Date(Date.now() - 1000) })
-      .where(eq(sessions.id, token));
+      .where(eq(sessions.id, sessionKey(token)));
 
     expect(await resolveSession(db, CONFIG, token)).toBeNull();
-    const remaining = await db.select().from(sessions).where(eq(sessions.id, token));
+    const remaining = await db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, sessionKey(token)));
     expect(remaining).toHaveLength(0);
   });
 
@@ -282,5 +293,43 @@ describe('Erst-Admin-Vergabe (F8)', () => {
     ]);
     const admins = await db.select().from(users).where(eq(users.role, 'admin'));
     expect(admins.length).toBe(1);
+  });
+});
+
+/**
+ * Zusatz zu AP7: Der Klartext-Token ist zugleich Cookie-Wert. Lag er im
+ * Primärschlüssel, war jeder Lesezugriff auf die DB-Datei gleichbedeutend mit
+ * übernehmbaren Sitzungen.
+ */
+describe('Session-Token wird gehasht gespeichert', () => {
+  test('der Cookie-Wert steht nicht in der Datenbank', async () => {
+    const db = createTestDb();
+    const { session } = await register(db, CONFIG, registerInput());
+    const token = session!.token;
+
+    const alle = await db.select().from(sessions);
+    expect(alle.map((s) => s.id)).not.toContain(token);
+    expect(alle[0]?.id).toBe(sessionKey(token));
+  });
+
+  test('die Auflösung funktioniert trotzdem mit dem Klartext-Token', async () => {
+    const db = createTestDb();
+    const { user, session } = await register(db, CONFIG, registerInput());
+    const resolved = await resolveSession(db, CONFIG, session!.token);
+    expect(resolved?.id).toBe(user.id);
+  });
+
+  test('purgeExpiredSessions räumt abgelaufene Zeilen weg', async () => {
+    const db = createTestDb();
+    const { session } = await register(db, CONFIG, registerInput());
+    await db
+      .update(sessions)
+      .set({ expiresAt: new Date(Date.now() - 1000) })
+      .where(eq(sessions.id, sessionKey(session!.token)));
+
+    const entfernt = await purgeExpiredSessions(db);
+
+    expect(entfernt).toBe(1);
+    expect(await db.select().from(sessions)).toHaveLength(0);
   });
 });

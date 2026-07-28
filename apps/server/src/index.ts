@@ -25,7 +25,7 @@ import { selectBackends, type BackendSelection } from './sandbox/backendSelectio
 import { SandboxManager } from './sandbox/sandboxManager';
 import { createVmTokenRegistry } from './sandbox/vmTokens';
 import { autoCommit, createTurnEndAutoCommit } from './services/autoCommitService';
-import { ensureAdmin, resolveSession } from './services/authService';
+import { ensureAdmin, purgeExpiredSessions, resolveSession } from './services/authService';
 import { ChatService } from './services/chatService';
 import { ensureBareRepo } from './services/gitService';
 import { startMirrorScheduler } from './services/mirrorService';
@@ -37,6 +37,13 @@ const db = createDb(config.dbPath);
 runMigrations(db);
 // Bootstrap-Admin (optional per MACVIBES_ADMIN_USERNAME) freischalten/befördern.
 await ensureAdmin(db, config);
+// Abgelaufene Sessions wegräumen: sie wurden bisher nur beim Zugriff gelöscht,
+// was bei einem abgelaufenen Cookie nie passiert — entsprechend sammelten sie
+// sich an. Einmal beim Start reicht bei 3-Tage-TTL.
+const entfernteSessions = await purgeExpiredSessions(db);
+if (entfernteSessions > 0) {
+  console.log(`${entfernteSessions} abgelaufene Session(s) aufgeräumt`);
+}
 await ensureBareRepo(config.bareRepoPath);
 
 // Ein Token PRO SANDBOX statt eines Shared Secrets (F4/F12): Credential-Proxy,

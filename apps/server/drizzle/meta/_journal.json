@@ -36,6 +36,13 @@
       "when": 1784055305120,
       "tag": "0004_curved_tattoo",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1785264000000,
+      "tag": "0005_session_token_hash",
+      "breakpoints": true
     }
   ]
 }
