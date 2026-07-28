@@ -979,3 +979,55 @@ describe('Delta-Deckel gegen unbegrenztes Wachstum (F16)', () => {
     expect(zeilen.map((z) => z.content).join('').length).toBe(anzahl * chunk.length);
   });
 });
+
+/**
+ * Der stille Config-Warmup blockiert den echten Turn: runAttempt wartet auf
+ * ihn, BEVOR es in seine eigene Timeout-Schleife kommt. Ohne Frist hängt ein
+ * stummer Warmup das Projekt unbegrenzt auf — im UI steht ewig „Agent
+ * arbeitet", ohne dass je ein Fehler sichtbar wird. Live reproduziert mit
+ * einem nicht antwortenden Upstream.
+ */
+describe('Config-Warmup hat eine Frist', () => {
+  test('ein stummer Warmup blockiert den echten Turn nicht', async () => {
+    let warmupAbgebrochen = false;
+    let turnNummer = 0;
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        turnNummer += 1;
+        if (turnNummer === 1) {
+          // Warmup: liefert NIE ein Event.
+          return {
+            abort: () => {
+              warmupAbgebrochen = true;
+            },
+            // Liefert nie ein Event — steht für einen Upstream, der nicht antwortet.
+            events: {
+              [Symbol.asyncIterator]() {
+                return { next: () => new Promise<IteratorResult<AgentEvent>>(() => {}) };
+              },
+            } as AsyncIterable<AgentEvent>,
+          };
+        }
+        return {
+          abort: () => {},
+          events: (async function* () {
+            yield { type: 'text-delta', text: 'fertig' } as AgentEvent;
+            yield { type: 'turn-completed', sessionId: null } as AgentEvent;
+          })(),
+        };
+      },
+    };
+    const db = createTestDb();
+    const owner = await createUser(db, 'marco');
+    const projectId = await createProjectRow(db, owner);
+    const service = new ChatService(db, runner, {}, { agentWarmupTimeoutMs: 300 });
+
+    await service.prewarm(projectId, '/tmp/fake');
+    await service.sendMessage(sendInput(projectId, 'Hallo'));
+    await waitFor(async () => !service.isTurnActive(projectId), 10_000);
+
+    expect(warmupAbgebrochen).toBe(true);
+    const antwort = (await service.listMessages(projectId)).filter((m) => m.role === 'assistant');
+    expect(antwort.map((m) => m.content).join('')).toContain('fertig');
+  });
+});

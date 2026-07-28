@@ -274,6 +274,11 @@ const chatService = new ChatService(
     agentColdStartTimeoutMs: Bun.env.MACVIBES_AGENT_COLD_START_TIMEOUT_MS
       ? Number(Bun.env.MACVIBES_AGENT_COLD_START_TIMEOUT_MS)
       : undefined,
+    // Frist für den stillen Config-Warmup: der echte Turn wartet auf ihn,
+    // bevor sein eigener Timeout greift.
+    agentWarmupTimeoutMs: Bun.env.MACVIBES_AGENT_WARMUP_TIMEOUT_MS
+      ? Number(Bun.env.MACVIBES_AGENT_WARMUP_TIMEOUT_MS)
+      : undefined,
     // Timeouts für LANGSAME (lokale) Modelle — greift pro Turn je nach Projekt-Modell.
     agentSlowIdleTimeoutMs: Bun.env.MACVIBES_AGENT_SLOW_IDLE_TIMEOUT_MS
       ? Number(Bun.env.MACVIBES_AGENT_SLOW_IDLE_TIMEOUT_MS)

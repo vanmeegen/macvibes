@@ -73,6 +73,8 @@ export interface ChatServiceOptions {
    * großzügigerer First-Event-Timeout (der User sieht derweil „MicroVM startet").
    */
   agentColdStartTimeoutMs?: number | undefined;
+  /** Frist für den Config-Warmup (Default 60s). */
+  agentWarmupTimeoutMs?: number | undefined;
   /** Nachlauf nach dem Abbruch, um einen späten Fehlertext (stderr) einzusammeln. */
   agentAbortGraceMs?: number | undefined;
   /**
@@ -98,6 +100,8 @@ export class ChatService {
   private readonly idleTimeoutMs: number;
   private readonly firstEventTimeoutMs: number;
   private readonly coldStartTimeoutMs: number;
+  /** Frist für den stillen Config-Warmup — er blockiert sonst den echten Turn. */
+  private readonly warmupTimeoutMs: number;
   private readonly abortGraceMs: number;
   private readonly slowIdleTimeoutMs: number;
   private readonly slowFirstEventTimeoutMs: number;
@@ -122,6 +126,7 @@ export class ChatService {
     );
     this.abortGraceMs = options.agentAbortGraceMs ?? 5_000;
     this.slowIdleTimeoutMs = options.agentSlowIdleTimeoutMs ?? 600_000;
+    this.warmupTimeoutMs = options.agentWarmupTimeoutMs ?? 60_000;
     this.slowFirstEventTimeoutMs = Math.min(
       options.agentSlowFirstEventTimeoutMs ?? 180_000,
       this.slowIdleTimeoutMs,
@@ -193,10 +198,29 @@ export class ChatService {
         resumeSessionId: null,
         model,
       });
-      // Events konsumieren und VERWERFEN — der Warmup initialisiert nur die
-      // claude-Config in der VM, er erzeugt keine Chat-Nachrichten.
-      for await (const event of handle.events) {
-        void event;
+      // Der Warmup MUSS eine Frist haben: der echte Turn wartet auf ihn
+      // (runAttempt), bevor er in seine eigene Timeout-Schleife kommt. Ohne
+      // Frist hängt ein stiller Warmup — etwa weil die Claude-API nicht
+      // antwortet — das Projekt unbegrenzt auf, und im UI steht ewig
+      // „Agent arbeitet", ohne dass je ein Fehler sichtbar wird.
+      const deadline = Date.now() + this.warmupTimeoutMs;
+      const consume = (async () => {
+        // Events konsumieren und VERWERFEN — der Warmup initialisiert nur die
+        // claude-Config in der VM, er erzeugt keine Chat-Nachrichten.
+        for await (const event of handle.events) {
+          void event;
+        }
+      })();
+      const abgelaufen = await Promise.race([
+        consume.then(() => false),
+        Bun.sleep(Math.max(0, deadline - Date.now())).then(() => true),
+      ]);
+      if (abgelaufen) {
+        console.warn(
+          `Config-Warmup für ${projectId} nach ${Math.round(this.warmupTimeoutMs / 1000)}s ` +
+            'abgebrochen — der Agent antwortet nicht. Der nächste echte Turn läuft trotzdem.',
+        );
+        handle.abort();
       }
     } catch (error) {
       console.error(`Config-Warmup für ${projectId} fehlgeschlagen:`, error);
