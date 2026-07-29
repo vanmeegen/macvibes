@@ -5,7 +5,7 @@ import type { ServerConfig } from '../config';
 import type { SandboxManager } from '../sandbox/sandboxManager';
 import type { ChatService } from '../services/chatService';
 import { resolveSession } from '../services/authService';
-import { readSessionToken } from './cookies';
+import { isSecureRequest, readSessionToken } from './cookies';
 import { schema } from '../schema';
 import type { GraphQLContext } from '../schema/builder';
 import { allowedOrigins, isCrossSiteRequest } from './originPolicy';
@@ -37,14 +37,10 @@ function configuredOrigins(): string[] {
  * am Ambient-Cookie; ohne diese Prüfung genügt ein HTML-Formular in einer
  * Preview, um eine Mutation im Namen des Betrachters auszulösen.
  */
-function useCsrfGuard(deps: AppYogaDeps): Plugin<YogaServerContext> {
+function useCsrfGuard(originsFor: (request: Request) => string[]): Plugin<YogaServerContext> {
   return {
     onRequest({ request, endResponse }) {
-      const allowed = allowedOrigins({
-        host: request.headers.get('host'),
-        configured: configuredOrigins(),
-        devWebPort: deps.devWebPort ?? null,
-      });
+      const allowed = originsFor(request);
       const crossSite = isCrossSiteRequest({
         method: request.method,
         origin: request.headers.get('origin'),
@@ -71,6 +67,13 @@ function useCsrfGuard(deps: AppYogaDeps): Plugin<YogaServerContext> {
  */
 export function createAppYoga(deps: AppYogaDeps) {
   const { db, config, sandboxManager, chatService } = deps;
+  const originsFor = (request: Request): string[] =>
+    allowedOrigins({
+      host: request.headers.get('host'),
+      configured: configuredOrigins(),
+      devWebPort: deps.devWebPort ?? null,
+      secure: isSecureRequest(request),
+    });
   return createYoga<YogaServerContext, GraphQLContext>({
     schema,
     graphqlEndpoint: '/graphql',
@@ -81,16 +84,14 @@ export function createAppYoga(deps: AppYogaDeps) {
     maskedErrors: Bun.env.MACVIBES_DEBUG_ERRORS === '1' ? false : true,
     // F5: KEIN Default-CORS (spiegelte jede Origin mit Credentials).
     cors: (request) => ({
-      origin: allowedOrigins({
-        host: request.headers.get('host'),
-        configured: configuredOrigins(),
-        devWebPort: deps.devWebPort ?? null,
-      }),
+      // Leere Liste NIE durchreichen: Yoga spiegelte dann eine beliebige
+      // Origin (2. Scan, F21). 'null' passt auf keine echte Origin.
+      origin: originsFor(request).length > 0 ? originsFor(request) : ['null'],
       credentials: true,
       allowedHeaders: ['content-type'],
       methods: ['GET', 'POST', 'OPTIONS'],
     }),
-    plugins: [useCookies(), useCsrfGuard(deps)],
+    plugins: [useCookies(), useCsrfGuard(originsFor)],
     context: async ({ request, ip }) => {
       const token = await readSessionToken(request);
       const currentUser = token ? await resolveSession(db, config, token) : null;

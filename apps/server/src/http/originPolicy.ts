@@ -15,6 +15,12 @@ export interface OriginPolicyInput {
   configured: string[];
   /** Dev-Modus: der Vite-Server läuft auf einem eigenen Port. */
   devWebPort: number | null;
+  /**
+   * Kam der Request selbst über HTTPS? Dann wird die http-Variante NICHT
+   * erlaubt (2. Scan, F22) — sonst hebelt ein Klartext-Ursprung die
+   * TLS-Terminierung wieder aus.
+   */
+  secure?: boolean;
 }
 
 /**
@@ -29,15 +35,15 @@ export function allowedOrigins(input: OriginPolicyInput): string[] {
   const origins = new Set<string>(input.configured.filter((o) => o.length > 0));
   const host = input.host?.trim() ?? '';
   if (host.length > 0) {
-    origins.add(`http://${host}`);
     origins.add(`https://${host}`);
+    if (input.secure !== true) origins.add(`http://${host}`);
     // Im Dev proxied Vite /graphql mit changeOrigin: der Host wird zu
     // localhost:4000, die Origin bleibt aber der Vite-Port. Ohne diesen
     // Eintrag wäre `bun run dev` tot.
     const hostname = host.split(':')[0] ?? '';
     if (input.devWebPort !== null && hostname.length > 0) {
-      origins.add(`http://${hostname}:${input.devWebPort}`);
       origins.add(`https://${hostname}:${input.devWebPort}`);
+      if (input.secure !== true) origins.add(`http://${hostname}:${input.devWebPort}`);
     }
   }
   return [...origins];
@@ -61,8 +67,14 @@ export interface CsrfInput {
  */
 export function isCrossSiteRequest(input: CsrfInput): boolean {
   if (input.secFetchSite === 'cross-site') return true;
-  if (input.origin !== null && input.origin !== 'null') {
+  // `Origin: null` ist KEIN „kein Origin", sondern ein undurchsichtiger
+  // Ursprung: sandboxed iframe, data:-URL, manche Redirect-Ketten. Genau das
+  // liefert ein Angreifer, wenn er die Prüfung umgehen will (2. Scan, F8).
+  if (input.origin === 'null') return true;
+  if (input.origin !== null) {
     return !input.allowed.includes(input.origin);
   }
+  // Weder Origin noch Sec-Fetch-Site: kein Browser. Bewusst erlaubt, damit
+  // Kommandozeilen-Clients und Tests ohne Ambient-Cookie weiter funktionieren.
   return false;
 }

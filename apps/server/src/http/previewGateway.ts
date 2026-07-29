@@ -199,7 +199,7 @@ function unauthorized(): Response {
  * Dutzende Asset-Requests aus, und `resolveSession` verlängert die Session
  * rollierend — ohne Cache wäre das ein SQLite-Write pro Asset.
  */
-const AUTH_CACHE_MS = 30_000;
+const AUTH_CACHE_MS = 5_000;
 
 function createAuthCache(
   authenticate: (token: string | null) => Promise<boolean>,

@@ -5,7 +5,7 @@ const base = { configured: [], devWebPort: null };
 
 describe('allowedOrigins (F5)', () => {
   test('leitet die eigene Origin aus dem Host-Header ab, http und https', () => {
-    expect(allowedOrigins({ ...base, host: 'mac.local:4000' })).toEqual([
+    expect(allowedOrigins({ ...base, host: 'mac.local:4000' }).sort()).toEqual([
       'http://mac.local:4000',
       'https://mac.local:4000',
     ]);
@@ -104,5 +104,34 @@ describe('Dev-Origin nur bei ausdrücklicher Konfiguration (2. Scan, F1)', () =>
   test('mit gesetztem devWebPort weiterhin erlaubt (Dev-Betrieb)', () => {
     const origins = allowedOrigins({ host: 'mac.local:4000', configured: [], devWebPort: 5173 });
     expect(origins).toContain('http://mac.local:5173');
+  });
+});
+
+describe('Nachbesserungen aus dem 2. Scan', () => {
+  test('F8: Origin "null" gilt als cross-site, nicht als "kein Origin"', () => {
+    expect(
+      isCrossSiteRequest({
+        method: 'POST',
+        origin: 'null',
+        secFetchSite: null,
+        allowed: ['http://a'],
+      }),
+    ).toBe(true);
+  });
+
+  test('F22: über HTTPS wird die http-Variante nicht mehr erlaubt', () => {
+    const o = allowedOrigins({ host: 'mac.local', configured: [], devWebPort: null, secure: true });
+    expect(o).toContain('https://mac.local');
+    expect(o).not.toContain('http://mac.local');
+  });
+
+  test('im LAN-Klartext bleiben beide Schemata erlaubt', () => {
+    const o = allowedOrigins({
+      host: 'mac.local:4000',
+      configured: [],
+      devWebPort: null,
+      secure: false,
+    });
+    expect(o).toContain('http://mac.local:4000');
   });
 });
