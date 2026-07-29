@@ -62,11 +62,66 @@ export function isBlockedIp(ip: string): boolean {
     return false;
   }
 
-  if (candidate === '::' || candidate === '::1') return true;
-  if (candidate.startsWith('fe80:')) return true; // Link-Local
-  // Unique Local Addresses fc00::/7 → erstes Byte 0xfc oder 0xfd.
-  if (/^f[cd][0-9a-f]{2}:/.test(candidate)) return true;
+  const v6 = ipv6Groups(candidate);
+  if (v6 === null) return false;
+  // Numerisch statt per Zeichenkette (2. Scan, F9): sonst rutschen andere
+  // Schreibweisen derselben Adresse durch — `0:0:0:0:0:0:0:1` ist ebenso
+  // Loopback wie `::1`, und `::ffff:7f00:1` ebenso 127.0.0.1 wie `::ffff:127.0.0.1`.
+  const [g0 = 0, g1 = 0, g2 = 0, g3 = 0, g4 = 0, g5 = 0, g6 = 0, g7 = 0] = v6;
+  if (v6.every((g) => g === 0)) return true; // ::
+  if (
+    g0 === 0 &&
+    g1 === 0 &&
+    g2 === 0 &&
+    g3 === 0 &&
+    g4 === 0 &&
+    g5 === 0 &&
+    g6 === 0 &&
+    g7 === 1
+  ) {
+    return true; // ::1
+  }
+  // IPv4-mapped ::ffff:a.b.c.d — auch in reiner Hex-Schreibweise.
+  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0xffff) {
+    return isBlockedIp(`${g6 >> 8}.${g6 & 0xff}.${g7 >> 8}.${g7 & 0xff}`);
+  }
+  const erstesByte = g0 >> 8;
+  if ((erstesByte & 0xfe) === 0xfc) return true; // fc00::/7 (ULA)
+  if ((g0 & 0xffc0) === 0xfe80) return true; // fe80::/10 (Link-Local)
+  if (erstesByte === 0xff) return true; // Multicast
   return false;
+}
+
+/** Zerlegt eine IPv6-Adresse in ihre acht 16-Bit-Gruppen; null bei Unfug. */
+function ipv6Groups(ip: string): number[] | null {
+  if (!ip.includes(':')) return null;
+  let rest = ip;
+  // Eingebettete IPv4-Notation in zwei Hex-Gruppen überführen.
+  const v4Ende = rest.match(/(\d+\.\d+\.\d+\.\d+)$/);
+  if (v4Ende) {
+    const teile = ipv4Parts(v4Ende[1] as string);
+    if (teile === null) return null;
+    const [a = 0, b = 0, c = 0, d = 0] = teile;
+    rest = `${rest.slice(0, v4Ende.index)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const [links, rechts, zuviel] = rest.split('::');
+  if (zuviel !== undefined) return null;
+  const zerlege = (teil: string): number[] | null => {
+    if (teil === '') return [];
+    const gruppen: number[] = [];
+    for (const g of teil.split(':')) {
+      if (!/^[0-9a-f]{1,4}$/.test(g)) return null;
+      gruppen.push(Number.parseInt(g, 16));
+    }
+    return gruppen;
+  };
+  const vorne = zerlege(links ?? '');
+  const hinten = rechts === undefined ? [] : zerlege(rechts);
+  if (vorne === null || hinten === null) return null;
+  if (rechts === undefined) return vorne.length === 8 ? vorne : null;
+  const fehlend = 8 - vorne.length - hinten.length;
+  if (fehlend < 0) return null;
+  return [...vorne, ...Array<number>(fehlend).fill(0), ...hinten];
 }
 
 export type TargetVerdict = { ok: true } | { ok: false; reason: string };

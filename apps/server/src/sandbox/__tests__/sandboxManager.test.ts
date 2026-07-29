@@ -320,3 +320,37 @@ describe('stopAll', () => {
     expect(provider.stopCalls.sort()).toEqual(['p1', 'p2']);
   });
 });
+
+/**
+ * 2. Scan, F14: Der neue Eintrag lag als `stopped` in der Map, während enter()
+ * bereits awaitete. Ein zweiter, gleichzeitiger enter() erkannte ihn nicht als
+ * startend, legte einen eigenen an und startete dieselbe Sandbox ein zweites
+ * Mal — zwei VMs unter demselben msb-Namen und zwei ausgestellte VM-Tokens.
+ */
+describe('gleichzeitiges enter startet nur EINE Sandbox (F14)', () => {
+  test('drei parallele Aufrufe ergeben genau einen Provider-Start', async () => {
+    let starts = 0;
+    const provider: SandboxProvider = {
+      async start(): Promise<SandboxHandle> {
+        starts += 1;
+        await Bun.sleep(30);
+        return { previewHostPort: 1, previewStatus: () => 'ready' as const, stop: async () => {} };
+      },
+    };
+    const manager = new SandboxManager({
+      provider,
+      graceMs: 10_000,
+      idleMs: 10_000,
+      maxSandboxes: 8,
+    });
+
+    await Promise.all([
+      manager.enter(ctx('p1')),
+      manager.enter(ctx('p1')),
+      manager.enter(ctx('p1')),
+    ]);
+
+    expect(starts).toBe(1);
+    expect(manager.status('p1')).toBe('running');
+  });
+});

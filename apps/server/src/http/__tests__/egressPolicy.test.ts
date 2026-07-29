@@ -63,3 +63,26 @@ describe('checkTarget', () => {
     expect(checkTarget('example.com', Number.NaN, ['93.184.216.34'], policy).ok).toBe(false);
   });
 });
+
+/**
+ * 2. Scan, F9: Die Sperrliste verglich IPv6 als Zeichenkette — andere
+ * Schreibweisen derselben Adresse rutschten durch.
+ */
+describe('IPv6 wird numerisch geprüft, nicht als Text (F9)', () => {
+  test.each([
+    ['0:0:0:0:0:0:0:1', 'ausgeschriebenes Loopback'],
+    ['0000:0000:0000:0000:0000:0000:0000:0001', 'voll ausgeschrieben'],
+    ['::ffff:7f00:1', 'IPv4-mapped 127.0.0.1 in Hex'],
+    ['::ffff:c0a8:101', 'IPv4-mapped 192.168.1.1 in Hex'],
+    ['fe80:0:0:0:0:0:0:1', 'Link-Local ausgeschrieben'],
+    ['fd12:3456::1', 'ULA'],
+    ['FC00::1', 'ULA in Großschreibung'],
+    ['ff02::1', 'Multicast'],
+  ])('%s ist blockiert (%s)', (ip) => {
+    expect(isBlockedIp(ip)).toBe(true);
+  });
+
+  test.each([['2606:4700::1111'], ['2001:db8::1']])('%s bleibt erlaubt', (ip) => {
+    expect(isBlockedIp(ip)).toBe(false);
+  });
+});

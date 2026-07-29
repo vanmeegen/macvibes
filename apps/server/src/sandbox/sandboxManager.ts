@@ -91,12 +91,14 @@ export class SandboxManager {
       stopPromise: null,
     };
     this.entries.set(context.projectId, entry);
-
-    await this.evictLeastActiveIfNeeded(context.projectId);
-
+    // Status und startPromise SYNCHRON setzen, bevor irgendein await folgt:
+    // sonst sieht ein zweiter enter() den Eintrag noch als `stopped`, legt
+    // einen eigenen an und startet dieselbe Sandbox ein zweites Mal — zwei
+    // VMs unter demselben msb-Namen und zwei ausgestellte VM-Tokens.
     this.setStatus(entry, 'starting');
     const startWork = (async () => {
       try {
+        await this.evictLeastActiveIfNeeded(context.projectId);
         entry.handle = await this.options.provider.start(context);
       } catch (error) {
         this.setStatus(entry, 'stopped');
