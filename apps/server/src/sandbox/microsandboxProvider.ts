@@ -55,6 +55,22 @@ export function microsandboxSandboxName(projectId: string): string {
 }
 
 /** Arbeitsverzeichnis in der VM — Mountpunkt des Projekt-Workspace. */
+/**
+ * Das `-p`-Argument für `msb run`: der Preview-Port der VM wird ausschließlich
+ * an das Host-Loopback gebunden (H1).
+ *
+ * Früher stand hier `0.0.0.0`, weil das iframe laut R7 direkt auf den
+ * gemappten Port zeigte. Seit dem Preview-Gateway ist das überholt: das iframe
+ * zeigt auf das Gateway (`PreviewModel.ts`), und das Gateway spricht die VM nur
+ * über 127.0.0.1 an (`previewGateway.ts`), ebenso die Status-Probe. Die
+ * LAN-Bindung hatte damit keine Funktion mehr, umging aber beide Kontrollen des
+ * Gateways: die Session-Prüfung (F19) und das Entfernen des Session-Cookies auf
+ * dem Weg in die VM (F2). Für Remote/LAN wird nur der Gateway-Port gebraucht.
+ */
+export function previewPortMapping(hostPort: number, guestPort: number): string {
+  return `127.0.0.1:${hostPort}:${guestPort}`;
+}
+
 const GUEST_WORKDIR = '/work';
 
 /**
@@ -174,11 +190,11 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       `${this.config.agentDaemon.bundleDir}:${VM_BIN_DIR}:ro`,
       '-w',
       GUEST_WORKDIR,
-      // 0.0.0.0: Preview ist im LAN erreichbar (R7/NFR). Bewusst das EINZIGE
-      // Port-Mapping — msb-Forwarder können still sterben (ADR 0001), der
-      // Status kommt deshalb über die Daemon-Verbindung statt über ein Mapping.
+      // Bewusst das EINZIGE Port-Mapping — msb-Forwarder können still sterben
+      // (ADR 0001), der Status kommt deshalb über die Daemon-Verbindung statt
+      // über ein Mapping.
       '-p',
-      `0.0.0.0:${hostPort}:${context.previewPort}`,
+      previewPortMapping(hostPort, context.previewPort),
       // Egress: öffentliches Internet (bun/npm) + Host-Gateway für den
       // Credential-Proxy (host.microsandbox.internal, B5c). Private Netze
       // sonst gesperrt — der Agent kommt nicht ins LAN.

@@ -52,6 +52,15 @@ und der Credential-Proxy (eigener ausgehender Kanal mit SSE-Streaming).
 - **Preview-Traffic mit durch den Daemon-WS tunneln:** hieße einen kompletten
   HTTP/WS-Proxy im Daemon nachzubauen (HMR, Streaming, Performance) — und das
   0.0.0.0-Mapping braucht es für den LAN-Zugriff ohnehin.
+
+  > **Nachtrag (2026-07-30, Security-Scan 3, H1):** Der letzte Halbsatz gilt
+  > nicht mehr. Seit dem Preview-Gateway läuft der LAN-Zugriff über dessen
+  > festen Port, und das Gateway spricht die VM nur über 127.0.0.1 an. Das
+  > Mapping ist deshalb auf `127.0.0.1` verengt — als 0.0.0.0 umging es die
+  > Session-Prüfung (F19) und das Cookie-Strippen (F2) des Gateways. Die
+  > Entscheidung dieses ADR (Status über die Daemon-Verbindung statt über ein
+  > Mapping) bleibt davon unberührt.
+
 - **msb-Fix abwarten/upstream:** Issue lohnt sich, ist aber außerhalb unserer
   Kontrolle; die Plattform darf nicht von der Bug-Freiheit des Sandboxers
   abhängen.

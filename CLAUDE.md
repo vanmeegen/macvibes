@@ -37,10 +37,12 @@ unmonitor` ≙ `failed`). Der Host **liest** den Status nur: über die
   (`Project.previewStatus`) ins UI-Overlay.
 
   **Preview-Gateway (`http/previewGateway.ts`):** Jede Preview läuft auf einem
-  dynamisch allokierten hohen VM-Port — für Remote-/VPN-Zugriff nicht
-  erreichbar (der Tunnel reicht nur bekannte feste Ports durch). Deshalb
+  dynamisch allokierten hohen VM-Port, der **nur an `127.0.0.1` gebunden** ist
+  (H1) — von außen also grundsätzlich nicht erreichbar. Deshalb
   reverse-proxied ein **Gateway auf einem festen Port** (`MACVIBES_PREVIEW_GATEWAY_PORT`,
-  Default 4173) alle Previews. Die iframe-URL ist `http://<host>:4173/p/<projectId>/`;
+  Default 4173) alle Previews. Es ist der **einzige** Weg zur Preview und
+  erzwingt damit unumgehbar die Session-Prüfung (F19) und das Entfernen des
+  Session-Cookies auf dem Weg in die VM (F2). Die iframe-URL ist `http://<host>:4173/p/<projectId>/`;
   das Gateway routet per **Referer** (parallelfest), sonst **Cookie**, zur
   richtigen VM (HTTP + HMR-WebSocket). Die Preview behält ihre eigene Origin →
   keine kaputten absoluten Asset-Pfade, kein Template-Eingriff. Für Remote muss

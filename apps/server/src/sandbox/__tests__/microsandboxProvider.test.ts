@@ -14,6 +14,7 @@ import {
   AGENT_CONFIG_GUEST_DIR,
   MicrosandboxSandboxProvider,
   msbAvailable,
+  previewPortMapping,
 } from '../microsandboxProvider';
 import { runMsb } from '../msb';
 import type { SandboxHandle } from '../provider';
@@ -65,6 +66,22 @@ afterEach(async () => {
 
 afterAll(async () => {
   if (bundleDir.length > 0) await removeDir(bundleDir);
+});
+
+// Läuft immer (reine Funktion, kein msb nötig).
+describe('Preview-Port-Mapping (H1)', () => {
+  test('bindet den VM-Port ausschließlich an das Host-Loopback', () => {
+    expect(previewPortMapping(43210, 5173)).toBe('127.0.0.1:43210:5173');
+  });
+
+  test('veröffentlicht den Port NICHT im LAN', () => {
+    // 0.0.0.0 machte den hohen VM-Port direkt aus dem LAN erreichbar und
+    // umging damit beide Kontrollen des Preview-Gateways: die Session-Prüfung
+    // (F19) und das Entfernen des Session-Cookies auf dem Weg in die VM (F2).
+    const mapping = previewPortMapping(43210, 5173);
+    expect(mapping).not.toContain('0.0.0.0');
+    expect(mapping.startsWith('127.0.0.1:')).toBe(true);
+  });
 });
 
 /** Provider-Konfiguration mit totem Gateway — der Daemon idlet nur (Reconnects). */

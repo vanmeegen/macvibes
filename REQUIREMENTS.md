@@ -190,12 +190,16 @@ Wie bei Lovable: man sieht immer live, welche App gerade gebaut wird.
 - [ ] In jeder Sandbox läuft zusätzlich zum Agenten der Preview-Server des
       Projekts, gestartet über das `devCommand` aus den Projekt-Metadaten.
 - [ ] Der `previewPort` der VM wird beim Start auf einen freien Host-Port
-      gemappt; das iframe der Chat-Page zeigt direkt auf diesen Port und
-      verwendet dabei den Hostnamen, über den die Plattform aufgerufen wurde
-      (LAN-tauglich, kein hartes `localhost`).
+      gemappt — ausschließlich an `127.0.0.1`, nicht ins LAN. Erreichbar ist die
+      Preview nur über das Preview-Gateway auf seinem festen Port; das iframe der
+      Chat-Page zeigt dorthin (`/p/<projectId>/`) und verwendet den Hostnamen,
+      über den die Plattform aufgerufen wurde (LAN-tauglich, kein hartes
+      `localhost`). Das Gateway ist damit der einzige Weg zur Preview und kann
+      seine Session-Prüfung (F19) und das Entfernen des Session-Cookies auf dem
+      Weg in die VM (F2) nicht umgangen bekommen.
 - [ ] Ändert der Agent Code, aktualisiert sich die Preview automatisch
       (HMR bzw. Auto-Reload) — ohne manuelles Eingreifen; der HMR-WebSocket
-      funktioniert über das Port-Mapping.
+      funktioniert über das Gateway.
 - [ ] Ist die App (noch) nicht lauffähig, zeigt die Preview einen klaren
       Zustand (z. B. Build-Fehler / „Preview nicht verfügbar") statt einer
       leeren Fläche.
