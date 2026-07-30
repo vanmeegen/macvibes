@@ -8,8 +8,8 @@ import {
 } from '../services/workspaceService';
 import { baselineBootstrapScript, baselineExists, baselineSnapshotName } from './baselineService';
 import { httpProbe } from './httpProbe';
-import { MicrosandboxError, runMsb } from './msb';
-import { removeSandbox, stopSandbox, waitForSandboxReady } from './msbClient';
+import { MicrosandboxError } from './msb';
+import { removeSandbox, startSandbox, stopSandbox, waitForSandboxReady } from './msbClient';
 import { PreviewStatusPoller } from './previewStatusPoller';
 import { PushedPreviewStatus } from './previewStatusPush';
 import { PortAllocator } from './portService';
@@ -193,48 +193,24 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     // z. B. vite in .bin.
     const bootstrap = baselineBootstrapScript;
 
-    await runMsb([
-      'run',
-      '-d',
-      '--no-tty',
-      '--replace',
-      '-q',
-      '--name',
+    await startSandbox({
       name,
-      '-v',
-      mountSource(workspaceDir, GUEST_WORKDIR),
-      '-v',
-      mountSource(agentConfigDir, AGENT_CONFIG_GUEST_DIR),
-      '-v',
-      mountSource(bunCacheDir, BUN_CACHE_GUEST_DIR),
-      '-v',
-      mountSource(etcDir, VM_ETC_DIR, 'ro'),
-      '-v',
-      mountSource(this.config.agentDaemon.bundleDir, VM_BIN_DIR, 'ro'),
-      '-w',
-      GUEST_WORKDIR,
-      // Bewusst das EINZIGE Port-Mapping — msb-Forwarder können still sterben
-      // (ADR 0001), der Status kommt deshalb über die Daemon-Verbindung statt
-      // über ein Mapping.
-      '-p',
-      previewPortMapping(hostPort, context.previewPort),
-      // Egress: öffentliches Internet (bun/npm) + Host-Gateway für den
-      // Credential-Proxy (host.microsandbox.internal, B5c). Private Netze
-      // sonst gesperrt — der Agent kommt nicht ins LAN.
-      '--net-rule',
-      'allow@public,allow@172.16.0.0/12',
-      '-c',
-      String(this.config.cpus),
-      '-m',
-      `${this.config.memoryMib}M`,
-      // msb 0.6.8 hat `--snapshot` in `--from-snapshot` umbenannt (brechend).
-      '--from-snapshot',
-      baselineSnapshotName(context.templateDir),
-      '--',
-      'sh',
-      '-c',
-      `${bootstrap}; ${services.pid1Command}`,
-    ]);
+      snapshot: baselineSnapshotName(context.templateDir),
+      workdir: GUEST_WORKDIR,
+      cpus: this.config.cpus,
+      memoryMib: this.config.memoryMib,
+      previewHostPort: hostPort,
+      previewGuestPort: context.previewPort,
+      mounts: [
+        { host: workspaceDir, guest: GUEST_WORKDIR },
+        { host: agentConfigDir, guest: AGENT_CONFIG_GUEST_DIR },
+        { host: bunCacheDir, guest: BUN_CACHE_GUEST_DIR },
+        { host: etcDir, guest: VM_ETC_DIR, readonly: true },
+        { host: this.config.agentDaemon.bundleDir, guest: VM_BIN_DIR, readonly: true },
+      ],
+      // Absoluter Pfad: das SDK lehnt ein blosses 'sh' ab (die CLI nahm es an).
+      command: ['/bin/sh', '-c', `${bootstrap}; ${services.pid1Command}`],
+    });
     // `msb run -d` kehrt zurück, bevor der Gast-Agent-Endpunkt bereit ist —
     // ohne dieses Warten scheitern frühe execs ("no agent endpoint found").
     //

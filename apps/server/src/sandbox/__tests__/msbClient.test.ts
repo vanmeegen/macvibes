@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { SandboxNotFoundError } from 'microsandbox';
 import {
+  buildSandboxConfig,
   istSandboxNichtGefunden,
   istSnapshotNichtGefunden,
   msbAvailable,
@@ -96,5 +97,78 @@ describe('waitForSandboxReady', () => {
     });
     await expect(versuch).rejects.toThrow(/kaputt/);
     await expect(versuch).rejects.toThrow(/agent nicht erreichbar/);
+  });
+});
+
+/**
+ * Die Startkonfiguration ist der sicherheitskritischste Teil des Umstiegs:
+ * Egress-Policy, Port-Bindung und Nur-Lese-Mounts hängen daran. `build()`
+ * liefert sie als Daten, ohne eine VM zu starten — deshalb ist sie hier
+ * vollständig prüfbar.
+ *
+ * Die Erwartungswerte stammen NICHT aus dem Kopf, sondern aus der
+ * Konfiguration, die die CLI mit `--net-rule 'allow@public,allow@172.16.0.0/12'`
+ * erzeugt hat (per configJson ausgelesen und verglichen).
+ */
+describe('Startkonfiguration (Übersetzung der bisherigen CLI-Aufrufe)', () => {
+  const spec = {
+    name: 'macvibes-test',
+    snapshot: 'macvibes-tpl-pwa',
+    workdir: '/work',
+    cpus: 2,
+    memoryMib: 1024,
+    previewHostPort: 43210,
+    previewGuestPort: 5173,
+    mounts: [
+      { host: '/private/tmp', guest: '/work' },
+      { host: '/private/tmp', guest: '/etc/macvibes', readonly: true },
+    ],
+    command: ['/bin/sh', '-c', 'echo hallo'],
+  };
+
+  test('sperrt Egress per Default und erlaubt nur öffentlich + Host-Gateway', async () => {
+    const cfg = JSON.parse(JSON.stringify(await buildSandboxConfig(spec)));
+    const policy = cfg.network.policy;
+    expect(policy.defaultEgress).toBe('deny');
+    expect(policy.defaultIngress).toBe('allow');
+    expect(policy.rules).toHaveLength(2);
+    expect(policy.rules[0].destination).toEqual({ group: 'public' });
+    expect(policy.rules[0].action).toBe('allow');
+    expect(policy.rules[1].destination).toEqual({ cidr: '172.16.0.0/12' });
+    expect(policy.rules[1].action).toBe('allow');
+  });
+
+  test('bindet den Preview-Port ausschließlich ans Loopback (H1)', async () => {
+    const cfg = JSON.parse(JSON.stringify(await buildSandboxConfig(spec)));
+    // Der Port MUSS im selben network()-Aufruf gesetzt werden wie die Policy —
+    // sonst ersetzt der spätere Aufruf die Netzkonfiguration und die Bindung
+    // verschwindet stillschweigend (ports: []), die Preview wäre tot.
+    const ports = cfg.network.ports;
+    expect(ports).toHaveLength(1);
+    expect(ports[0].hostBind).toBe('127.0.0.1');
+    expect(ports[0].hostPort).toBe(43210);
+    expect(ports[0].guestPort).toBe(5173);
+  });
+
+  test('übernimmt Nur-Lese-Mounts als solche', async () => {
+    const cfg = JSON.parse(JSON.stringify(await buildSandboxConfig(spec)));
+    const nurLesend = cfg.mounts.filter(
+      (m: { options: { readonly: boolean } }) => m.options.readonly,
+    );
+    expect(nurLesend).toHaveLength(1);
+    expect(nurLesend[0].guest).toBe('/etc/macvibes');
+    expect(cfg.mounts).toHaveLength(2);
+  });
+
+  test('übernimmt Snapshot, Arbeitsverzeichnis und Ressourcen', async () => {
+    const cfg = JSON.parse(JSON.stringify(await buildSandboxConfig(spec)));
+    // Der Snapshot-Name steht nicht mehr im gebauten Config — er ist zum
+    // Image des Snapshots aufgelöst. Dass er angewandt wurde, zeigt genau das:
+    // ohne fromSnapshot hätte der Builder ein explizites Image gebraucht.
+    expect(cfg.image.Oci.reference).toContain('oven/bun');
+    expect(cfg.runtime.workdir).toBe('/work');
+    expect(cfg.resources.cpus).toBe(2);
+    expect(cfg.resources.memoryMib).toBe(1024);
+    expect(cfg.init).toEqual({ cmd: '/bin/sh', args: ['-c', 'echo hallo'], env: [] });
   });
 });

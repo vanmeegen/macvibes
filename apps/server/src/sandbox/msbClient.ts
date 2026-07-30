@@ -13,7 +13,8 @@
  * der Kennung `[SnapshotNotFound]` im Text. Beides wird hier gekapselt, damit
  * der Rest der Anwendung nur noch eindeutige Begriffe sieht.
  */
-import { Sandbox, SandboxNotFoundError, Snapshot } from 'microsandbox';
+import { realpathSync } from 'node:fs';
+import { NetworkPolicy, Sandbox, SandboxNotFoundError, Snapshot } from 'microsandbox';
 
 /** Fehlerbegriff der Sandbox-Schicht — ersetzt den CLI-weiten MicrosandboxError. */
 export class SandboxRuntimeError extends Error {
@@ -155,5 +156,116 @@ export async function waitForSandboxReady(
       );
     }
     await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}
+
+/** Ein Mount in die Sandbox. `readonly` entspricht dem bisherigen `:ro`. */
+export interface SandboxMount {
+  host: string;
+  guest: string;
+  readonly?: boolean;
+}
+
+/** Alles, was macvibes zum Start einer Projekt-VM braucht. */
+export interface SandboxSpec {
+  name: string;
+  /** Baseline-Snapshot, aus dem geforkt wird (Pflicht — ohne bootet nichts). */
+  snapshot: string;
+  workdir: string;
+  cpus: number;
+  memoryMib: number;
+  previewHostPort: number;
+  previewGuestPort: number;
+  mounts: SandboxMount[];
+  /** PID-1-Kommando, z. B. ['sh', '-c', '<bootstrap>; <supervisor>']. */
+  command: string[];
+}
+
+/**
+ * Übersetzt eine SandboxSpec in die Startkonfiguration.
+ *
+ * Getrennt von `startSandbox`, weil `build()` die Konfiguration als Daten
+ * liefert, ohne eine VM zu starten: die sicherheitskritischen Teile
+ * (Egress-Policy, Loopback-Bindung des Preview-Ports, Nur-Lese-Mounts) sind
+ * damit im Test prüfbar, statt nur im laufenden System.
+ *
+ * Die Netz-Policy bildet exakt das ab, was vorher
+ * `--net-rule 'allow@public,allow@172.16.0.0/12'` erzeugte — abgeglichen mit
+ * der Konfiguration einer per CLI gestarteten Sandbox: Egress standardmäßig
+ * gesperrt (der Agent kommt nicht ins LAN und nicht ans Host-Loopback),
+ * erlaubt sind das öffentliche Netz (bun/npm/Claude) und das Host-Gateway für
+ * den Credential-Proxy.
+ */
+export async function buildSandboxConfig(spec: SandboxSpec): Promise<unknown> {
+  return bauBuilder(spec).build();
+}
+
+/**
+ * Egress-Policy der Projekt-VMs. Entspricht Zeichen für Zeichen der
+ * Konfiguration, die vorher `--net-rule 'allow@public,allow@172.16.0.0/12'`
+ * erzeugte (gegen configJson einer per CLI gestarteten Sandbox abgeglichen):
+ * Egress standardmäßig gesperrt — der Agent erreicht weder LAN noch das
+ * Host-Loopback —, erlaubt sind das öffentliche Netz (bun/npm/Claude) und das
+ * Host-Gateway für den Credential-Proxy.
+ */
+function egressPolicy() {
+  return NetworkPolicy.builder()
+    .defaultEgress('deny')
+    .defaultIngress('allow')
+    .egress((r) => r.allowPublic())
+    .egress((r) => r.allow((d) => d.cidr('172.16.0.0/12')));
+}
+
+function bauBuilder(spec: SandboxSpec) {
+  let builder = Sandbox.builder(spec.name)
+    .fromSnapshot(spec.snapshot)
+    .workdir(spec.workdir)
+    .cpus(spec.cpus)
+    .memory(spec.memoryMib)
+    .detached(true)
+    .replace()
+    .quietLogs()
+    // Port UND Policy müssen im SELBEN network()-Aufruf stehen: ein späteres
+    // network() ersetzt die Netzkonfiguration, ein davor gesetzter portBind
+    // ginge also stillschweigend verloren (im gebauten Config als ports: []
+    // sichtbar — die Preview wäre nicht erreichbar).
+    .network((n) =>
+      n
+        // H1: ausschließlich ans Host-Loopback binden. Erreichbar ist die
+        // Preview nur über das Gateway, das die Session prüft.
+        .portBind('127.0.0.1', spec.previewHostPort, spec.previewGuestPort)
+        .policy(egressPolicy()),
+    );
+
+  for (const mount of spec.mounts) {
+    builder = builder.volume(mount.guest, (b) => {
+      // Quelle auflösen: msb folgt Symlinks im Quellpfad seit 0.6.8 nicht mehr.
+      const gebunden = b.bind(realpathSync(mount.host));
+      return mount.readonly === true ? gebunden.readonly() : gebunden;
+    });
+  }
+
+  const [cmd, ...args] = spec.command;
+  if (cmd === undefined) {
+    throw new SandboxRuntimeError(`Sandbox „${spec.name}": leeres Startkommando`);
+  }
+  // init verlangt einen absoluten Pfad (oder `auto`) — 'sh' allein wird
+  // abgelehnt. Die CLI nahm das noch entgegen.
+  return builder.init(cmd, args);
+}
+
+/**
+ * Startet eine Projekt-VM im Hintergrund und wartet NICHT auf ihre
+ * Bereitschaft — dafür ist `waitForSandboxReady` da (der Agent-Endpunkt ist
+ * erst später erreichbar).
+ */
+export async function startSandbox(spec: SandboxSpec): Promise<void> {
+  try {
+    await bauBuilder(spec).create();
+  } catch (error) {
+    throw new SandboxRuntimeError(
+      `Sandbox „${spec.name}" konnte nicht gestartet werden: ${fehlertext(error)}`,
+      error,
+    );
   }
 }
