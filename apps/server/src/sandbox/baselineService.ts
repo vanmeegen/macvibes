@@ -1,4 +1,14 @@
-import { MicrosandboxError, runMsb, waitForExecReady } from './msb';
+import {
+  createSnapshot,
+  execShell,
+  removeSandbox,
+  removeSnapshot,
+  SandboxRuntimeError,
+  snapshotExists,
+  startSandbox,
+  stopSandbox,
+  waitForSandboxReady,
+} from './msbClient';
 
 /**
  * Template-Baselines (R9/PRD „Template-Baselines"): pro Template wird einmal
@@ -22,7 +32,6 @@ export function baselineSnapshotName(templateDir: string): string {
  * („bitte `bun run baselines` ausführen"). Nur ein echtes „nicht gefunden"
  * ergibt false, alles andere fliegt weiter.
  */
-import { snapshotExists } from './msbClient';
 export { snapshotExists };
 
 export async function baselineExists(templateDir: string): Promise<boolean> {
@@ -30,13 +39,7 @@ export async function baselineExists(templateDir: string): Promise<boolean> {
 }
 
 /** Entfernt einen Snapshot (für Tests — Produktions-Baselines nicht anfassen). */
-export async function removeSnapshot(name: string): Promise<void> {
-  try {
-    await runMsb(['snapshot', 'remove', name]);
-  } catch (error) {
-    if (!(error instanceof MicrosandboxError)) throw error;
-  }
-}
+export { removeSnapshot };
 
 export interface BuildBaselineOptions {
   templatesDir: string;
@@ -68,27 +71,27 @@ export async function buildTemplateBaseline(options: BuildBaselineOptions): Prom
   const templatePath = `${options.templatesDir}/${options.templateDir}`;
 
   // Builder-VM: Template read-only mounten, VM-lokal kopieren und installieren.
-  await runMsb([
-    'run',
-    '-d',
-    '--no-tty',
-    '--replace',
-    '-q',
-    '--name',
-    BUILDER_SANDBOX,
-    '-v',
-    `${templatePath}:/src:ro`,
-    options.image,
-    '--',
-    'sleep',
-    'infinity',
-  ]);
+  await startSandbox({
+    name: BUILDER_SANDBOX,
+    image: options.image,
+    workdir: '/',
+    cpus: 2,
+    memoryMib: 2048,
+    // Die Builder-VM braucht keine Preview; Port 0 = kein Mapping.
+    previewHostPort: 0,
+    previewGuestPort: 0,
+    mounts: [{ host: templatePath, guest: '/src', readonly: true }],
+    command: ['/bin/sleep', 'infinity'],
+    // Wie vorher (CLI ohne --net-rule): der Bau braucht apt und das
+    // npm-Registry. Die VM läuft ohne Agent und nur während des Baus.
+    netzwerk: 'unbeschraenkt',
+  });
 
   // Der Builder braucht dieselbe Ready-Wartezeit wie Projekt-VMs: `msb run -d`
   // kehrt zurück, bevor der Gast-exec-Endpunkt steht — ein sofortiges exec
   // stirbt sonst intermittierend mit "exec session ended without exit event"
   // (live getroffen beim Daemon-Integrationstest, 2026-07-06).
-  await waitForExecReady(BUILDER_SANDBOX);
+  await waitForSandboxReady(BUILDER_SANDBOX);
 
   // Ein exec pro Schritt statt eines Mega-Befehls: kurze exec-Sessions sind
   // bei msb deutlich robuster, und ein Fehler ist dem Schritt zuordenbar.
@@ -120,18 +123,19 @@ export async function buildTemplateBaseline(options: BuildBaselineOptions): Prom
   try {
     for (const step of steps) {
       try {
-        await runMsb(['exec', BUILDER_SANDBOX, '--', 'sh', '-c', step.script]);
+        await execShell(BUILDER_SANDBOX, step.script);
       } catch (error) {
-        throw new MicrosandboxError(
+        throw new SandboxRuntimeError(
           `Baseline-Schritt „${step.beschreibung}" fehlgeschlagen: ${String(error)}`,
+          error,
         );
       }
     }
-    await runMsb(['stop', BUILDER_SANDBOX]);
-    await runMsb(['snapshot', 'create', '--force', '-q', '--from', BUILDER_SANDBOX, snapshotName]);
+    await stopSandbox(BUILDER_SANDBOX);
+    await createSnapshot(snapshotName, BUILDER_SANDBOX);
   } finally {
     try {
-      await runMsb(['rm', BUILDER_SANDBOX]);
+      await removeSandbox(BUILDER_SANDBOX);
     } catch (error) {
       console.error(`Builder-Sandbox konnte nicht entfernt werden:`, error);
     }

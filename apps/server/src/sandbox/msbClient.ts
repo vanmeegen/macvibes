@@ -169,16 +169,29 @@ export interface SandboxMount {
 /** Alles, was macvibes zum Start einer Projekt-VM braucht. */
 export interface SandboxSpec {
   name: string;
-  /** Baseline-Snapshot, aus dem geforkt wird (Pflicht — ohne bootet nichts). */
-  snapshot: string;
+  /**
+   * Baseline-Snapshot, aus dem geforkt wird — der Normalfall für Projekt-VMs.
+   * Alternativ `image` für die Builder-VM, die den Snapshot erst erzeugt.
+   */
+  snapshot?: string;
+  /** OCI-Image statt Snapshot (Baseline-Bau). Genau eines von beiden. */
+  image?: string;
   workdir: string;
   cpus: number;
   memoryMib: number;
   previewHostPort: number;
   previewGuestPort: number;
   mounts: SandboxMount[];
-  /** PID-1-Kommando, z. B. ['sh', '-c', '<bootstrap>; <supervisor>']. */
+  /** PID-1-Kommando, z. B. ['/bin/sh', '-c', '<bootstrap>; <supervisor>']. */
   command: string[];
+  /**
+   * Netzzugang. `projekt` = die gehärtete Egress-Policy (Default): Egress
+   * gesperrt, erlaubt sind öffentliches Netz und Host-Gateway. `unbeschraenkt`
+   * = keine Policy — nötig für die Baseline-Builder-VM, die apt und das
+   * npm-Registry erreichen muss und die auch vorher (CLI ohne --net-rule)
+   * keine Beschränkung hatte. Sie läuft ohne Agent und nur beim Baseline-Bau.
+   */
+  netzwerk?: 'projekt' | 'unbeschraenkt';
 }
 
 /**
@@ -217,8 +230,17 @@ function egressPolicy() {
 }
 
 function bauBuilder(spec: SandboxSpec) {
-  let builder = Sandbox.builder(spec.name)
-    .fromSnapshot(spec.snapshot)
+  if ((spec.snapshot === undefined) === (spec.image === undefined)) {
+    throw new SandboxRuntimeError(
+      `Sandbox „${spec.name}": genau eines von snapshot oder image angeben`,
+    );
+  }
+  const basis = Sandbox.builder(spec.name);
+  let builder = (
+    spec.snapshot !== undefined
+      ? basis.fromSnapshot(spec.snapshot)
+      : basis.image(spec.image as string)
+  )
     .workdir(spec.workdir)
     .cpus(spec.cpus)
     .memory(spec.memoryMib)
@@ -229,13 +251,15 @@ function bauBuilder(spec: SandboxSpec) {
     // network() ersetzt die Netzkonfiguration, ein davor gesetzter portBind
     // ginge also stillschweigend verloren (im gebauten Config als ports: []
     // sichtbar — die Preview wäre nicht erreichbar).
-    .network((n) =>
-      n
-        // H1: ausschließlich ans Host-Loopback binden. Erreichbar ist die
-        // Preview nur über das Gateway, das die Session prüft.
-        .portBind('127.0.0.1', spec.previewHostPort, spec.previewGuestPort)
-        .policy(egressPolicy()),
-    );
+    .network((n) => {
+      // H1: ausschließlich ans Host-Loopback binden. Erreichbar ist die
+      // Preview nur über das Gateway, das die Session prüft.
+      const mitPort =
+        spec.previewHostPort > 0
+          ? n.portBind('127.0.0.1', spec.previewHostPort, spec.previewGuestPort)
+          : n;
+      return spec.netzwerk === 'unbeschraenkt' ? mitPort : mitPort.policy(egressPolicy());
+    });
 
   for (const mount of spec.mounts) {
     builder = builder.volume(mount.guest, (b) => {
@@ -265,6 +289,56 @@ export async function startSandbox(spec: SandboxSpec): Promise<void> {
   } catch (error) {
     throw new SandboxRuntimeError(
       `Sandbox „${spec.name}" konnte nicht gestartet werden: ${fehlertext(error)}`,
+      error,
+    );
+  }
+}
+
+/**
+ * Führt ein Shell-Skript in einer laufenden Sandbox aus und liefert stdout.
+ * Ein Exit-Code ungleich 0 ist ein Fehler — vorher ging er im generischen
+ * „msb exec schlug fehl" unter, ohne stderr.
+ */
+export async function execShell(name: string, script: string): Promise<string> {
+  try {
+    const handle = await Sandbox.get(name);
+    const sandbox = await handle.connect();
+    const out = await sandbox.shell(script);
+    if (!out.success) {
+      throw new SandboxRuntimeError(
+        `Kommando in „${name}" endete mit Code ${out.code}: ${out.stderr().trim().slice(0, 500)}`,
+      );
+    }
+    return out.stdout();
+  } catch (error) {
+    if (error instanceof SandboxRuntimeError) throw error;
+    throw new SandboxRuntimeError(
+      `Kommando in „${name}" fehlgeschlagen: ${fehlertext(error)}`,
+      error,
+    );
+  }
+}
+
+/** Erzeugt einen Snapshot aus einer (gestoppten) Sandbox. */
+export async function createSnapshot(name: string, fromSandbox: string): Promise<void> {
+  try {
+    await Snapshot.builder(name).fromSandbox(fromSandbox).force().create();
+  } catch (error) {
+    throw new SandboxRuntimeError(
+      `Snapshot „${name}" konnte nicht erzeugt werden: ${fehlertext(error)}`,
+      error,
+    );
+  }
+}
+
+/** Entfernt einen Snapshot. Nicht vorhanden = kein Fehler. */
+export async function removeSnapshot(name: string): Promise<void> {
+  try {
+    await Snapshot.remove(name, { force: true });
+  } catch (error) {
+    if (istSnapshotNichtGefunden(error)) return;
+    throw new SandboxRuntimeError(
+      `Snapshot „${name}" konnte nicht entfernt werden: ${fehlertext(error)}`,
       error,
     );
   }
