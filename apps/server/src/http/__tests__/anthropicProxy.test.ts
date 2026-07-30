@@ -140,6 +140,75 @@ describe('Anthropic-Credential-Proxy (B5c, R10/NFR)', () => {
   });
 });
 
+describe('Pfad-Allowlist (H9): der Gast bestimmt den Upstream-Pfad nicht', () => {
+  test('lässt die tatsächlich benötigten API-Pfade durch (inkl. Query)', async () => {
+    const proxy = makeProxy();
+    for (const path of [
+      '/v1/messages',
+      '/v1/messages?beta=true',
+      '/v1/messages/count_tokens',
+      '/v1/models',
+      '/v1/models/claude-sonnet-5',
+    ]) {
+      seen.length = 0;
+      const method = path.startsWith('/v1/models') ? 'GET' : 'POST';
+      const request = new Request(`http://host.microsandbox.internal:4000/anthropic${path}`, {
+        method,
+        headers: { 'content-type': 'application/json', [PROXY_TOKEN_HEADER]: 'geheim-123' },
+        ...(method === 'POST' ? { body: JSON.stringify({ model: 'claude', max_tokens: 1 }) } : {}),
+      });
+      const response = await proxy(request, path);
+      expect(response.status).toBe(200);
+      expect(seen).toHaveLength(1);
+    }
+  });
+
+  test('weist gastgewählte Fremdpfade ab (404), Upstream bleibt unberührt', async () => {
+    const proxy = makeProxy();
+    // Der Gast kontrolliert den Pfad vollständig; ohne Allowlist landet er
+    // damit auf beliebigen Endpunkten des Upstreams — bei der Catch-all-Route
+    // ist das ein auth-loser Host-Loopback-Dienst.
+    for (const path of [
+      '/',
+      '/chat/completions',
+      '/v1/organizations/me',
+      '/model/info',
+      '/v1/messages/../../admin',
+      '/V1/MESSAGES',
+    ]) {
+      seen.length = 0;
+      const response = await proxy(vmRequest({}, undefined), path);
+      expect(response.status).toBe(404);
+      expect(seen).toHaveLength(0);
+    }
+  });
+
+  test('weist unpassende Methoden ab (405), Upstream bleibt unberührt', async () => {
+    const proxy = makeProxy();
+    seen.length = 0;
+    const request = new Request('http://host.microsandbox.internal:4000/anthropic/v1/messages', {
+      method: 'DELETE',
+      headers: { [PROXY_TOKEN_HEADER]: 'geheim-123' },
+    });
+    const response = await proxy(request, '/v1/messages');
+    expect(response.status).toBe(405);
+    expect(seen).toHaveLength(0);
+  });
+
+  test('prüft die Allowlist VOR dem Puffern des Bodys', async () => {
+    // Sonst bleibt der Body-Puffer (H5) auch auf abgewiesenen Pfaden ein
+    // Speicher-Hebel für die untrusted VM.
+    const proxy = makeProxy();
+    seen.length = 0;
+    const request = vmRequest({}, JSON.stringify({ model: 'claude', max_tokens: 1 }));
+    const response = await proxy(request, '/fremd');
+    expect(response.status).toBe(404);
+    // bodyUsed bleibt false: der Proxy hat request.text() nie aufgerufen.
+    expect(request.bodyUsed).toBe(false);
+    expect(seen).toHaveLength(0);
+  });
+});
+
 describe('Modell-Routing (Modellwahl pro Chat: Claude API vs. lokaler Router)', () => {
   // Zweiter Upstream: der lokale Shim/Router (LiteLLM) für qwen-Modelle.
   let localUpstream: ReturnType<typeof Bun.serve>;

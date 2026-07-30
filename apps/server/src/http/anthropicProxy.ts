@@ -6,6 +6,8 @@
  * unverändert an die Claude API durch.
  */
 
+import { logSafe } from '../logSafe';
+
 export const PROXY_TOKEN_HEADER = 'x-macvibes-proxy-token';
 
 /** Abo-Token (claude setup-token) werden nur mit diesem Beta-Header akzeptiert. */
@@ -163,6 +165,38 @@ function routeUsable(route: ModelRoute): boolean {
   return route.oauthToken != null || route.apiKey != null;
 }
 
+/**
+ * Pfad-Allowlist (H9). Der Gast bestimmt `upstreamPath` vollständig — ohne
+ * diese Prüfung klebt der Proxy ihn an den Upstream und die untrusted VM
+ * erreicht damit JEDEN Endpunkt: bei der Catch-all-Route den auth-losen
+ * lokalen Router auf dem Host-Loopback (den die Egress-Policy bewusst sperrt),
+ * bei der Claude-Route die gesamte API-Fläche mit dem Host-Token statt nur
+ * Inferenz. Erlaubt ist deshalb nur, was der Agent wirklich braucht.
+ */
+const ALLOWED_PATHS: ReadonlyArray<{ pathname: RegExp; methods: ReadonlyArray<string> }> = [
+  { pathname: /^\/v1\/messages$/, methods: ['POST'] },
+  { pathname: /^\/v1\/messages\/count_tokens$/, methods: ['POST'] },
+  // Modell-Liste und Einzelabfrage: nur lesend.
+  { pathname: /^\/v1\/models$/, methods: ['GET'] },
+  { pathname: /^\/v1\/models\/[A-Za-z0-9._-]+$/, methods: ['GET'] },
+];
+
+export type PathVerdict = 'ok' | 'unbekannter-pfad' | 'falsche-methode';
+
+/**
+ * Prüft den gastgewählten Pfad gegen die Allowlist. `upstreamPath` ist
+ * `<pathname><search>`; die Query bleibt frei (z. B. `?beta=true`), der
+ * Pfad selbst muss exakt passen — Groß-/Kleinschreibung und `..` inklusive.
+ */
+export function checkUpstreamPath(upstreamPath: string, method: string): PathVerdict {
+  const queryStart = upstreamPath.indexOf('?');
+  const pathname = queryStart === -1 ? upstreamPath : upstreamPath.slice(0, queryStart);
+  const matched = ALLOWED_PATHS.filter((entry) => entry.pathname.test(pathname));
+  if (matched.length === 0) return 'unbekannter-pfad';
+  if (!matched.some((entry) => entry.methods.includes(method))) return 'falsche-methode';
+  return 'ok';
+}
+
 export function createAnthropicProxy(config: AnthropicProxyConfig): AnthropicProxyHandler {
   // Routen-Tabelle (Reihenfolge = Priorität): Zusatz-Routen (OpenRouter-Stil),
   // dann claude-* an die Anthropic-API, dann Catch-all an den lokalen Router.
@@ -196,6 +230,22 @@ export function createAnthropicProxy(config: AnthropicProxyConfig): AnthropicPro
   return async (request, upstreamPath) => {
     if (config.verifyToken(request.headers.get(PROXY_TOKEN_HEADER)) === null) {
       return new Response('Ungültiger Proxy-Token', { status: 401 });
+    }
+
+    // Allowlist VOR dem Puffern des Bodys (H9): ein abgewiesener Pfad darf der
+    // VM nicht einmal den Speicher-Hebel des Puffers lassen.
+    const verdict = checkUpstreamPath(upstreamPath, request.method);
+    if (verdict !== 'ok') {
+      // Sichtbar machen, statt still zu brechen: sollte der Agent je einen
+      // legitimen Pfad brauchen, der hier fehlt, steht er im Log (H8: der
+      // Pfad ist gastkontrolliert und muss escaped werden).
+      console.warn(
+        `Credential-Proxy: Pfad abgewiesen (${verdict}) — ` +
+          `${logSafe(request.method)} ${logSafe(upstreamPath)}`,
+      );
+      return verdict === 'unbekannter-pfad'
+        ? new Response('Pfad nicht erlaubt', { status: 404 })
+        : new Response('Methode nicht erlaubt', { status: 405 });
     }
 
     const hasBody = request.method !== 'GET' && request.method !== 'HEAD';

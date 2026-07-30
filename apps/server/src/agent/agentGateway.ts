@@ -1,4 +1,5 @@
 import type { Server, ServerWebSocket, WebSocketHandler } from 'bun';
+import { logSafe } from '../logSafe';
 import type { VmTokenRegistry } from '../sandbox/vmTokens';
 import { AGENT_GATEWAY_PATH, parseDaemonToHost } from './daemon/protocol';
 import type { DaemonToHostMessage, HostToDaemonMessage } from './daemon/protocol';
@@ -47,8 +48,9 @@ export class AgentGateway {
     // Der Parameter darf der Identität nicht widersprechen — sonst wäre er
     // ein stiller Hinweis darauf, dass jemand etwas anderes versucht.
     if (claimed !== null && claimed !== identity.sandbox) {
+      // `claimed` kommt aus der Query der untrusted VM — escapen (H8).
       console.warn(
-        `AgentGateway: Token von ${identity.sandbox} beansprucht Sandbox ${claimed} — abgelehnt.`,
+        `AgentGateway: Token von ${identity.sandbox} beansprucht Sandbox ${logSafe(claimed)} — abgelehnt.`,
       );
       return new Response('Sandbox stimmt nicht zum Token', { status: 401 });
     }
@@ -168,7 +170,10 @@ export class AgentGateway {
     // eine ersetzte (Reconnect) darf den neuen Daemon nicht "trennen".
     if (this.connections.get(sandbox) !== ws) return;
     this.connections.delete(sandbox);
-    console.error(`Agent-Gateway: ${sandbox} getrennt (Code ${code ?? '?'}, ${reason ?? ''})`);
+    // `reason` stammt vom Daemon in der untrusted VM — escapen (H8).
+    console.error(
+      `Agent-Gateway: ${sandbox} getrennt (Code ${code ?? '?'}, ${logSafe(reason ?? '')})`,
+    );
     this.notify(sandbox, { kind: 'disconnected' });
   }
 
