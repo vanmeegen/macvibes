@@ -9,6 +9,13 @@ import { join } from 'node:path';
  * und die echte Datenbank bleiben unberührt.
  */
 const E2E_HOME = mkdtempSync(join(tmpdir(), 'macvibes-e2e-'));
+/**
+ * Bootstrap-Admin des E2E-Laufs. Seit H3 wird niemand mehr automatisch Admin —
+ * der Name muss benannt werden, sonst kann globalSetup keinen Admin anlegen und
+ * kein Test einen Nutzer freischalten.
+ */
+export const E2E_ADMIN_USERNAME = 'e2eadmin';
+
 export const E2E_API_PORT = 4600;
 export const E2E_WEB_PORT = 5175;
 
@@ -59,7 +66,7 @@ export default defineConfig({
         // Der Server lädt apps/server/.env mit — ohne dieses Leeren erbte der
         // E2E-Lauf den echten Bootstrap-Admin-Namen, und der Erst-Nutzer der
         // Testinstanz würde nicht mehr Admin (F8).
-        MACVIBES_ADMIN_USERNAME: '',
+        MACVIBES_ADMIN_USERNAME: E2E_ADMIN_USERNAME,
       },
     },
     {
