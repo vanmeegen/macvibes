@@ -14,16 +14,16 @@ export function baselineSnapshotName(templateDir: string): string {
   return `macvibes-tpl-${templateDir}`;
 }
 
-/** Existiert ein Snapshot mit diesem Namen? */
-export async function snapshotExists(name: string): Promise<boolean> {
-  try {
-    await runMsb(['snapshot', 'inspect', name]);
-    return true;
-  } catch (error) {
-    if (error instanceof MicrosandboxError) return false;
-    throw error;
-  }
-}
+/**
+ * Existiert ein Snapshot mit diesem Namen?
+ *
+ * Liegt jetzt im msbClient: vorher wurde JEDER msb-Fehler als „existiert nicht"
+ * gedeutet, sodass eine defekte msb-Installation als fehlende Baseline erschien
+ * („bitte `bun run baselines` ausführen"). Nur ein echtes „nicht gefunden"
+ * ergibt false, alles andere fliegt weiter.
+ */
+import { snapshotExists } from './msbClient';
+export { snapshotExists };
 
 export async function baselineExists(templateDir: string): Promise<boolean> {
   return snapshotExists(baselineSnapshotName(templateDir));
