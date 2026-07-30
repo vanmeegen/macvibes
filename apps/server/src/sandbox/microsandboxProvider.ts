@@ -8,7 +8,8 @@ import {
 } from '../services/workspaceService';
 import { baselineBootstrapScript, baselineExists, baselineSnapshotName } from './baselineService';
 import { httpProbe } from './httpProbe';
-import { MicrosandboxError, runMsb, waitForExecReady } from './msb';
+import { MicrosandboxError, runMsb } from './msb';
+import { removeSandbox, stopSandbox, waitForSandboxReady } from './msbClient';
 import { PreviewStatusPoller } from './previewStatusPoller';
 import { PushedPreviewStatus } from './previewStatusPush';
 import { PortAllocator } from './portService';
@@ -47,7 +48,7 @@ export interface MicrosandboxProviderConfig {
   /**
    * Warten, bis der Gast-Agent-Endpunkt bereit ist. Injizierbar, damit der
    * Aufräumpfad bei einem fehlgeschlagenen Start testbar ist (Default:
-   * `waitForExecReady` aus msb.ts).
+   * `waitForSandboxReady` aus msbClient.ts).
    */
   waitForReady?: (sandboxName: string) => Promise<void>;
 }
@@ -243,7 +244,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     // keinen stop() mehr gibt — Credential- und Egress-Proxy stünden ihr weiter
     // offen, obwohl der Start für den Aufrufer gescheitert ist.
     try {
-      await (this.config.waitForReady ?? waitForExecReady)(name);
+      await (this.config.waitForReady ?? waitForSandboxReady)(name);
     } catch (error) {
       this.config.agentDaemon.revokeToken?.(name);
       this.ports.release(hostPort);
@@ -285,15 +286,18 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
   }
 
   private async stopVm(name: string): Promise<void> {
+    // Eine bereits verschwundene Sandbox ist kein Fehler mehr (msbClient
+    // unterscheidet das), ein echter Fehler wird weiterhin geloggt statt
+    // verschluckt — Konvention: keine stillen Ausnahmen.
     try {
-      await runMsb(['stop', name]);
+      await stopSandbox(name);
     } catch (error) {
-      console.error(`msb stop ${name}:`, error);
+      console.error(`Sandbox ${name} stoppen:`, error);
     }
     try {
-      await runMsb(['rm', name]);
+      await removeSandbox(name);
     } catch (error) {
-      console.error(`msb rm ${name}:`, error);
+      console.error(`Sandbox ${name} entfernen:`, error);
     }
   }
 }

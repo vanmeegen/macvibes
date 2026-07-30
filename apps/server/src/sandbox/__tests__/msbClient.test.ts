@@ -4,7 +4,10 @@ import {
   istSandboxNichtGefunden,
   istSnapshotNichtGefunden,
   msbAvailable,
+  removeSandbox,
   snapshotExists,
+  stopSandbox,
+  waitForSandboxReady,
 } from '../msbClient';
 
 const available = await msbAvailable();
@@ -53,5 +56,45 @@ describe.skipIf(!available)('snapshotExists (gegen die echte Laufzeit)', () => {
 
   test('meldet einen fehlenden Snapshot als false', async () => {
     expect(await snapshotExists('macvibes-gibt-es-nicht-xyz')).toBe(false);
+  });
+});
+
+describe.skipIf(!available)('Stoppen und Entfernen (gegen die echte Laufzeit)', () => {
+  test('stopSandbox einer unbekannten Sandbox ist folgenlos', async () => {
+    // Idempotenz: der Aufräumpfad läuft auch, wenn schon jemand aufgeräumt hat.
+    await expect(stopSandbox('macvibes-gibt-es-nicht-xyz')).resolves.toBeUndefined();
+  });
+
+  test('removeSandbox einer unbekannten Sandbox ist folgenlos', async () => {
+    await expect(removeSandbox('macvibes-gibt-es-nicht-xyz')).resolves.toBeUndefined();
+  });
+});
+
+describe('waitForSandboxReady', () => {
+  test('kehrt zurück, sobald die Probe gelingt', async () => {
+    let versuche = 0;
+    await waitForSandboxReady('egal', {
+      timeoutMs: 1000,
+      intervalMs: 5,
+      probe: async () => {
+        versuche += 1;
+        if (versuche < 3) throw new Error('noch nicht bereit');
+      },
+    });
+    expect(versuche).toBe(3);
+  });
+
+  test('meldet nach der Frist einen Fehler, der die letzte Ursache nennt', async () => {
+    // Vorher stand hier nur „wurde nicht exec-bereit" plus String(error) —
+    // die eigentliche Ursache ging im Text unter.
+    const versuch = waitForSandboxReady('kaputt', {
+      timeoutMs: 30,
+      intervalMs: 5,
+      probe: async () => {
+        throw new Error('agent nicht erreichbar');
+      },
+    });
+    await expect(versuch).rejects.toThrow(/kaputt/);
+    await expect(versuch).rejects.toThrow(/agent nicht erreichbar/);
   });
 });

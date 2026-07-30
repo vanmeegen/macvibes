@@ -79,3 +79,81 @@ export async function snapshotExists(name: string): Promise<boolean> {
     );
   }
 }
+
+/**
+ * Stoppt eine Sandbox. Eine unbekannte Sandbox ist KEIN Fehler — der
+ * Aufräumpfad läuft auch, wenn schon jemand aufgeräumt hat. Jeder andere
+ * Fehler fliegt weiter, statt als „war halt schon weg" durchzugehen.
+ */
+export async function stopSandbox(name: string): Promise<void> {
+  try {
+    const handle = await Sandbox.get(name);
+    await handle.stop();
+  } catch (error) {
+    if (istSandboxNichtGefunden(error)) return;
+    throw new SandboxRuntimeError(
+      `Sandbox „${name}" konnte nicht gestoppt werden: ${fehlertext(error)}`,
+      error,
+    );
+  }
+}
+
+/** Entfernt eine Sandbox. Unbekannt = kein Fehler (siehe stopSandbox). */
+export async function removeSandbox(name: string): Promise<void> {
+  try {
+    await Sandbox.remove(name);
+  } catch (error) {
+    if (istSandboxNichtGefunden(error)) return;
+    throw new SandboxRuntimeError(
+      `Sandbox „${name}" konnte nicht entfernt werden: ${fehlertext(error)}`,
+      error,
+    );
+  }
+}
+
+export interface WaitForReadyOptions {
+  timeoutMs?: number;
+  intervalMs?: number;
+  /** Injizierbar für Tests; Default ist der Agent-Ping des SDK. */
+  probe?: (name: string) => Promise<unknown>;
+}
+
+/**
+ * Wartet, bis der Agent der Sandbox erreichbar ist.
+ *
+ * `msb run -d` kehrt zurück, bevor der Gast-Agent bereit ist — ohne dieses
+ * Warten scheitern frühe Aufrufe („no agent endpoint found"). Als Probe dient
+ * jetzt `ping()`, das genau diese Frage beantwortet; vorher wurde ersatzweise
+ * `exec … true` ausgeführt, also ein ganzer Kommandostart nur als Lebenszeichen.
+ */
+export async function waitForSandboxReady(
+  name: string,
+  options: WaitForReadyOptions = {},
+): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  const intervalMs = options.intervalMs ?? 250;
+  const probe =
+    options.probe ??
+    (async (n: string) => {
+      const handle = await Sandbox.get(n);
+      return handle.ping();
+    });
+
+  const start = Date.now();
+  let letzterFehler: unknown = null;
+  for (;;) {
+    try {
+      await probe(name);
+      return;
+    } catch (error) {
+      letzterFehler = error;
+    }
+    if (Date.now() - start >= timeoutMs) {
+      throw new SandboxRuntimeError(
+        `Sandbox „${name}" wurde nicht bereit (${timeoutMs} ms): ${fehlertext(letzterFehler)}`,
+        letzterFehler,
+      );
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}
