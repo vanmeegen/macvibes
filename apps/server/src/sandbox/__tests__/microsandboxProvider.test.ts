@@ -26,7 +26,7 @@ import {
   msbAvailable,
   previewPortMapping,
 } from '../microsandboxProvider';
-import { runMsb } from '../msb';
+import { execShell, listSandboxNames } from '../msbClient';
 import type { SandboxHandle } from '../provider';
 import type { MicrosandboxProviderConfig } from '../microsandboxProvider';
 
@@ -273,28 +273,17 @@ describe.skipIf(!available)('Agent-Config-Persistenz (R9, resume über VM-Neusta
       // 1. Start: Marker in die Agent-Config schreiben (simuliert eine Session-Datei).
       const h1 = await provider.start(ctx);
       activeHandle = h1;
-      await runMsb([
-        'exec',
-        'macvibes-cfg',
-        '--',
-        'sh',
-        '-c',
-        `echo sess-123 > ${AGENT_CONFIG_GUEST_DIR}/session-marker`,
-      ]);
+      await execShell('macvibes-cfg', `echo sess-123 > ${AGENT_CONFIG_GUEST_DIR}/session-marker`);
       await h1.stop();
       activeHandle = null;
 
       // 2. Neustart: frische VM (Fork aus Baseline) — der Marker muss noch da sein.
       const h2 = await provider.start(ctx);
       activeHandle = h2;
-      const marker = await runMsb([
-        'exec',
+      const marker = await execShell(
         'macvibes-cfg',
-        '--',
-        'sh',
-        '-c',
         `cat ${AGENT_CONFIG_GUEST_DIR}/session-marker 2>/dev/null || echo FEHLT`,
-      ]);
+      );
       expect(marker.trim()).toBe('sess-123');
 
       await h2.stop();
@@ -331,22 +320,11 @@ describe.skipIf(!available)('Delta-Install (ADR 0002: bun add überlebt VM-Neust
         JSON.stringify({ name: 'mv-testpkg', version: '1.0.0', main: 'index.js' }),
       );
       writeFileSync(join(vendorDir, 'index.js'), "module.exports = 'delta-lebt';");
-      await runMsb([
-        'exec',
+      await execShell('macvibes-delta', 'cd /work && bun add ./vendor/mv-testpkg 2>&1 | tail -1');
+      const first = await execShell(
         'macvibes-delta',
-        '--',
-        'sh',
-        '-c',
-        'cd /work && bun add ./vendor/mv-testpkg 2>&1 | tail -1',
-      ]);
-      const first = await runMsb([
-        'exec',
-        'macvibes-delta',
-        '--',
-        'bun',
-        '-e',
-        "console.log(require('mv-testpkg'))",
-      ]);
+        `bun -e "console.log(require('mv-testpkg'))"`,
+      );
       expect(first.trim()).toBe('delta-lebt');
       await h1.stop();
       activeHandle = null;
@@ -356,14 +334,10 @@ describe.skipIf(!available)('Delta-Install (ADR 0002: bun add überlebt VM-Neust
       const h2 = await provider.start(ctx);
       activeHandle = h2;
       await waitForHttp(`http://localhost:${h2.previewHostPort}/`);
-      const second = await runMsb([
-        'exec',
+      const second = await execShell(
         'macvibes-delta',
-        '--',
-        'bun',
-        '-e',
-        "console.log(require('mv-testpkg'))",
-      ]);
+        `bun -e "console.log(require('mv-testpkg'))"`,
+      );
       expect(second.trim()).toBe('delta-lebt');
 
       // Mechanismus unverändert: node_modules bleibt Symlink in den Fork.
@@ -425,7 +399,7 @@ describe.skipIf(!available)('In-VM-Supervision (R7, Crash-Recovery durch monit)'
       expect(await waitForHttp(url, 10_000)).toBe('hallo-preview');
 
       // Und die VM lebt weiter (msb exec funktioniert = Agent-Umgebung intakt).
-      const alive = await runMsb(['exec', 'macvibes-wd', '--', 'echo', 'vm-lebt']);
+      const alive = await execShell('macvibes-wd', 'echo vm-lebt');
       expect(alive).toContain('vm-lebt');
 
       await handle.stop();
@@ -482,7 +456,7 @@ describe.skipIf(!available)('Aufräumen nach fehlgeschlagenem Start', () => {
       // Token entwertet — sonst öffnete es Credential- und Egress-Proxy weiter.
       expect(widerrufen).toEqual(['macvibes-cleanup-1']);
       // Und die VM läuft nicht mehr.
-      const liste = await runMsb(['list']).catch(() => '');
+      const liste = (await listSandboxNames()).join('\n');
       expect(liste).not.toContain('macvibes-cleanup-1');
     },
     { timeout: 120_000 },
@@ -522,7 +496,7 @@ describe.skipIf(!available)('Belegter Sandbox-Name (Zombie nach Serverabsturz)',
       // Erster Start — die VM läuft.
       const provider1 = new MicrosandboxSandboxProvider(providerConfig(home, bare));
       await provider1.start(context);
-      expect(await runMsb(['list'])).toContain(name);
+      expect(await listSandboxNames()).toContain(name);
 
       // Kein stop(): die VM bleibt absichtlich stehen. Ein FRISCHER Provider
       // steht für den neu gestarteten Serverprozess, der sie nicht kennt.
@@ -531,7 +505,7 @@ describe.skipIf(!available)('Belegter Sandbox-Name (Zombie nach Serverabsturz)',
       activeHandle = handle2;
 
       // Der Start geht durch, und es bleibt genau EINE Sandbox dieses Namens.
-      const liste = await runMsb(['list']);
+      const liste = (await listSandboxNames()).join('\n');
       const treffer = liste.split('\n').filter((zeile) => zeile.includes(name));
       expect(treffer).toHaveLength(1);
       expect(handle2.previewHostPort).not.toBeNull();

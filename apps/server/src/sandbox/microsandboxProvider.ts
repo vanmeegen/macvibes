@@ -8,15 +8,20 @@ import {
 } from '../services/workspaceService';
 import { baselineBootstrapScript, baselineExists, baselineSnapshotName } from './baselineService';
 import { httpProbe } from './httpProbe';
-import { MicrosandboxError } from './msb';
-import { removeSandbox, startSandbox, stopSandbox, waitForSandboxReady } from './msbClient';
+import {
+  removeSandbox,
+  SandboxRuntimeError,
+  startSandbox,
+  stopSandbox,
+  waitForSandboxReady,
+} from './msbClient';
 import { PreviewStatusPoller } from './previewStatusPoller';
 import { PushedPreviewStatus } from './previewStatusPush';
 import { PortAllocator } from './portService';
 import { MONIT_HTTPD_PORT, VM_BIN_DIR, VM_ETC_DIR, buildVmServices } from './vmServices';
 import type { PreviewStatus, SandboxContext, SandboxHandle, SandboxProvider } from './provider';
 
-export { msbAvailable } from './msb';
+export { msbAvailable } from './msbClient';
 
 /** Konfiguration des Agent-Daemons (einziger Transport in die VM). */
 export interface AgentDaemonProviderConfig {
@@ -149,7 +154,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     // Baseline-Fork (B5b) ist Pflicht: der Snapshot enthält neben node_modules
     // auch tini/monit (PID 1) und das Agent SDK — ohne ihn bootet die VM nicht.
     if (!(await baselineExists(context.templateDir))) {
-      throw new MicrosandboxError(
+      throw new SandboxRuntimeError(
         `Keine Baseline für Template „${context.templateDir}" — bitte einmal ` +
           '`bun run baselines` ausführen (Supervisor und Agent-SDK stecken im Snapshot).',
       );

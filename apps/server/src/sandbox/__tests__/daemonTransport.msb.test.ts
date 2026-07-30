@@ -20,7 +20,7 @@ import { createProjectBranch, ensureBareRepo } from '../../services/gitService';
 import { workspaceDirFor } from '../../services/workspaceService';
 import { baselineSnapshotName, buildTemplateBaseline, removeSnapshot } from '../baselineService';
 import { MicrosandboxSandboxProvider, msbAvailable } from '../microsandboxProvider';
-import { runMsb } from '../msb';
+import { execShell } from '../msbClient';
 import type { SandboxHandle } from '../provider';
 
 /**
@@ -232,14 +232,10 @@ describe.skipIf(!enabled)(
 
         const readPid = async (): Promise<string> =>
           (
-            await runMsb([
-              'exec',
+            await execShell(
               SANDBOX_NAME,
-              '--',
-              'sh',
-              '-c',
               'cat /run/macvibes/agent-daemon.pid 2>/dev/null || echo leer',
-            ])
+            )
           ).trim();
         const pidVorher = await readPid();
         expect(pidVorher).not.toBe('leer');
@@ -265,14 +261,10 @@ describe.skipIf(!enabled)(
         // Diagnose bei Fehlschlag: Logs aus der VM sind die einzige Wahrheit.
         if (pidNachher === pidVorher) {
           const dump = async (datei: string): Promise<void> => {
-            const inhalt = await runMsb([
-              'exec',
+            const inhalt = await execShell(
               SANDBOX_NAME,
-              '--',
-              'sh',
-              '-c',
               `tail -40 ${datei} 2>/dev/null || echo "(fehlt: ${datei})"`,
-            ]).catch((e) => `Dump fehlgeschlagen: ${String(e)}`);
+            ).catch((e) => `Dump fehlgeschlagen: ${String(e)}`);
             console.log(`--- ${datei} ---\n${inhalt}`);
           };
           await dump('/var/log/macvibes-agent-daemon.log');
@@ -315,14 +307,10 @@ describe.skipIf(!enabled)(
         const completed = turn1.at(-1);
         if (completed?.type !== 'turn-completed') {
           console.log('Turn 1 scheiterte — Events:', JSON.stringify(turn1, null, 2));
-          const daemonLog = await runMsb([
-            'exec',
+          const daemonLog = await execShell(
             SANDBOX_NAME,
-            '--',
-            'sh',
-            '-c',
             'tail -40 /var/log/macvibes-agent-daemon.log 2>/dev/null || echo kein-log',
-          ]).catch((e) => `Dump fehlgeschlagen: ${String(e)}`);
+          ).catch((e) => `Dump fehlgeschlagen: ${String(e)}`);
           console.log('--- agent-daemon.log ---\n' + daemonLog);
         }
         expect(completed?.type).toBe('turn-completed');

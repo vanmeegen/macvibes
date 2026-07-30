@@ -343,3 +343,16 @@ export async function removeSnapshot(name: string): Promise<void> {
     );
   }
 }
+
+/** Namen aller bekannten Sandboxes (laufend und gestoppt). */
+export async function listSandboxNames(): Promise<string[]> {
+  try {
+    const seite = await Sandbox.list();
+    return seite.sandboxes.map((s) => s.name);
+  } catch (error) {
+    throw new SandboxRuntimeError(
+      `Sandboxes konnten nicht aufgelistet werden: ${fehlertext(error)}`,
+      error,
+    );
+  }
+}
