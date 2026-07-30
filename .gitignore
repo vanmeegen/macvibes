@@ -14,3 +14,10 @@ apps/web/playwright-report/
 # Server-Secrets (Claude-Token) — nie committen
 .env
 apps/server/.env
+# Auch jede Kopie/Sicherung davon: `.env` allein deckt `.env.bak-…`,
+# `.env.local` oder `.env.save` NICHT ab, und so eine Kopie enthält dieselben
+# Geheimnisse wie das Original (`.env.example` bleibt ausgenommen).
+.env.*
+apps/server/.env.*
+!.env.example
+!apps/server/.env.example
