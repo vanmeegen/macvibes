@@ -77,7 +77,19 @@ done
 # Ersatzports testbar, ohne echte VMs mitzunehmen.
 echo "→ Prüfe auf verwaiste macvibes-MicroVMs …"
 if command -v msb >/dev/null 2>&1; then
-  vms=$(msb list 2>/dev/null | awk 'NR>1 && $1 ~ /^macvibes-/ && $3 == "running" {print $1}')
+  # `--running -q` liefert nur Namen — kein Parsen von Spalten, und der
+  # Exit-Code ist auswertbar. Ein FEHLGESCHLAGENES Listing sah vorher (Ausgabe
+  # nach /dev/null, Ergebnis leer) exakt aus wie "keine VMs" und wurde als
+  # Erfolg gemeldet. Genau das passierte, als msb wegen eines Schema-Konflikts
+  # jeden Befehl verweigerte: das Skript meldete "✓ heruntergefahren",
+  # während in Wahrheit ungeprüft VMs weiterliefen.
+  if ! listing=$(msb list --running -q 2>&1); then
+    echo "  ✗ 'msb list' schlug fehl — verwaiste VMs konnten NICHT geprüft werden:"
+    echo "    ${listing}" | head -3
+    echo "    Bitte selbst nachsehen:  msb list"
+    exit 1
+  fi
+  vms=$(printf '%s\n' "$listing" | grep '^macvibes-' || true)
   if [ -n "$vms" ]; then
     echo "  ⚠ Diese VMs liefen noch, obwohl der Server beendet ist —"
     echo "    sie werden OHNE Auto-Commit gestoppt (uncommittete Änderungen"
