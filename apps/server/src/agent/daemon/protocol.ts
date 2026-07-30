@@ -126,11 +126,13 @@ export function parseDaemonToHost(raw: string): DaemonToHostMessage | null {
     return { kind: 'ping' };
   }
 
-  if (msg['kind'] === 'turn-started' && typeof msg['turnId'] === 'string') {
+  // Auch die turnId ist ein Wire-String und wird gedeckelt — der Host führt
+  // sie in Maps und schreibt sie in die DB.
+  if (msg['kind'] === 'turn-started' && istKurzerString(msg['turnId'], MAX_ID_CHARS)) {
     return { kind: 'turn-started', turnId: msg['turnId'] };
   }
 
-  if (msg['kind'] === 'event' && typeof msg['turnId'] === 'string') {
+  if (msg['kind'] === 'event' && istKurzerString(msg['turnId'], MAX_ID_CHARS)) {
     const event = parseAgentEvent(msg['event']);
     if (event === null) return null;
     return { kind: 'event', turnId: msg['turnId'], event };
@@ -145,6 +147,30 @@ export function parseDaemonToHost(raw: string): DaemonToHostMessage | null {
 
 /** Obergrenze für einzelne Event-Texte aus der VM (F16, 1 MiB). */
 const MAX_EVENT_TEXT_CHARS = 1_048_576;
+
+/**
+ * Obergrenzen für die übrigen Wire-Strings.
+ *
+ * Der F16-Deckel galt nur für text-/thinking-delta. Alle anderen Felder nahmen
+ * Strings beliebiger Länge, und im Insert-Pfad des ChatService greift
+ * MAX_MESSAGE_CHARS nicht — ein kompromittierter Daemon konnte damit Host-DB
+ * und die Puffer aller Chat-Abonnenten sättigen. Die Werte orientieren sich an
+ * dem, was echte Sender liefern: claudeRunner kürzt `detail` selbst auf 300
+ * Zeichen, Session-IDs sind UUIDs.
+ */
+const MAX_TOOL_NAME_CHARS = 256;
+const MAX_TOOL_DETAIL_CHARS = 4096;
+const MAX_EVENT_MESSAGE_CHARS = 8192;
+const MAX_ID_CHARS = 128;
+
+/** Ein plausibler Zähler: kleine, nicht-negative Ganzzahl. */
+function istZaehler(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 1000;
+}
+
+function istKurzerString(value: unknown, max: number): value is string {
+  return typeof value === 'string' && value.length <= max;
+}
 
 /**
  * Validiert ein über die Leitung gekommenes AgentEvent strukturell und baut
@@ -166,16 +192,21 @@ function parseAgentEvent(value: unknown): AgentEvent | null {
     case 'turn-aborted':
       return { type: 'turn-aborted' };
     case 'tool-use':
-      if (typeof e['name'] !== 'string' || typeof e['detail'] !== 'string') return null;
+      if (
+        !istKurzerString(e['name'], MAX_TOOL_NAME_CHARS) ||
+        !istKurzerString(e['detail'], MAX_TOOL_DETAIL_CHARS)
+      ) {
+        return null;
+      }
       return { type: 'tool-use', name: e['name'], detail: e['detail'] };
     case 'session':
-      if (typeof e['sessionId'] !== 'string') return null;
+      if (!istKurzerString(e['sessionId'], MAX_ID_CHARS)) return null;
       return { type: 'session', sessionId: e['sessionId'] };
     case 'api-retry':
       if (
-        typeof e['attempt'] !== 'number' ||
-        typeof e['maxRetries'] !== 'number' ||
-        typeof e['message'] !== 'string'
+        !istZaehler(e['attempt']) ||
+        !istZaehler(e['maxRetries']) ||
+        !istKurzerString(e['message'], MAX_EVENT_MESSAGE_CHARS)
       ) {
         return null;
       }
@@ -187,11 +218,11 @@ function parseAgentEvent(value: unknown): AgentEvent | null {
       };
     case 'turn-completed': {
       const sessionId = e['sessionId'];
-      if (typeof sessionId !== 'string' && sessionId !== null) return null;
+      if (sessionId !== null && !istKurzerString(sessionId, MAX_ID_CHARS)) return null;
       return { type: 'turn-completed', sessionId };
     }
     case 'error':
-      if (typeof e['message'] !== 'string') return null;
+      if (!istKurzerString(e['message'], MAX_EVENT_MESSAGE_CHARS)) return null;
       return { type: 'error', message: e['message'] };
     default:
       return null;

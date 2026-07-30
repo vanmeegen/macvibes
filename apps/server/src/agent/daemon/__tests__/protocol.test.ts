@@ -146,3 +146,66 @@ describe('parseDaemonToHost — Längengrenze für Event-Texte (F16)', () => {
     expect(parseDaemonToHost(eventMessage('x'.repeat(1_048_577)))).toBeNull();
   });
 });
+
+/**
+ * Der F16-Deckel griff nur für text-/thinking-delta. tool-use, session,
+ * api-retry, error und turn-completed nahmen Strings beliebiger Länge — ein
+ * kompromittierter Daemon konnte damit die Host-DB und die Puffer aller
+ * Chat-Abonnenten sättigen, denn im Insert-Pfad gilt MAX_MESSAGE_CHARS nicht.
+ */
+describe('parseDaemonToHost — Längengrenzen für ALLE Wire-Strings', () => {
+  function ereignis(event: Record<string, unknown>): string {
+    return JSON.stringify({ kind: 'event', turnId: 't1', event });
+  }
+  const riesig = 'x'.repeat(2_000_000);
+
+  test('tool-use mit riesigem name oder detail wird verworfen', () => {
+    expect(parseDaemonToHost(ereignis({ type: 'tool-use', name: riesig, detail: '' }))).toBeNull();
+    expect(
+      parseDaemonToHost(ereignis({ type: 'tool-use', name: 'Bash', detail: riesig })),
+    ).toBeNull();
+  });
+
+  test('normale tool-use-Events kommen weiterhin durch', () => {
+    expect(
+      parseDaemonToHost(ereignis({ type: 'tool-use', name: 'Bash', detail: 'ls -la' })),
+    ).not.toBeNull();
+  });
+
+  test('error mit riesiger message wird verworfen', () => {
+    expect(parseDaemonToHost(ereignis({ type: 'error', message: riesig }))).toBeNull();
+    expect(parseDaemonToHost(ereignis({ type: 'error', message: 'kaputt' }))).not.toBeNull();
+  });
+
+  test('api-retry mit riesiger message wird verworfen', () => {
+    const basis = { type: 'api-retry', attempt: 1, maxRetries: 3 };
+    expect(parseDaemonToHost(ereignis({ ...basis, message: riesig }))).toBeNull();
+    expect(parseDaemonToHost(ereignis({ ...basis, message: 'überlastet' }))).not.toBeNull();
+  });
+
+  test('api-retry mit unsinnigen Zählern wird verworfen', () => {
+    const m = { type: 'api-retry', message: 'x' };
+    expect(parseDaemonToHost(ereignis({ ...m, attempt: -1, maxRetries: 3 }))).toBeNull();
+    expect(parseDaemonToHost(ereignis({ ...m, attempt: 1e9, maxRetries: 3 }))).toBeNull();
+    expect(parseDaemonToHost(ereignis({ ...m, attempt: 1.5, maxRetries: 3 }))).toBeNull();
+    expect(parseDaemonToHost(ereignis({ ...m, attempt: 1, maxRetries: 3 }))).not.toBeNull();
+  });
+
+  test('session/turn-completed mit riesiger sessionId wird verworfen', () => {
+    expect(parseDaemonToHost(ereignis({ type: 'session', sessionId: riesig }))).toBeNull();
+    expect(parseDaemonToHost(ereignis({ type: 'turn-completed', sessionId: riesig }))).toBeNull();
+    // Eine echte Session-ID ist eine UUID — die bleibt gültig.
+    const uuid = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
+    expect(parseDaemonToHost(ereignis({ type: 'session', sessionId: uuid }))).not.toBeNull();
+    expect(parseDaemonToHost(ereignis({ type: 'turn-completed', sessionId: null }))).not.toBeNull();
+  });
+
+  test('eine riesige turnId wird verworfen', () => {
+    const rohes = JSON.stringify({
+      kind: 'event',
+      turnId: riesig,
+      event: { type: 'block-stop' },
+    });
+    expect(parseDaemonToHost(rohes)).toBeNull();
+  });
+});

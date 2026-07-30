@@ -400,3 +400,50 @@ describe('msbAvailable', () => {
     expect(await msbAvailable()).toBe(true);
   });
 });
+
+/**
+ * Schlägt das Bereitwerden fehl, war die VM schon gestartet und ihr
+ * Host-Proxy-Token schon ausgestellt. Ohne Aufräumen blieb eine laufende
+ * MicroVM mit GÜLTIGEM Token zurück — Credential- und Egress-Proxy standen ihr
+ * also weiter offen, obwohl der Start für den Aufrufer gescheitert war.
+ */
+describe.skipIf(!available)('Aufräumen nach fehlgeschlagenem Start', () => {
+  test(
+    'entwertet das Token und stoppt die VM, wenn das Bereitwerden scheitert',
+    async () => {
+      const { home, bare } = await projectSetup('cleanup-1');
+      const basis = providerConfig(home, bare);
+      const widerrufen: string[] = [];
+      const provider = new MicrosandboxSandboxProvider({
+        ...basis,
+        agentDaemon: {
+          ...basis.agentDaemon,
+          revokeToken: (name: string) => {
+            widerrufen.push(name);
+          },
+        },
+        waitForReady: async () => {
+          throw new Error('Agent-Endpunkt wird nicht bereit (simuliert)');
+        },
+      });
+
+      await expect(
+        provider.start({
+          projectId: 'cleanup-1',
+          branchName: 'marco/cleanup-1',
+          workspaceDir: workspaceDirFor(home, 'cleanup-1'),
+          templateDir: FIXTURE_TEMPLATE_DIR,
+          devCommand: 'bun server.ts',
+          previewPort: 5177,
+        }),
+      ).rejects.toThrow('Agent-Endpunkt');
+
+      // Token entwertet — sonst öffnete es Credential- und Egress-Proxy weiter.
+      expect(widerrufen).toEqual(['macvibes-cleanup-1']);
+      // Und die VM läuft nicht mehr.
+      const liste = await runMsb(['list']).catch(() => '');
+      expect(liste).not.toContain('macvibes-cleanup-1');
+    },
+    { timeout: 120_000 },
+  );
+});

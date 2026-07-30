@@ -330,9 +330,16 @@ export class ChatService {
     content: string,
     turnActive?: boolean,
   ): Promise<ChatMessageRow> {
+    // Zweiter Riegel gegen zu lange Inhalte: MAX_MESSAGE_CHARS griff nur im
+    // Append-Pfad (appendDelta), nicht hier. Damit kam jede Nicht-Delta-Quelle
+    // — insbesondere tool-use/error aus der untrusted VM — am Deckel vorbei.
+    // Die Protokoll-Schicht begrenzt die Felder schon; das hier ist die
+    // Absicherung an der Senke, damit kein künftiger Pfad sie umgeht.
+    const gekuerzt =
+      content.length > MAX_MESSAGE_CHARS ? `${content.slice(0, MAX_MESSAGE_CHARS)}…` : content;
     const inserted = await this.db
       .insert(chatMessages)
-      .values({ id: crypto.randomUUID(), projectId, turnId, role, content })
+      .values({ id: crypto.randomUUID(), projectId, turnId, role, content: gekuerzt })
       .returning();
     const row = inserted[0];
     if (!row) {

@@ -44,6 +44,12 @@ export interface MicrosandboxProviderConfig {
     sandbox: string,
     listener: (status: PreviewStatus) => void,
   ) => () => void;
+  /**
+   * Warten, bis der Gast-Agent-Endpunkt bereit ist. Injizierbar, damit der
+   * Aufräumpfad bei einem fehlgeschlagenen Start testbar ist (Default:
+   * `waitForExecReady` aus msb.ts).
+   */
+  waitForReady?: (sandboxName: string) => Promise<void>;
 }
 
 /** Ab wann ein Daemon-Status-Push als veraltet gilt (Daemon pusht alle ≤5 s). */
@@ -213,7 +219,20 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     ]);
     // `msb run -d` kehrt zurück, bevor der Gast-Agent-Endpunkt bereit ist —
     // ohne dieses Warten scheitern frühe execs ("no agent endpoint found").
-    await waitForExecReady(name);
+    //
+    // Ab hier LÄUFT die VM, und ihr Token ist ausgestellt (envFor oben). Ein
+    // Fehler darf sie deshalb nicht zurücklassen: sonst bliebe eine laufende
+    // MicroVM mit gültigem Token übrig, für die es keinen Handle und damit
+    // keinen stop() mehr gibt — Credential- und Egress-Proxy stünden ihr weiter
+    // offen, obwohl der Start für den Aufrufer gescheitert ist.
+    try {
+      await (this.config.waitForReady ?? waitForExecReady)(name);
+    } catch (error) {
+      this.config.agentDaemon.revokeToken?.(name);
+      this.ports.release(hostPort);
+      await this.stopVm(name);
+      throw error;
+    }
 
     // Preview-Status: frische Daemon-Pushes zählen (monit-Detailtiefe), ohne
     // sie entscheidet die HTTP-Probe auf den Preview-Port (ADR 0001).
