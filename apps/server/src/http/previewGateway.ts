@@ -26,20 +26,42 @@ export interface PreviewTarget {
   setCookie: boolean;
 }
 
+/** Decode, das bei kaputtem Percent-Encoding null liefert statt zu werfen (H7). */
+function decodeOrNull(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
+}
+
 /** Extrahiert die projectId aus einem `/p/<id>/…`-Pfad (z. B. aus dem Referer). */
 function idFromPPath(pathname: string): string | null {
   const m = pathname.match(ENTRY_RE);
-  return m ? decodeURIComponent(m[1] as string) : null;
+  return m ? decodeOrNull(m[1] as string) : null;
 }
 
+/**
+ * Cookie-Wert aus dem Header. Zwei Fallstricke, beide sicherheitsrelevant:
+ *
+ * - Der Decode muss gekapselt sein (H7): der Aufruf steht im Argument der
+ *   Auth-Prüfung, wird also VOR ihr ausgewertet — ein unangemeldeter Request
+ *   mit `%ZZ` warf sonst einen unbehandelten URIError.
+ * - Kommt der Name mehrfach, ist der Wert mehrdeutig (H2): agent-geschriebenes
+ *   JS in der Preview kann per `document.cookie` ein zweites Cookie gleichen
+ *   Namens auf einem anderen Pfad setzen. Dann gilt der Request als nicht
+ *   angemeldet, statt sich auf die Reihenfolge des Browsers zu verlassen.
+ */
 function cookieValue(cookieHeader: string | null, name: string): string | null {
   if (cookieHeader === null) return null;
+  const treffer: string[] = [];
   for (const part of cookieHeader.split(';')) {
     const eq = part.indexOf('=');
     if (eq === -1) continue;
-    if (part.slice(0, eq).trim() === name) return decodeURIComponent(part.slice(eq + 1).trim());
+    if (part.slice(0, eq).trim() === name) treffer.push(part.slice(eq + 1).trim());
   }
-  return null;
+  if (treffer.length !== 1) return null;
+  return decodeOrNull(treffer[0] as string);
 }
 
 /**
@@ -54,9 +76,11 @@ export function resolveTarget(input: {
 }): PreviewTarget | null {
   const entry = input.pathname.match(ENTRY_RE);
   if (entry) {
+    const projectId = decodeOrNull(entry[1] as string);
+    if (projectId === null) return null;
     const rest = entry[2];
     return {
-      projectId: decodeURIComponent(entry[1] as string),
+      projectId,
       forwardPath: rest === undefined || rest === '' ? '/' : rest,
       setCookie: true,
     };

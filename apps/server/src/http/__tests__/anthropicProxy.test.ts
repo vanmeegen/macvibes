@@ -533,3 +533,42 @@ describe('Antwortpfad — die Live-Bugs von 2026-07-04 dürfen nie zurückkommen
     }
   });
 });
+
+describe('Body-Limit (H5): die untrusted VM darf den Host nicht sättigen', () => {
+  test('weist einen zu großen Body mit 413 ab, Upstream bleibt unberührt', async () => {
+    const proxy = makeProxy({ maxBodyBytes: 1024 });
+    seen.length = 0;
+    const response = await proxy(
+      vmRequest({}, JSON.stringify({ model: 'claude', fuell: 'x'.repeat(5000) })),
+      '/v1/messages',
+    );
+    expect(response.status).toBe(413);
+    expect(seen).toHaveLength(0);
+  });
+
+  test('erkennt die Größe schon an content-length, ohne zu puffern', async () => {
+    const proxy = makeProxy({ maxBodyBytes: 1024 });
+    seen.length = 0;
+    const request = new Request('http://host.microsandbox.internal:4000/anthropic/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'content-length': '999999',
+        [PROXY_TOKEN_HEADER]: 'geheim-123',
+      },
+      body: JSON.stringify({ model: 'claude' }),
+    });
+    const response = await proxy(request, '/v1/messages');
+    expect(response.status).toBe(413);
+    expect(request.bodyUsed).toBe(false);
+    expect(seen).toHaveLength(0);
+  });
+
+  test('lässt normale Requests unverändert durch', async () => {
+    const proxy = makeProxy({ maxBodyBytes: 1_000_000 });
+    seen.length = 0;
+    const response = await proxy(vmRequest(), '/v1/messages');
+    expect(response.status).toBe(200);
+    expect(seen).toHaveLength(1);
+  });
+});

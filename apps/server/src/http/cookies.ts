@@ -27,7 +27,41 @@ export function cookieStoreOf(request: Request): CookieStoreLike {
   return store;
 }
 
+/**
+ * Wie oft schickt der Browser unser Session-Cookie? (H2)
+ *
+ * Mehr als einmal heißt: jemand hat ein zweites Cookie gleichen Namens
+ * untergeschoben. Genau das kann agent-geschriebenes JS in der Preview: sie
+ * läuft auf demselben Host (nur anderer Port), und Cookies sind nicht
+ * portgebunden. Unser Cookie überschreiben kann sie nicht (httpOnly), aber ein
+ * zweites auf einem anderen Pfad setzen — der Browser sendet dann beide, den
+ * spezifischeren Pfad zuerst.
+ */
+export function countSessionCookies(cookieHeader: string | null): number {
+  if (cookieHeader === null || cookieHeader.length === 0) return 0;
+  return cookieHeader
+    .split(';')
+    .map((teil) => teil.trim())
+    .filter((teil) => {
+      const eq = teil.indexOf('=');
+      if (eq === -1) return false;
+      return teil.slice(0, eq).trim() === SESSION_COOKIE;
+    }).length;
+}
+
 export async function readSessionToken(request: Request): Promise<string | null> {
+  // Mehrdeutig = nicht angemeldet (H2). Welcher der beiden Werte echt ist, kann
+  // der Server nicht entscheiden — den untergeschobenen zu nehmen wäre
+  // Session-Fixation, also lieber niemanden anmelden. Für den Angreifer bleibt
+  // dann nur, die Sitzung des Opfers zu stören, nicht sie zu übernehmen.
+  const anzahl = countSessionCookies(request.headers.get('cookie'));
+  if (anzahl > 1) {
+    console.warn(
+      `Mehrdeutiges Session-Cookie (${anzahl}×) — Request gilt als nicht angemeldet. ` +
+        'Mögliches Cookie-Tossing aus einer Preview.',
+    );
+    return null;
+  }
   const cookie = await cookieStoreOf(request).get(SESSION_COOKIE);
   return cookie?.value ?? null;
 }

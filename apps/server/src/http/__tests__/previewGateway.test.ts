@@ -228,6 +228,65 @@ describe('startPreviewGateway (Integration mit Fake-Upstream)', () => {
     expect(upstreamHits).toBe(1);
   });
 
+  test('kaputtes Percent-Encoding im Cookie ergibt 401, keinen Absturz (H7)', async () => {
+    // Der Decode stand im Argument der Auth-Prüfung, wurde also VOR ihr
+    // ausgewertet: ein unangemeldeter Request mit `%ZZ` warf einen
+    // unbehandelten URIError.
+    let upstreamHits = 0;
+    upstream = Bun.serve({
+      port: 0,
+      fetch: () => {
+        upstreamHits += 1;
+        return new Response('geheim');
+      },
+    });
+    const vmPort = upstream.port ?? null;
+    const gw = startPreviewGateway({
+      port: 0,
+      previewPortFor: () => vmPort,
+      authenticate: async (token) => token === 'gueltig',
+    });
+    started.push(gw);
+
+    for (const kaputt of [
+      'macvibes_session=%ZZ',
+      'macvibes_session=%',
+      'macvibes_session=%E0%A4',
+    ]) {
+      const res = await fetch(`http://127.0.0.1:${gw.port}/p/proj-1/`, {
+        headers: { cookie: kaputt },
+      });
+      expect(res.status).toBe(401);
+    }
+    expect(upstreamHits).toBe(0);
+  });
+
+  test('mehrdeutiges Session-Cookie ergibt 401 (H2: Cookie-Tossing)', async () => {
+    let upstreamHits = 0;
+    upstream = Bun.serve({
+      port: 0,
+      fetch: () => {
+        upstreamHits += 1;
+        return new Response('geheim');
+      },
+    });
+    const vmPort = upstream.port ?? null;
+    const gw = startPreviewGateway({
+      port: 0,
+      previewPortFor: () => vmPort,
+      authenticate: async (token) => token === 'gueltig',
+    });
+    started.push(gw);
+
+    // Die Preview hat ein zweites Cookie untergeschoben; welches echt ist,
+    // kann das Gateway nicht entscheiden.
+    const res = await fetch(`http://127.0.0.1:${gw.port}/p/proj-1/`, {
+      headers: { cookie: 'macvibes_session=untergeschoben; macvibes_session=gueltig' },
+    });
+    expect(res.status).toBe(401);
+    expect(upstreamHits).toBe(0);
+  });
+
   test('auch der WebSocket-Upgrade verlangt eine Session (F19)', async () => {
     upstream = Bun.serve({
       port: 0,

@@ -11,7 +11,9 @@ import {
   logout,
   register,
   rejectUser,
+  resolveSession,
 } from '../services/authService';
+import { revalidateStream } from './revalidateStream';
 import { DomainError } from '../services/errors';
 import { createRateLimiter, rateLimitDisabled, type RateLimiter } from '../services/rateLimiter';
 import { AGENT_MODELS, type AgentModelInfo } from '../agent/agentModel';
@@ -106,6 +108,13 @@ ChatEventRef.implement({
  * argon2id-verify bzw. -hash. Zwei Schlüssel — pro IP gegen Dauerfeuer, pro
  * Username gegen verteiltes Raten auf ein einzelnes Konto.
  */
+/**
+ * Takt für die Session-Nachprüfung laufender Subscriptions (H6). 15 s ist der
+ * Kompromiss: schnell genug, dass ein Logout spürbar greift, selten genug, dass
+ * die Chat-Deltas keine DB-Abfrage pro Event auslösen.
+ */
+const SUBSCRIPTION_REVALIDATE_MS = 15_000;
+
 const loginLimiter = createRateLimiter({ windowMs: 5 * 60_000, max: 20 });
 const registerLimiter = createRateLimiter({ windowMs: 60 * 60_000, max: 10 });
 
@@ -247,8 +256,20 @@ builder.subscriptionType({
         projectId: t.arg.id({ required: true }),
       },
       subscribe: (_root, args, ctx) => {
-        requireUser(ctx);
-        return ctx.chatService.subscribe(String(args.projectId));
+        const user = requireUser(ctx);
+        // Eine Subscription ist EIN langlebiger Request: `requireUser` liefe
+        // sonst nur beim Aufbau, und der Stream lebte nach Logout, Ablauf oder
+        // Admin-rejectUser weiter (H6). Deshalb getaktete Nachprüfung.
+        return revalidateStream(
+          ctx.chatService.subscribe(String(args.projectId)),
+          async () => {
+            const token = await readSessionToken(ctx.request);
+            if (token === null) return false;
+            const aktuell = await resolveSession(ctx.db, ctx.config, token);
+            return aktuell !== null && aktuell.id === user.id;
+          },
+          SUBSCRIPTION_REVALIDATE_MS,
+        );
       },
       resolve: (payload: ChatEventPayload) => payload,
     }),

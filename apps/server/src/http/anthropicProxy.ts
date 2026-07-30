@@ -82,6 +82,50 @@ export interface AnthropicProxyConfig {
   localApiKey?: string | undefined;
   /** Zusätzliche Modell-Routen (OpenRouter-Stil), matchen VOR den Defaults. */
   extraRoutes?: ModelRoute[] | undefined;
+  /**
+   * Obergrenze für den gepufferten Request-Body in Bytes (H5). Der Proxy
+   * materialisiert den Body vollständig (nötig für `injectThinkingDisplay` und
+   * die Modellwahl) — ohne Grenze ist das ein Speicher-Hebel für die untrusted
+   * VM. Default 32 MiB, das deckt auch Requests mit Bildern.
+   */
+  maxBodyBytes?: number | undefined;
+}
+
+/** Default für `maxBodyBytes` (H5). */
+export const DEFAULT_MAX_BODY_BYTES = 32 * 1024 * 1024;
+
+/**
+ * Body als Text lesen, aber höchstens `limit` Bytes (H5). Liefert null, wenn
+ * die Grenze überschritten wird — der Rest wird nicht mehr gepuffert.
+ */
+async function readTextWithLimit(request: Request, limit: number): Promise<string | null> {
+  const body = request.body;
+  if (body === null) return '';
+  const reader = body.getReader();
+  const teile: Uint8Array[] = [];
+  let gesamt = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done === true) break;
+      if (value === undefined) continue;
+      gesamt += value.byteLength;
+      if (gesamt > limit) {
+        await reader.cancel();
+        return null;
+      }
+      teile.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const zusammen = new Uint8Array(gesamt);
+  let offset = 0;
+  for (const teil of teile) {
+    zusammen.set(teil, offset);
+    offset += teil.byteLength;
+  }
+  return new TextDecoder().decode(zusammen);
 }
 
 /** Eine Modell-Route: Modelle mit `prefix` gehen an `upstreamUrl` mit eigenem Key. */
@@ -249,11 +293,26 @@ export function createAnthropicProxy(config: AnthropicProxyConfig): AnthropicPro
     }
 
     const hasBody = request.method !== 'GET' && request.method !== 'HEAD';
+    const maxBodyBytes = config.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
+    // Angekündigte Größe zuerst prüfen (H5): so wird gar nicht gepuffert, wenn
+    // die VM schon im Header zu viel ankündigt.
+    const angekuendigt = Number(request.headers.get('content-length') ?? '');
+    if (Number.isFinite(angekuendigt) && angekuendigt > maxBodyBytes) {
+      return new Response('Request-Body zu groß', { status: 413 });
+    }
     // Body puffern und ggf. `thinking.display: summarized` ergänzen, damit die
     // API den Reasoning-Text streamt (statt nur der Signatur). Der Messages-
-    // Request ist ein einzelnes JSON — Puffern kostet nichts; content-length
-    // setzt fetch neu. Die SSE-ANTWORT bleibt davon unberührt (Streaming).
-    const outgoingBody = hasBody ? injectThinkingDisplay(await request.text()) : undefined;
+    // Request ist ein einzelnes JSON — content-length setzt fetch neu. Die
+    // SSE-ANTWORT bleibt davon unberührt (Streaming).
+    let outgoingBody: string | undefined;
+    if (hasBody) {
+      const roh = await readTextWithLimit(request, maxBodyBytes);
+      if (roh === null) {
+        // Auch eine gelogene/fehlende content-length fängt die Grenze noch ab.
+        return new Response('Request-Body zu groß', { status: 413 });
+      }
+      outgoingBody = injectThinkingDisplay(roh);
+    }
     const route = routeFor(modelFromBody(outgoingBody));
     if (route === null) {
       return new Response(
