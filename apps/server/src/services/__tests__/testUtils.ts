@@ -8,6 +8,10 @@ import type { UserRow } from '../../db/schema';
 
 export const TEST_AUTH_CONFIG: AuthConfig = {
   sessionTtlMs: 3 * 24 * 60 * 60 * 1000,
+  // Seit H3 wird ohne Bootstrap-Namen NIEMAND automatisch Admin. Die
+  // Testvorrichtung benennt ihn deshalb — sonst hätte keine Suite mehr einen
+  // freigeschalteten Nutzer. 'marco' ist der Default von registerInput().
+  adminUsername: 'marco',
 };
 
 export function createTestDb(): Db {

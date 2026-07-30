@@ -87,8 +87,13 @@ export async function register(
   // also atomar gegenüber parallelen Registrierungen.
   const inserted = db.transaction((tx) => {
     const admins = tx.select({ id: users.id }).from(users).where(eq(users.role, 'admin')).all();
+    // Ohne konfigurierten Bootstrap-Namen wird NIEMAND automatisch Admin (H3).
+    // Vorher bekam der erste Registrant die Rolle „aus Bequemlichkeit" — weil
+    // register() unauthentifiziert ist und der Server im LAN lauscht, war das
+    // ein Wettlauf um Admin-Rechte, den jeder im Netz gewinnen konnte. Der
+    // Betreiber muss den Admin jetzt benennen (MACVIBES_ADMIN_USERNAME).
     const istErsterAdmin =
-      admins.length === 0 && (bootstrapName === null || usernameResult.data === bootstrapName);
+      admins.length === 0 && bootstrapName !== null && usernameResult.data === bootstrapName;
     return tx
       .insert(users)
       .values({
@@ -206,7 +211,22 @@ export async function rejectUser(db: Db, userId: string): Promise<void> {
  */
 export async function ensureAdmin(db: Db, config: AuthConfig): Promise<void> {
   const username = config.adminUsername;
-  if (!username) return;
+  if (!username) {
+    // H3: Ohne Bootstrap-Namen vergibt register() keine Admin-Rolle mehr. Das
+    // darf den Betreiber nicht ratlos lassen — ohne Admin schaltet niemand
+    // Nutzer frei, die Instanz wäre also unbenutzbar ohne erkennbaren Grund.
+    const admins = await db.select({ id: users.id }).from(users).where(eq(users.role, 'admin'));
+    if (admins.length === 0) {
+      console.warn(
+        'Kein Admin vorhanden und MACVIBES_ADMIN_USERNAME ist nicht gesetzt. ' +
+          'Ohne Admin kann niemand neue Nutzer freischalten. ' +
+          'Setze MACVIBES_ADMIN_USERNAME=<dein-username> in apps/server/.env und ' +
+          'starte neu (registriere den Namen davor oder danach — die Beförderung ' +
+          'passiert beim Start).',
+      );
+    }
+    return;
+  }
   const found = await db.select().from(users).where(eq(users.username, username)).limit(1);
   const user = found[0];
   if (!user) return;

@@ -261,12 +261,28 @@ describe('logout', () => {
  * oder neuem DB_PATH konnte das ein Fremder sein. Ist ein Bootstrap-Name
  * konfiguriert, bekommt nur er die Rolle.
  */
-describe('Erst-Admin-Vergabe (F8)', () => {
-  test('ohne Bootstrap-Namen wird der erste Nutzer Admin (Bequemlichkeit)', async () => {
+describe('Erst-Admin-Vergabe (F8, H3)', () => {
+  // Ausdrücklich OHNE Bootstrap-Namen — das ist der Default im Betrieb.
+  const OHNE_BOOTSTRAP = { ...CONFIG, adminUsername: undefined };
+
+  test('ohne Bootstrap-Namen wird NIEMAND Admin (H3: fail closed)', async () => {
+    // Vorher wurde der erste Registrant aus Bequemlichkeit Admin. Weil
+    // register() unauthentifiziert ist und der Server im LAN lauscht, war das
+    // ein Wettlauf um Admin-Rechte, den jeder im Netz gewinnen konnte.
     const db = createTestDb();
-    const { user } = await register(db, CONFIG, registerInput('marco'));
-    expect(user.role).toBe('admin');
-    expect(user.approved).toBe(true);
+    const { user, session } = await register(db, OHNE_BOOTSTRAP, registerInput('marco'));
+    expect(user.role).toBe('user');
+    expect(user.approved).toBe(false);
+    expect(session).toBeNull();
+  });
+
+  test('auch der zweite und dritte Nutzer bekommen ohne Bootstrap-Namen nichts', async () => {
+    const db = createTestDb();
+    await register(db, OHNE_BOOTSTRAP, registerInput('eins'));
+    const { user } = await register(db, OHNE_BOOTSTRAP, registerInput('zwei'));
+    expect(user.role).toBe('user');
+    const admins = await db.select().from(users).where(eq(users.role, 'admin'));
+    expect(admins.length).toBe(0);
   });
 
   test('mit Bootstrap-Namen wird ein FREMDER Erstregistrant kein Admin', async () => {
@@ -286,13 +302,24 @@ describe('Erst-Admin-Vergabe (F8)', () => {
 
   test('es entsteht nie ein zweiter Admin, auch bei paralleler Registrierung', async () => {
     const db = createTestDb();
+    const config = { ...CONFIG, adminUsername: 'eins' };
     await Promise.all([
-      register(db, CONFIG, registerInput('eins')),
-      register(db, CONFIG, registerInput('zwei')),
-      register(db, CONFIG, registerInput('drei')),
+      register(db, config, registerInput('eins')),
+      register(db, config, registerInput('zwei')),
+      register(db, config, registerInput('drei')),
     ]);
     const admins = await db.select().from(users).where(eq(users.role, 'admin'));
     expect(admins.length).toBe(1);
+  });
+
+  test('ein bereits vorhandener Admin verhindert weitere Bootstraps', async () => {
+    const db = createTestDb();
+    const config = { ...CONFIG, adminUsername: 'chefin' };
+    const { user: chefin } = await register(db, config, registerInput('chefin'));
+    expect(chefin.role).toBe('admin');
+    // Selber Bootstrap-Name, aber es gibt schon einen Admin: kein zweiter.
+    const { user: zweite } = await register(db, config, registerInput('chefin2'));
+    expect(zweite.role).toBe('user');
   });
 });
 
