@@ -1,5 +1,13 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
-import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { buildDaemonBundle } from '../../agent/daemonBundle';
 import { baselineExists, buildTemplateBaseline } from '../baselineService';
@@ -12,7 +20,9 @@ import { createProjectBranch, ensureBareRepo } from '../../services/gitService';
 import { workspaceDirFor } from '../../services/workspaceService';
 import {
   AGENT_CONFIG_GUEST_DIR,
+  microsandboxSandboxName,
   MicrosandboxSandboxProvider,
+  mountSource,
   msbAvailable,
   previewPortMapping,
 } from '../microsandboxProvider';
@@ -68,7 +78,38 @@ afterAll(async () => {
   if (bundleDir.length > 0) await removeDir(bundleDir);
 });
 
-// Läuft immer (reine Funktion, kein msb nötig).
+// Läuft immer (reine Funktionen, kein msb nötig).
+describe('Mount-Quellen (msb 0.6.8)', () => {
+  test('löst symbolische Links im Quellpfad auf', async () => {
+    // msb 0.6.8 folgt Symlinks in der Mount-Quelle NICHT mehr und scheitert mit
+    // "Not a directory". Auf macOS trifft das jeden Pfad unter $TMPDIR, weil
+    // /var ein Symlink auf /private/var ist.
+    const echt = await createTempDir('macvibes-mount-echt-');
+    tempDirs.push(echt);
+    const link = join(echt, 'zeiger');
+    mkdirSync(join(echt, 'ziel'));
+    symlinkSync(join(echt, 'ziel'), link);
+
+    const quelle = mountSource(link, '/work');
+    expect(quelle.endsWith(':/work')).toBe(true);
+    expect(quelle.startsWith(link)).toBe(false);
+    expect(quelle).toContain('/ziel:');
+  });
+
+  test('hängt Optionen unverändert an', async () => {
+    const dir = await createTempDir('macvibes-mount-opt-');
+    tempDirs.push(dir);
+    expect(mountSource(dir, '/etc/macvibes', 'ro').endsWith(':/etc/macvibes:ro')).toBe(true);
+  });
+
+  test('lässt einen bereits aufgelösten Pfad unverändert', async () => {
+    const dir = await createTempDir('macvibes-mount-plain-');
+    tempDirs.push(dir);
+    const aufgeloest = realpathSync(dir);
+    expect(mountSource(aufgeloest, '/work')).toBe(`${aufgeloest}:/work`);
+  });
+});
+
 describe('Preview-Port-Mapping (H1)', () => {
   test('bindet den VM-Port ausschließlich an das Host-Loopback', () => {
     expect(previewPortMapping(43210, 5173)).toBe('127.0.0.1:43210:5173');
@@ -445,5 +486,62 @@ describe.skipIf(!available)('Aufräumen nach fehlgeschlagenem Start', () => {
       expect(liste).not.toContain('macvibes-cleanup-1');
     },
     { timeout: 120_000 },
+  );
+});
+
+/**
+ * Verhalten von `msb run` bei einem bereits belegten Sandbox-Namen — geprüft,
+ * nicht abgeleitet.
+ *
+ * Stürzt der Server ab oder wird er hart beendet, laufen seine MicroVMs weiter;
+ * der neue Prozess kennt sie nicht. Weil der Sandbox-Name aus der projectId
+ * gebildet wird (`macvibes-<projectId>`), liegt die Vermutung nahe, ein solcher
+ * Zombie blockiere das erneute Öffnen des Projekts — `start()` räumt nämlich
+ * keinen Altbestand ab, sondern ruft direkt `msb run`.
+ *
+ * Diese Vermutung ist FALSCH, und genau das hält dieser Test fest: msb ersetzt
+ * eine vorhandene Sandbox desselben Namens, der Start läuft durch. Es braucht
+ * im Provider also kein Vorab-Aufräumen. Wer das ändern will, sollte hier
+ * zuerst nachlesen, warum es nicht nötig war.
+ */
+describe.skipIf(!available)('Belegter Sandbox-Name (Zombie nach Serverabsturz)', () => {
+  test(
+    'blockiert den erneuten Start NICHT — msb ersetzt die alte Sandbox',
+    async () => {
+      const { home, bare } = await projectSetup('zombie-1');
+      const context = {
+        projectId: 'zombie-1',
+        branchName: 'marco/zombie-1',
+        workspaceDir: workspaceDirFor(home, 'zombie-1'),
+        templateDir: FIXTURE_TEMPLATE_DIR,
+        devCommand: 'bun server.ts',
+        previewPort: 5188,
+      };
+      const name = microsandboxSandboxName('zombie-1');
+
+      // Erster Start — die VM läuft.
+      const provider1 = new MicrosandboxSandboxProvider(providerConfig(home, bare));
+      await provider1.start(context);
+      expect(await runMsb(['list'])).toContain(name);
+
+      // Kein stop(): die VM bleibt absichtlich stehen. Ein FRISCHER Provider
+      // steht für den neu gestarteten Serverprozess, der sie nicht kennt.
+      const provider2 = new MicrosandboxSandboxProvider(providerConfig(home, bare));
+      const handle2 = await provider2.start(context);
+      activeHandle = handle2;
+
+      // Der Start geht durch, und es bleibt genau EINE Sandbox dieses Namens.
+      const liste = await runMsb(['list']);
+      const treffer = liste.split('\n').filter((zeile) => zeile.includes(name));
+      expect(treffer).toHaveLength(1);
+      expect(handle2.previewHostPort).not.toBeNull();
+
+      // Der Handle des ersten Starts ist damit VERALTET: sein stop() würde die
+      // neue Sandbox treffen, weil beide denselben Namen tragen. Nach einem
+      // echten Serverabsturz existiert er nicht mehr — ein alter Handle darf
+      // aber nie weiterverwendet werden. Deshalb hier absichtlich kein
+      // handle1.stop(); aufgeräumt wird über activeHandle (handle2).
+    },
+    { timeout: 180_000 },
   );
 });

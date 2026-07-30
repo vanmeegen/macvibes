@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
   agentConfigDirFor,
@@ -75,6 +75,22 @@ export function microsandboxSandboxName(projectId: string): string {
  */
 export function previewPortMapping(hostPort: number, guestPort: number): string {
   return `127.0.0.1:${hostPort}:${guestPort}`;
+}
+
+/**
+ * Baut ein `-v`-Argument (`QUELLE:ZIEL[:OPTIONEN]`) und löst die Quelle vorher
+ * zu einem echten Pfad auf.
+ *
+ * msb 0.6.8 folgt symbolischen Links in der Mount-Quelle nicht mehr (Migration
+ * `migrate_bind_rootfs_source`) und bricht mit „Not a directory" ab. Auf macOS
+ * trifft das jeden Pfad unter `$TMPDIR`, weil `/var` ein Symlink auf
+ * `/private/var` ist — im Produktivbetrieb liegt `~/macvibes` dagegen auf einem
+ * echten Pfad, weshalb dort nichts brach. Auflösen ist unabhängig davon
+ * richtig: msb bekommt so immer genau den Pfad, den es auch mountet.
+ */
+export function mountSource(hostPath: string, guestPath: string, options?: string): string {
+  const quelle = realpathSync(hostPath);
+  return options === undefined ? `${quelle}:${guestPath}` : `${quelle}:${guestPath}:${options}`;
 }
 
 const GUEST_WORKDIR = '/work';
@@ -185,15 +201,15 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       '--name',
       name,
       '-v',
-      `${workspaceDir}:${GUEST_WORKDIR}`,
+      mountSource(workspaceDir, GUEST_WORKDIR),
       '-v',
-      `${agentConfigDir}:${AGENT_CONFIG_GUEST_DIR}`,
+      mountSource(agentConfigDir, AGENT_CONFIG_GUEST_DIR),
       '-v',
-      `${bunCacheDir}:${BUN_CACHE_GUEST_DIR}`,
+      mountSource(bunCacheDir, BUN_CACHE_GUEST_DIR),
       '-v',
-      `${etcDir}:${VM_ETC_DIR}:ro`,
+      mountSource(etcDir, VM_ETC_DIR, 'ro'),
       '-v',
-      `${this.config.agentDaemon.bundleDir}:${VM_BIN_DIR}:ro`,
+      mountSource(this.config.agentDaemon.bundleDir, VM_BIN_DIR, 'ro'),
       '-w',
       GUEST_WORKDIR,
       // Bewusst das EINZIGE Port-Mapping — msb-Forwarder können still sterben
@@ -210,7 +226,8 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       String(this.config.cpus),
       '-m',
       `${this.config.memoryMib}M`,
-      '--snapshot',
+      // msb 0.6.8 hat `--snapshot` in `--from-snapshot` umbenannt (brechend).
+      '--from-snapshot',
       baselineSnapshotName(context.templateDir),
       '--',
       'sh',
