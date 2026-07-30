@@ -83,7 +83,15 @@ if command -v msb >/dev/null 2>&1; then
     echo "    sie werden OHNE Auto-Commit gestoppt (uncommittete Änderungen"
     echo "    bleiben im Workspace, landen aber nicht im Branch):"
     echo "$vms" | while IFS= read -r vm; do
-      msb stop "$vm" >/dev/null 2>&1 && echo "    $vm gestoppt"
+      # Fehlschlag NICHT verschlucken: mit `&& echo` blieb eine VM, die sich
+      # nicht stoppen ließ, unsichtbar — man sah nur, dass sie fehlte, und
+      # konnte nicht unterscheiden, ob sie schon gestoppt war oder hängt.
+      if msb stop "$vm" >/dev/null 2>&1; then
+        echo "    $vm gestoppt"
+      else
+        status=$(msb list 2>/dev/null | awk -v n="$vm" '$1 == n {print $3}')
+        echo "    $vm: msb stop schlug fehl (Status jetzt: ${status:-unbekannt})"
+      fi
     done
   else
     echo "  keine verwaisten VMs (der Server hat selbst aufgeräumt)"

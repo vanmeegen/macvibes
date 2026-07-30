@@ -319,10 +319,31 @@ Der Aufräum-Scan des Rate-Limiters lief ab 1000 Einträgen bei **jedem** Aufruf
 Login-Versuch einen 10.000er-Scan gekostet — selbst ein CPU-Hebel. Jetzt wird
 nur am Limit und mit Luft nach unten aufgeräumt, also amortisiert.
 
+### H1 am laufenden System belegt (2026-07-30)
+
+Der letzte offene Punkt. Gegen drei laufende Projekt-VMs geprüft, jede mit
+`Preview: ready`:
+
+| VM-Preview-Port | über `127.0.0.1` | über `192.168.1.77` (LAN) |
+| --------------- | ---------------- | ------------------------- |
+| `:59524`        | HTTP 200         | **verweigert**            |
+| `:59562`        | HTTP 200         | **verweigert**            |
+| `:59693`        | HTTP 200         | **verweigert**            |
+
+`lsof -nP -iTCP -sTCP:LISTEN` bestätigt es unabhängig: die `msb`-Prozesse binden
+`127.0.0.1:<port>`, während Server, Egress-Proxy und Preview-Gateway bewusst auf
+`*:4000`, `*:4010` und `*:4173` stehen.
+
+Gegenprobe, dass der Fix den vorgesehenen Weg nicht beschädigt: Gateway über die
+LAN-Adresse → `401` (erreichbar, verlangt Session), App über LAN → `200`. Genau
+die Architektur, die R7 nach dem Gateway-Umbau haben soll — **eine** LAN-Tür,
+und die prüft die Session.
+
+Damit ist belegt, was am Code allein nicht zu klären war (externe `msb`-CLI):
+vorher hätten diese Ports als `*:<port>` dagestanden und jeder im LAN hätte die
+Previews ohne Anmeldung abrufen können — samt Session-Cookie, das der Browser
+mitgeschickt hätte, weil Cookies nicht portgebunden sind.
+
 ### Offen
 
-- **H1 am laufenden System belegen:** `nmap`/`lsof` aus dem LAN gegen eine
-  laufende VM. Die Integrationstests bestätigen, dass die Preview mit
-  Loopback-Bindung `ready` wird — dass `0.0.0.0` vorher wirklich im LAN offen
-  war, ist am Code allein nicht zu klären (externe `msb`-CLI).
-- **Push-/Merge-Entscheidung nach `main`** — noch nichts gepusht.
+Nichts mehr. Alle Befunde behoben, alle Behauptungen belegt, `main` gepusht.
