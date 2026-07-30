@@ -66,7 +66,7 @@ function setup(
 describe('enter', () => {
   test('startet die Sandbox und meldet Statusübergänge', async () => {
     const { provider, manager, statusLog } = setup();
-    await manager.enter(ctx('p1'));
+    await manager.enter(ctx('p1'), 'u1');
     expect(manager.status('p1')).toBe('running');
     expect(provider.startCalls).toEqual(['p1']);
     expect(statusLog).toEqual(['p1:starting', 'p1:running']);
@@ -74,8 +74,8 @@ describe('enter', () => {
 
   test('startet eine laufende Sandbox nicht doppelt', async () => {
     const { provider, manager } = setup();
-    await manager.enter(ctx('p1'));
-    await manager.enter(ctx('p1'));
+    await manager.enter(ctx('p1'), 'u1');
+    await manager.enter(ctx('p1'), 'u1');
     expect(provider.startCalls).toEqual(['p1']);
   });
 
@@ -100,14 +100,14 @@ describe('enter', () => {
       maxSandboxes: 8,
     });
 
-    const first = manager.enter(ctx('p1'));
+    const first = manager.enter(ctx('p1'), 'u1');
     // Warten bis der Status wirklich 'starting' ist (Start läuft, hängt am Gate).
     await Bun.sleep(10);
     expect(manager.status('p1')).toBe('starting');
 
     // Zweiter enter, während der erste noch im Start hängt:
     let secondResolved = false;
-    const second = manager.enter(ctx('p1')).then(() => {
+    const second = manager.enter(ctx('p1'), 'u1').then(() => {
       secondResolved = true;
     });
     await Bun.sleep(20);
@@ -130,17 +130,89 @@ describe('enter', () => {
 
   test('liefert den Preview-Host-Port der laufenden Sandbox', async () => {
     const { manager } = setup();
-    await manager.enter(ctx('p1'));
+    await manager.enter(ctx('p1'), 'u1');
     expect(manager.previewHostPort('p1')).toBe(9999);
     expect(manager.previewHostPort('anderes')).toBeNull();
+  });
+});
+
+describe('Betrachter-Refcount (H11): nur der letzte Betrachter stellt Grace scharf', () => {
+  test('ein Fremder kann die Sandbox nicht stoppen, während der Eigentümer zusieht', async () => {
+    // Der Angriff: leaveProject ist ownership-frei (R10). Ohne Refcount stellte
+    // ein einzelner fremder Aufruf den Grace-Timer scharf und stoppte damit die
+    // VM des Eigentümers — samt Auto-Commit in dessen Branch.
+    const { provider, manager, beforeStopLog } = setup({ graceMs: 20 });
+    await manager.enter(ctx('p1'), 'eigentuemer');
+    await manager.enter(ctx('p1'), 'fremder');
+
+    manager.leave('p1', 'fremder');
+    await Bun.sleep(120);
+
+    expect(manager.status('p1')).toBe('running');
+    expect(provider.stopCalls).toEqual([]);
+    expect(beforeStopLog).toEqual([]);
+  });
+
+  test('ein leave für einen nie eingetretenen Betrachter bewirkt nichts', async () => {
+    const { provider, manager } = setup({ graceMs: 20 });
+    await manager.enter(ctx('p1'), 'eigentuemer');
+
+    manager.leave('p1', 'niemals-eingetreten');
+    await Bun.sleep(120);
+
+    expect(manager.status('p1')).toBe('running');
+    expect(provider.stopCalls).toEqual([]);
+  });
+
+  test('geht der letzte Betrachter, greift die Grace-Period wie bisher', async () => {
+    const { provider, manager, beforeStopLog } = setup({ graceMs: 20 });
+    await manager.enter(ctx('p1'), 'eigentuemer');
+    await manager.enter(ctx('p1'), 'fremder');
+
+    manager.leave('p1', 'fremder');
+    manager.leave('p1', 'eigentuemer');
+    await Bun.sleep(120);
+
+    expect(manager.status('p1')).toBe('stopped');
+    expect(provider.stopCalls).toEqual(['p1']);
+    expect(beforeStopLog).toEqual(['p1']);
+  });
+
+  test('mehrfaches leave desselben Betrachters stoppt nicht doppelt', async () => {
+    const { provider, manager } = setup({ graceMs: 20 });
+    await manager.enter(ctx('p1'), 'eigentuemer');
+    await manager.enter(ctx('p1'), 'fremder');
+
+    manager.leave('p1', 'fremder');
+    manager.leave('p1', 'fremder');
+    await Bun.sleep(120);
+
+    // Der Eigentümer ist noch da — kein Stopp.
+    expect(manager.status('p1')).toBe('running');
+    expect(provider.stopCalls).toEqual([]);
+  });
+
+  test('nach einem Neustart zählt der Betrachterstand von vorn', async () => {
+    const { manager } = setup({ graceMs: 20 });
+    await manager.enter(ctx('p1'), 'eigentuemer');
+    manager.leave('p1', 'eigentuemer');
+    await Bun.sleep(120);
+    expect(manager.status('p1')).toBe('stopped');
+
+    await manager.enter(ctx('p1'), 'fremder');
+    expect(manager.status('p1')).toBe('running');
+    // Der alte Eigentümer-Eintrag darf nicht überlebt haben.
+    manager.leave('p1', 'fremder');
+    await Bun.sleep(120);
+    expect(manager.status('p1')).toBe('stopped');
   });
 });
 
 describe('leave / Grace-Period (R9)', () => {
   test('stoppt nach Ablauf der Grace-Period, Auto-Commit-Hook vor dem Stopp', async () => {
     const { provider, manager, beforeStopLog } = setup({ graceMs: 30 });
-    await manager.enter(ctx('p1'));
-    manager.leave('p1');
+    await manager.enter(ctx('p1'), 'u1');
+    manager.leave('p1', 'u1');
     await Bun.sleep(120);
     expect(manager.status('p1')).toBe('stopped');
     expect(provider.stopCalls).toEqual(['p1']);
@@ -149,10 +221,10 @@ describe('leave / Grace-Period (R9)', () => {
 
   test('erneutes Betreten innerhalb der Grace-Period verhindert den Stopp', async () => {
     const { provider, manager } = setup({ graceMs: 60 });
-    await manager.enter(ctx('p1'));
-    manager.leave('p1');
+    await manager.enter(ctx('p1'), 'u1');
+    manager.leave('p1', 'u1');
     await Bun.sleep(20);
-    await manager.enter(ctx('p1'));
+    await manager.enter(ctx('p1'), 'u1');
     await Bun.sleep(120);
     expect(manager.status('p1')).toBe('running');
     expect(provider.stopCalls).toEqual([]);
@@ -162,8 +234,8 @@ describe('leave / Grace-Period (R9)', () => {
   test('Grace-Stopp wird aufgeschoben, solange ein Turn läuft', async () => {
     let busy = true;
     const { provider, manager } = setup({ graceMs: 20, isBusy: () => busy });
-    await manager.enter(ctx('p1'));
-    manager.leave('p1');
+    await manager.enter(ctx('p1'), 'u1');
+    manager.leave('p1', 'u1');
 
     // Mehrere Grace-Zyklen lang beschäftigt — kein Stopp trotz Ablauf.
     await Bun.sleep(90);
@@ -180,10 +252,10 @@ describe('leave / Grace-Period (R9)', () => {
   test('erneutes Betreten während des aufgeschobenen Grace-Stopps hält die Sandbox am Leben', async () => {
     const busy = true;
     const { provider, manager } = setup({ graceMs: 20, isBusy: () => busy });
-    await manager.enter(ctx('p1'));
-    manager.leave('p1');
+    await manager.enter(ctx('p1'), 'u1');
+    manager.leave('p1', 'u1');
     await Bun.sleep(50);
-    await manager.enter(ctx('p1'));
+    await manager.enter(ctx('p1'), 'u1');
     await Bun.sleep(90);
     // Wieder betreten: Grace ist abgeräumt, busy spielt keine Rolle mehr.
     expect(manager.status('p1')).toBe('running');
@@ -194,14 +266,14 @@ describe('leave / Grace-Period (R9)', () => {
 describe('Agent-Idle (R9, 30-min-Regel)', () => {
   test('stoppt bei Agent-Inaktivität auch ohne leave', async () => {
     const { manager } = setup({ idleMs: 40 });
-    await manager.enter(ctx('p1'));
+    await manager.enter(ctx('p1'), 'u1');
     await Bun.sleep(120);
     expect(manager.status('p1')).toBe('stopped');
   });
 
   test('Agent-Aktivität verschiebt den Idle-Stopp', async () => {
     const { manager } = setup({ idleMs: 60 });
-    await manager.enter(ctx('p1'));
+    await manager.enter(ctx('p1'), 'u1');
     await Bun.sleep(30);
     manager.noteAgentActivity('p1');
     await Bun.sleep(40);
@@ -214,12 +286,12 @@ describe('Agent-Idle (R9, 30-min-Regel)', () => {
 describe('LRU-Limit (R9, max Sandboxes)', () => {
   test('stoppt die am längsten inaktive Sandbox beim Überschreiten', async () => {
     const { provider, manager } = setup({ maxSandboxes: 2, graceMs: 10_000 });
-    await manager.enter(ctx('p1'));
+    await manager.enter(ctx('p1'), 'u1');
     await Bun.sleep(5);
-    await manager.enter(ctx('p2'));
+    await manager.enter(ctx('p2'), 'u1');
     await Bun.sleep(5);
     manager.noteAgentActivity('p1');
-    await manager.enter(ctx('p3'));
+    await manager.enter(ctx('p3'), 'u1');
 
     // p2 ist am längsten inaktiv → wird verdrängt; p1 und p3 laufen.
     expect(manager.status('p2')).toBe('stopped');
@@ -242,9 +314,9 @@ describe('LRU-Eviction schont beschäftigte Sandboxes (F20)', () => {
       graceMs: 10_000,
       isBusy: (id) => id === 'p1',
     });
-    await manager.enter(ctx('p1'));
+    await manager.enter(ctx('p1'), 'u1');
 
-    await expect(manager.enter(ctx('p2'))).rejects.toThrow(/belegt|beschäftigt/i);
+    await expect(manager.enter(ctx('p2'), 'u1')).rejects.toThrow(/belegt|beschäftigt/i);
 
     expect(manager.status('p1')).toBe('running');
     expect(provider.stopCalls).toEqual([]);
@@ -256,8 +328,8 @@ describe('LRU-Eviction schont beschäftigte Sandboxes (F20)', () => {
       graceMs: 10_000,
       isBusy: () => false,
     });
-    await manager.enter(ctx('p1'));
-    await manager.enter(ctx('p2'));
+    await manager.enter(ctx('p1'), 'u1');
+    await manager.enter(ctx('p2'), 'u1');
 
     expect(provider.stopCalls).toEqual(['p1']);
     expect(manager.status('p2')).toBe('running');
@@ -289,12 +361,12 @@ describe('enter wartet auf ein laufendes stop (F17)', () => {
       });
     };
 
-    await manager.enter(ctx('p1'));
+    await manager.enter(ctx('p1'), 'u1');
     const stopping = manager.stop('p1');
     await Bun.sleep(10);
     expect(manager.status('p1')).toBe('stopping');
 
-    const entering = manager.enter(ctx('p1'));
+    const entering = manager.enter(ctx('p1'), 'u1');
     await Bun.sleep(10);
     // Solange der Stopp hängt, darf kein zweiter Start passiert sein.
     expect(provider.startCalls).toEqual(['p1']);
@@ -312,8 +384,8 @@ describe('enter wartet auf ein laufendes stop (F17)', () => {
 describe('stopAll', () => {
   test('stoppt alle laufenden Sandboxes', async () => {
     const { provider, manager } = setup();
-    await manager.enter(ctx('p1'));
-    await manager.enter(ctx('p2'));
+    await manager.enter(ctx('p1'), 'u1');
+    await manager.enter(ctx('p2'), 'u1');
     await manager.stopAll();
     expect(manager.status('p1')).toBe('stopped');
     expect(manager.status('p2')).toBe('stopped');
@@ -345,9 +417,9 @@ describe('gleichzeitiges enter startet nur EINE Sandbox (F14)', () => {
     });
 
     await Promise.all([
-      manager.enter(ctx('p1')),
-      manager.enter(ctx('p1')),
-      manager.enter(ctx('p1')),
+      manager.enter(ctx('p1'), 'u1'),
+      manager.enter(ctx('p1'), 'u1'),
+      manager.enter(ctx('p1'), 'u1'),
     ]);
 
     expect(starts).toBe(1);

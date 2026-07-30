@@ -50,6 +50,14 @@ interface SandboxEntry {
   startPromise: Promise<void> | null;
   /** Läuft der Stopp gerade? enter() wartet darauf, statt zu überschreiben (F17). */
   stopPromise: Promise<void> | null;
+  /**
+   * Wer schaut gerade zu (H11). `leaveProject` ist bewusst ownership-frei, damit
+   * Besucher fremde Sandboxes wieder freigeben können (R10) — ohne Refcount
+   * stellte damit aber ein einzelner fremder Aufruf den Grace-Timer scharf und
+   * stoppte die VM des Eigentümers, samt Auto-Commit in dessen Branch. Grace
+   * greift deshalb erst, wenn der LETZTE Betrachter gegangen ist.
+   */
+  viewers: Set<string>;
 }
 
 export class SandboxManager {
@@ -57,7 +65,11 @@ export class SandboxManager {
 
   constructor(private readonly options: SandboxManagerOptions) {}
 
-  async enter(context: SandboxContext): Promise<void> {
+  /**
+   * Sandbox betreten. `viewer` identifiziert den Betrachter (Nutzer-ID) und ist
+   * Pflicht, damit `leave` weiß, wer wieder gegangen ist (H11).
+   */
+  async enter(context: SandboxContext, viewer: string): Promise<void> {
     let existing = this.entries.get(context.projectId);
     // Ein laufender Stopp muss ZUERST fertig werden (F17): sonst startet hier
     // eine neue VM unter demselben msb-Namen, während stop() noch auf den
@@ -69,12 +81,14 @@ export class SandboxManager {
     if (existing && existing.status === 'starting' && existing.startPromise) {
       // Start läuft schon — darauf warten, damit der Agent nicht auf eine noch
       // nicht exec-bereite VM losfeuert ("no agent endpoint found", Race-Fix).
+      existing.viewers.add(viewer);
       this.clearGrace(existing);
       await existing.startPromise;
       this.touch(existing);
       return;
     }
     if (existing && existing.status === 'running') {
+      existing.viewers.add(viewer);
       this.clearGrace(existing);
       this.touch(existing);
       return;
@@ -89,6 +103,7 @@ export class SandboxManager {
       idleTimer: null,
       startPromise: null,
       stopPromise: null,
+      viewers: new Set([viewer]),
     };
     this.entries.set(context.projectId, entry);
     // Status und startPromise SYNCHRON setzen, bevor irgendein await folgt:
@@ -115,9 +130,17 @@ export class SandboxManager {
     }
   }
 
-  leave(projectId: string): void {
+  /**
+   * Sandbox freigeben. Grace wird erst scharf, wenn der letzte Betrachter
+   * gegangen ist (H11) — ein `leave` eines Fremden, während der Eigentümer noch
+   * zusieht, bleibt damit wirkungslos. Ein `leave` für einen Betrachter, der nie
+   * eingetreten ist, ändert gar nichts.
+   */
+  leave(projectId: string, viewer: string): void {
     const entry = this.entries.get(projectId);
     if (!entry || (entry.status !== 'running' && entry.status !== 'starting')) return;
+    if (!entry.viewers.delete(viewer)) return;
+    if (entry.viewers.size > 0) return;
     this.armGrace(entry);
   }
 
@@ -187,6 +210,9 @@ export class SandboxManager {
         await entry.handle?.stop();
       } finally {
         entry.handle = null;
+        // Betrachterstand fällt mit der VM: ein alter Eintrag würde sonst den
+        // nächsten Start blockieren, weil sein leave nie mehr käme (H11).
+        entry.viewers.clear();
         this.setStatus(entry, 'stopped');
       }
     })();

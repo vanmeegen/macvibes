@@ -387,14 +387,17 @@ builder.mutationType({
         const user = requireUser(ctx);
         const project = await getProjectAny(ctx, String(args.id));
         const workspaceDir = workspaceDirFor(ctx.config.macvibesHome, project.id);
-        await ctx.sandboxManager.enter({
-          projectId: project.id,
-          branchName: project.branchName,
-          workspaceDir,
-          templateDir: project.templateDir,
-          devCommand: project.devCommand,
-          previewPort: project.previewPort,
-        });
+        await ctx.sandboxManager.enter(
+          {
+            projectId: project.id,
+            branchName: project.branchName,
+            workspaceDir,
+            templateDir: project.templateDir,
+            devCommand: project.devCommand,
+            previewPort: project.previewPort,
+          },
+          user.id,
+        );
         if (project.ownerId === user.id) {
           // Config-Warmup anstoßen (fire-and-forget), während der User tippt —
           // der erste echte Turn trägt dann nicht mehr den claude-First-Run.
@@ -411,9 +414,15 @@ builder.mutationType({
         id: t.arg.id({ required: true }),
       },
       resolve: async (_root, args, ctx) => {
-        requireUser(ctx);
+        // Ownership bleibt bewusst außen vor (R10: Besucher dürfen fremde
+        // Sandboxes starten und müssen sie deshalb auch freigeben können). Die
+        // Absicherung sitzt im SandboxManager: `leave` zählt nur den eigenen
+        // Betrachter ab, Grace greift erst beim letzten (H11). Sonst könnte ein
+        // Fremder die VM des Eigentümers stoppen und dabei einen Auto-Commit in
+        // dessen Branch auslösen — dieselbe Regel wie bei deleteProject.
+        const user = requireUser(ctx);
         await getProjectAny(ctx, String(args.id));
-        ctx.sandboxManager.leave(String(args.id));
+        ctx.sandboxManager.leave(String(args.id), user.id);
         return true;
       },
     }),
@@ -450,14 +459,17 @@ builder.mutationType({
         }
         const workspaceDir = workspaceDirFor(ctx.config.macvibesHome, project.id);
         // Chatten setzt eine laufende Sandbox voraus (R6).
-        await ctx.sandboxManager.enter({
-          projectId: project.id,
-          branchName: project.branchName,
-          workspaceDir,
-          templateDir: project.templateDir,
-          devCommand: project.devCommand,
-          previewPort: project.previewPort,
-        });
+        await ctx.sandboxManager.enter(
+          {
+            projectId: project.id,
+            branchName: project.branchName,
+            workspaceDir,
+            templateDir: project.templateDir,
+            devCommand: project.devCommand,
+            previewPort: project.previewPort,
+          },
+          user.id,
+        );
         await ctx.chatService.sendMessage({
           projectId: project.id,
           workspaceDir,
