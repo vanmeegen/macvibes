@@ -95,9 +95,11 @@ ist (Default), bekommt **wer zuerst registriert** `role: 'admin'`,
 
 `apps/server/src/schema/index.ts:307` — Kandidaten C5 + C14, je 3:0
 
-`assertWithinLimit(loginLimiter, [… , \`user:${args.username.toLowerCase()}\`])`läuft ohne Auth und ohne Längenprüfung.`rateLimiter.ts:38-45`speichert den
-Angreifer-String als Map-Key und räumt **nur** im Zweig`if (hits.size > 1000)`
-auf — wenige, sehr große Keys bleiben also prozesslebenslang liegen.
+Der Login-Resolver baut den Rate-Limiter-Schlüssel aus `args.username` — ohne
+Auth und ohne Längenprüfung, denn `usernameSchema` greift erst _in_ `login()`.
+`rateLimiter.ts` speichert den Angreifer-String als Map-Key und räumt **nur**
+oberhalb von 1000 Einträgen auf — wenige, sehr große Keys bleiben also
+prozesslebenslang liegen.
 
 ### H5 (MEDIUM) — Credential-Proxy puffert den Body unbegrenzt
 
@@ -274,14 +276,53 @@ Build-Artefakte, Dokumentation.
 - `BATCH2-VOTES.json` — Tokens, Status-Pfade, Lifecycle, Routing (28 Agenten)
 - `BATCH3-VOTES.json` — Config, DB, Frontend, Templates, Ops (27 Agenten)
 
-## Empfohlene Reihenfolge
+## Stand der Behebung (2026-07-30)
 
-1. **H9** — Pfad-Allowlist im Credential-Proxy. Bricht die VM-Grenze, Einzeiler-nah.
-2. **H1** — `0.0.0.0` → `127.0.0.1`. Einzeiler, plus R7-Kriterium nachziehen.
-3. **H10** — `redirect: 'manual'` in `httpProbe`. Einzeiler.
-4. **H11** — `leaveProject` autorisieren (Regel aus `deleteProject` übernehmen).
-5. **H2/H3** — Cookie-Präfix und Admin-Bootstrap.
-6. Rest nach Severity; Grenzfälle vorher nachprüfen.
+**Alle 13 Ursachen behoben**, in 6 Commits auf `security/haertung-26-findings`,
+jeder mit `bun run ci` grün (zuletzt 471 Server-Tests, 0 fail). Test-first: für
+jeden Befund erst der fehlschlagende Test, dann der Fix.
 
-Vor dem Fixen von H1: ein `nmap`/`lsof` aus dem LAN gegen eine laufende VM
-klärt in einer Minute, was am Code nicht zu klären war.
+| Befund      | Fix                                                                                  | Commit    |
+| ----------- | ------------------------------------------------------------------------------------ | --------- |
+| H9 (HIGH)   | Pfad-Allowlist im Credential-Proxy, geprüft VOR dem Puffern                          | `20b1f86` |
+| H8          | `logSafe()` — Steuerzeichen escapen, Länge deckeln; 3 Log-Senken abgesichert         | `20b1f86` |
+| H1 (HIGH)   | `previewPortMapping()` bindet auf `127.0.0.1`; R7/CLAUDE.md/ADR 0001 nachgezogen     | `a68411a` |
+| H10         | `redirect: 'manual'` in `httpProbe`                                                  | `a68411a` |
+| H11         | Betrachter-Refcount im SandboxManager, `enter`/`leave` mit Pflicht-Betrachter        | `8a77507` |
+| H3          | Admin-Bootstrap nur mit `MACVIBES_ADMIN_USERNAME`; Start-Hinweis, wenn keiner da ist | `411b790` |
+| H2          | Mehrdeutiges Session-Cookie = nicht angemeldet (Cookie-Tossing)                      | `9a9d106` |
+| H4          | Lange Limiter-Schlüssel als Digest, harte Schlüsselgrenze, amortisiertes Aufräumen   | `9a9d106` |
+| H5          | Body-Limit im Proxy (content-length + harte Grenze beim Lesen, Default 32 MiB)       | `9a9d106` |
+| H6          | `revalidateStream` prüft die Session laufender Subscriptions alle 15 s nach          | `9a9d106` |
+| H7          | Alle drei `decodeURIComponent` im Gateway liefern null statt zu werfen               | `9a9d106` |
+| Grenzfall 1 | Alle Wire-Strings des Daemon-Protokolls gedeckelt + Kürzung an der Senke             | `9ed06e9` |
+| Grenzfall 2 | Aufräumen nach fehlgeschlagenem Start: Token entwerten, Port frei, VM stoppen        | `9ed06e9` |
+
+### Zwei Abweichungen von den Empfehlungen dieses Berichts
+
+**H2:** Der empfohlene `__Host-`-Präfix hilft hier **nicht**. Er verlangt
+`Secure`, im dokumentierten Klartext-LAN-Betrieb käme das Cookie also nie an;
+über HTTPS ist die Preview auf :8443 dieselbe sichere Host-Origin und könnte ihn
+genauso setzen. Wirksam ist stattdessen: `httpOnly` verhindert schon Lesen und
+Überschreiben, der Angriff muss also ein **zweites** Cookie auf einem anderen
+Pfad setzen — und das ist erkennbar. Vollständige Trennung bräuchte weiterhin
+eigene Hostnamen (Restrisiko 1).
+
+**Grenzfälle:** Beide standen nur 2:1 und waren als „vorher nachprüfen"
+markiert. Nachgeprüft, beide real — beim Protokoll-Deckel sagt der Kommentar
+über der Stelle selbst „der Daemon ist nicht vertrauenswürdig".
+
+### Dabei zusätzlich gefunden
+
+Der Aufräum-Scan des Rate-Limiters lief ab 1000 Einträgen bei **jedem** Aufruf
+über die ganze Map. Mit der neuen Obergrenze von 10.000 hätte jeder
+Login-Versuch einen 10.000er-Scan gekostet — selbst ein CPU-Hebel. Jetzt wird
+nur am Limit und mit Luft nach unten aufgeräumt, also amortisiert.
+
+### Offen
+
+- **H1 am laufenden System belegen:** `nmap`/`lsof` aus dem LAN gegen eine
+  laufende VM. Die Integrationstests bestätigen, dass die Preview mit
+  Loopback-Bindung `ready` wird — dass `0.0.0.0` vorher wirklich im LAN offen
+  war, ist am Code allein nicht zu klären (externe `msb`-CLI).
+- **Push-/Merge-Entscheidung nach `main`** — noch nichts gepusht.
