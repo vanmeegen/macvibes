@@ -131,11 +131,16 @@ describe('Startkonfiguration (Übersetzung der bisherigen CLI-Aufrufe)', () => {
     const policy = cfg.network.policy;
     expect(policy.defaultEgress).toBe('deny');
     expect(policy.defaultIngress).toBe('allow');
-    expect(policy.rules).toHaveLength(2);
-    expect(policy.rules[0].destination).toEqual({ group: 'public' });
+    expect(policy.rules).toHaveLength(3);
+    // DNS zum Host — fehlte in der alten CLI-Regel, wodurch Namensauflösung in
+    // Projekt-VMs unmöglich war (nachgemessen). Öffnet nur Port 53, kein LAN.
+    expect(policy.rules[0].destination).toEqual({ group: 'host' });
+    expect(policy.rules[0].ports).toEqual([{ start: 53, end: 53 }]);
     expect(policy.rules[0].action).toBe('allow');
-    expect(policy.rules[1].destination).toEqual({ cidr: '172.16.0.0/12' });
+    expect(policy.rules[1].destination).toEqual({ group: 'public' });
     expect(policy.rules[1].action).toBe('allow');
+    expect(policy.rules[2].destination).toEqual({ cidr: '172.16.0.0/12' });
+    expect(policy.rules[2].action).toBe('allow');
   });
 
   test('bindet den Preview-Port ausschließlich ans Loopback (H1)', async () => {
@@ -170,5 +175,50 @@ describe('Startkonfiguration (Übersetzung der bisherigen CLI-Aufrufe)', () => {
     expect(cfg.resources.cpus).toBe(2);
     expect(cfg.resources.memoryMib).toBe(1024);
     expect(cfg.init).toEqual({ cmd: '/bin/sh', args: ['-c', 'echo hallo'], env: [] });
+  });
+});
+
+/**
+ * Regressionsschutz für die Egress-Grenze. Sie ist der Kern von Restrisiko 2
+ * („die VM darf ins öffentliche Netz, LAN und Loopback des Hosts sind
+ * gesperrt"): fiele sie weg, käme der untrusted Agent an den Credential-Proxy,
+ * das Agent-Gateway und alles im LAN. Der Default MUSS deshalb die gehärtete
+ * Policy sein, und die Ausnahme muss man ausdrücklich hinschreiben.
+ */
+describe('Egress-Grenze ist der Default', () => {
+  const basis = {
+    name: 'macvibes-x',
+    snapshot: 'macvibes-tpl-pwa',
+    workdir: '/work',
+    cpus: 1,
+    memoryMib: 512,
+    previewHostPort: 40001,
+    previewGuestPort: 5173,
+    mounts: [],
+    command: ['/bin/sh', '-c', 'true'],
+  };
+
+  test('ohne Angabe gilt die gehärtete Policy', async () => {
+    const cfg = JSON.parse(JSON.stringify(await buildSandboxConfig(basis)));
+    expect(cfg.network.policy.defaultEgress).toBe('deny');
+  });
+
+  test('unbeschränkt lässt die Host-Gateway-Regel weg', async () => {
+    // Ohne eigene Policy greift der Default der Laufzeit: Egress ebenfalls
+    // gesperrt, erlaubt sind DNS zum Host und das öffentliche Netz — aber NICHT
+    // das Host-Gateway-Netz 172.16/12. Die Builder-VM braucht es nicht.
+    const cfg = JSON.parse(
+      JSON.stringify(await buildSandboxConfig({ ...basis, netzwerk: 'unbeschraenkt' })),
+    );
+    const ziele = cfg.network.policy.rules.map((r: { destination: unknown }) => r.destination);
+    expect(ziele).not.toContainEqual({ cidr: '172.16.0.0/12' });
+    expect(cfg.network.policy.defaultEgress).toBe('deny');
+  });
+
+  test('ohne Preview-Port entsteht kein Port-Mapping (Builder-VM)', async () => {
+    const cfg = JSON.parse(
+      JSON.stringify(await buildSandboxConfig({ ...basis, previewHostPort: 0 })),
+    );
+    expect(cfg.network.ports).toHaveLength(0);
   });
 });

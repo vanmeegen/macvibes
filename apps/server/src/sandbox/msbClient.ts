@@ -222,11 +222,28 @@ export async function buildSandboxConfig(spec: SandboxSpec): Promise<unknown> {
  * Host-Gateway für den Credential-Proxy.
  */
 function egressPolicy() {
-  return NetworkPolicy.builder()
-    .defaultEgress('deny')
-    .defaultIngress('allow')
-    .egress((r) => r.allowPublic())
-    .egress((r) => r.allow((d) => d.cidr('172.16.0.0/12')));
+  return (
+    NetworkPolicy.builder()
+      .defaultEgress('deny')
+      .defaultIngress('allow')
+      // DNS zum Host-Resolver. FEHLTE bisher — die alte CLI-Regel
+      // `allow@public,allow@172.16.0.0/12` enthielt keine DNS-Ausnahme, damit
+      // war „öffentliches Netz erlaubt" für Namen unbrauchbar: in einer
+      // Projekt-VM scheiterte jede Namensauflösung (nachgemessen), also auch
+      // das per ADR 0002 vorgesehene `bun add` des Agenten, sobald der
+      // persistente Cache nicht traf. Die Regel entspricht Wort für Wort dem
+      // Default, den die Laufzeit selbst setzt, wenn man keine Policy angibt —
+      // sie öffnet nur Port 53 zum Host, nicht das LAN.
+      .egress((r) =>
+        r
+          .tcp()
+          .udp()
+          .port(53)
+          .allow((d) => d.group('host')),
+      )
+      .egress((r) => r.allowPublic())
+      .egress((r) => r.allow((d) => d.cidr('172.16.0.0/12')))
+  );
 }
 
 function bauBuilder(spec: SandboxSpec) {
