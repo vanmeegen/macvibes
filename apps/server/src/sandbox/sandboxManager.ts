@@ -76,6 +76,20 @@ interface SandboxEntry {
 /** Mindestabstand zwischen zwei VM-Berührungen (ADR 0003). */
 const DEFAULT_VM_TOUCH_INTERVAL_MS = 60_000;
 
+/**
+ * Schlüssel eines Betrachters im Refcount (H11).
+ *
+ * Enthält die VERBINDUNG (Tab), nicht nur den Nutzer. Vorher zählte allein die
+ * Nutzer-ID: öffnete dieselbe Person dasselbe Projekt zweimal, fügte der
+ * zweite Eintritt nichts hinzu, und das Schliessen des ersten Tabs stellte den
+ * Grace-Timer scharf — die VM starb unter dem noch offenen zweiten Tab.
+ *
+ * Ohne Verbindungskennung (ältere Clients) gilt weiterhin das alte Verhalten.
+ */
+export function viewerKey(userId: string, connectionId: string | null): string {
+  return connectionId === null || connectionId === '' ? userId : `${userId}:${connectionId}`;
+}
+
 export class SandboxManager {
   private readonly entries = new Map<string, SandboxEntry>();
 

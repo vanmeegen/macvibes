@@ -461,3 +461,34 @@ describe('Modellwahl pro Projekt (Dropdown im Chat)', () => {
     expect(store.agentModels.map((m) => m.id)).toEqual(['claude-sonnet-5', 'qwen3.6-coder']);
   });
 });
+
+/**
+ * Der Betrachter-Refcount des Servers (H11) war nach Nutzer-ID verschluesselt.
+ * Zwei Tabs derselben Person zaehlten als einer: das Schliessen des ersten
+ * stoppte die VM unter dem noch offenen zweiten. Der Store schickt deshalb eine
+ * Kennung pro Tab mit.
+ */
+describe('viewerId: eine Kennung pro Tab', () => {
+  it('unterscheidet zwei Store-Instanzen (= zwei Tabs)', () => {
+    const a = new ProjectsStore(makeAuthStore('alice'));
+    const b = new ProjectsStore(makeAuthStore('alice'));
+    expect(a.viewerId).not.toBe(b.viewerId);
+  });
+
+  it('schickt dieselbe Kennung bei enterProject und leaveProject', async () => {
+    const store = new ProjectsStore(makeAuthStore('alice'));
+    const variablen: Array<Record<string, unknown>> = [];
+    vi.mocked(gqlRequest).mockImplementation((_query: string, vars?: Record<string, unknown>) => {
+      if (vars !== undefined) variablen.push(vars);
+      return Promise.resolve({ projects: [], templates: [], agentModels: [] } as never);
+    });
+
+    await store.enterProject('p1');
+    await store.leaveProject('p1');
+
+    const mitViewer = variablen.filter((v) => 'viewerId' in v);
+    expect(mitViewer.length).toBe(2);
+    expect(mitViewer[0]?.viewerId).toBe(store.viewerId);
+    expect(mitViewer[1]?.viewerId).toBe(store.viewerId);
+  });
+});

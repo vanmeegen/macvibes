@@ -29,6 +29,7 @@ import {
   type ProjectWithOwner,
 } from '../services/projectsService';
 import { loadTemplates } from '../services/templatesService';
+import { viewerKey } from '../sandbox/sandboxManager';
 import { workspaceDirFor } from '../services/workspaceService';
 import { builder, type GraphQLContext } from './builder';
 
@@ -406,6 +407,13 @@ builder.mutationType({
       type: ProjectRef,
       args: {
         id: t.arg.id({ required: true }),
+        /**
+         * Kennung der aufrufenden Verbindung (ein Wert pro Tab). Ohne sie
+         * zaehlt der Refcount nur den Nutzer — dann haelt ein zweiter Tab die
+         * Sandbox nicht offen (H11). Optional, damit aeltere Clients weiter
+         * funktionieren.
+         */
+        viewerId: t.arg.string({ required: false }),
       },
       resolve: async (_root, args, ctx) => {
         // Auch Nur-Lese-Besucher starten die Sandbox — sonst gäbe es für
@@ -422,7 +430,7 @@ builder.mutationType({
             devCommand: project.devCommand,
             previewPort: project.previewPort,
           },
-          user.id,
+          viewerKey(user.id, args.viewerId ?? null),
         );
         if (project.ownerId === user.id) {
           // Config-Warmup anstoßen (fire-and-forget), während der User tippt —
@@ -443,6 +451,8 @@ builder.mutationType({
     leaveProject: t.boolean({
       args: {
         id: t.arg.id({ required: true }),
+        /** Dieselbe Kennung wie beim enterProject dieses Tabs (H11). */
+        viewerId: t.arg.string({ required: false }),
       },
       resolve: async (_root, args, ctx) => {
         // Ownership bleibt bewusst außen vor (R10: Besucher dürfen fremde
@@ -453,7 +463,7 @@ builder.mutationType({
         // dessen Branch auslösen — dieselbe Regel wie bei deleteProject.
         const user = requireUser(ctx);
         await getProjectAny(ctx, String(args.id));
-        ctx.sandboxManager.leave(String(args.id), user.id);
+        ctx.sandboxManager.leave(String(args.id), viewerKey(user.id, args.viewerId ?? null));
         return true;
       },
     }),

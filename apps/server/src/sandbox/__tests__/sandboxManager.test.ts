@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { SandboxContext, SandboxHandle, SandboxProvider } from '../provider';
-import { SandboxManager } from '../sandboxManager';
+import { SandboxManager, viewerKey } from '../sandboxManager';
 
 function ctx(projectId: string): SandboxContext {
   return {
@@ -622,5 +622,44 @@ describe('forget: geloeschte Projekte nicht ewig mitschleppen', () => {
     const { manager } = setup();
     expect(() => manager.forget('gibt-es-nicht')).not.toThrow();
     expect(manager.trackedProjects()).toBe(0);
+  });
+});
+
+/**
+ * Der Betrachter-Refcount (H11) war nach NUTZER-ID verschluesselt. Oeffnet
+ * dieselbe Person dasselbe Projekt in zwei Tabs (oder auf Laptop und iPad),
+ * fuegt der zweite Eintritt nichts hinzu — das Set hat weiterhin ein Element.
+ * Schliesst sie den ersten Tab, leert `leave` das Set und stellt Grace scharf:
+ * die VM stirbt unter dem noch offenen zweiten Tab, die Preview kippt auf
+ * „nicht bereit", und der naechste Prompt zahlt einen Kaltstart.
+ */
+describe('viewerKey: eine Identitaet pro Verbindung, nicht pro Nutzer', () => {
+  test('trennt zwei Tabs desselben Nutzers', () => {
+    expect(viewerKey('u1', 'tab-a')).not.toBe(viewerKey('u1', 'tab-b'));
+  });
+
+  test('bleibt fuer dieselbe Verbindung stabil', () => {
+    expect(viewerKey('u1', 'tab-a')).toBe(viewerKey('u1', 'tab-a'));
+  });
+
+  test('faellt ohne Verbindungskennung auf die Nutzer-ID zurueck', () => {
+    // Aeltere Clients schicken nichts mit — dann gilt das alte Verhalten.
+    expect(viewerKey('u1', null)).toBe('u1');
+    expect(viewerKey('u1', '')).toBe('u1');
+  });
+
+  test('zwei Tabs halten die Sandbox offen, bis beide gegangen sind', async () => {
+    const { manager, provider } = setup({ graceMs: 20 });
+    await manager.enter(ctx('p1'), viewerKey('marco', 'tab-a'));
+    await manager.enter(ctx('p1'), viewerKey('marco', 'tab-b'));
+
+    manager.leave('p1', viewerKey('marco', 'tab-a'));
+    await Bun.sleep(120);
+    expect(manager.status('p1')).toBe('running');
+    expect(provider.stopCalls).toEqual([]);
+
+    manager.leave('p1', viewerKey('marco', 'tab-b'));
+    await Bun.sleep(120);
+    expect(manager.status('p1')).toBe('stopped');
   });
 });
