@@ -4,7 +4,7 @@
  * erneut ausführen (PRD, offener Punkt „Rebuild-Strategie").
  */
 import { buildTemplateBaseline } from '../src/sandbox/baselineService';
-import { msbAvailable } from '../src/sandbox/msb';
+import { msbAvailable } from '../src/sandbox/msbClient';
 import { loadConfig } from '../src/config';
 import { loadTemplates } from '../src/services/templatesService';
 
