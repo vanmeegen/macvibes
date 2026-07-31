@@ -14,6 +14,7 @@ import {
   startSandbox,
   stopSandbox,
   waitForSandboxReady,
+  type SandboxSpec,
 } from './msbClient';
 import { PreviewStatusPoller } from './previewStatusPoller';
 import { PushedPreviewStatus } from './previewStatusPush';
@@ -56,6 +57,18 @@ export interface MicrosandboxProviderConfig {
    * `waitForSandboxReady` aus msbClient.ts).
    */
   waitForReady?: (sandboxName: string) => Promise<void>;
+  /**
+   * Die VM starten. Injizierbar aus demselben Grund wie `waitForReady`: der
+   * Aufräumpfad muss auch für einen Fehler im START selbst prüfbar sein
+   * (Default: `startSandbox` aus msbClient.ts).
+   */
+  startSandbox?: (spec: SandboxSpec) => Promise<void>;
+  /**
+   * Host-Port-Vergabe. Injizierbar, damit ein Test beobachten kann, ob ein
+   * gescheiterter Start seinen Port wieder freigibt (Default: eigener
+   * Allocator pro Provider).
+   */
+  ports?: PortAllocator;
   /**
    * Idle-Frist der VM in Sekunden (ADR 0003). Wird aus dem host-seitigen
    * Idle-Timer abgeleitet (idleMs + 15 min) — bewusst kein eigener Parameter,
@@ -139,9 +152,11 @@ export const BUN_CACHE_GUEST_DIR = '/bun-cache';
 export class MicrosandboxSandboxProvider implements SandboxProvider {
   // Geteilt über ALLE Sandboxen dieses Providers → kollisionsfreie Host-Ports
   // auch bei parallelen Starts (zwei pwa-Projekte wollen beide previewPort 5173).
-  private readonly ports = new PortAllocator();
+  private readonly ports: PortAllocator;
 
-  constructor(private readonly config: MicrosandboxProviderConfig) {}
+  constructor(private readonly config: MicrosandboxProviderConfig) {
+    this.ports = config.ports ?? new PortAllocator();
+  }
 
   async start(context: SandboxContext): Promise<SandboxHandle> {
     const workspaceDir = await ensureWorkspace({
@@ -169,72 +184,16 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     const name = microsandboxSandboxName(context.projectId);
     const hostPort = await this.ports.allocate(context.previewPort);
 
-    const services = buildVmServices({
-      devCommand: context.devCommand,
-      previewPort: context.previewPort,
-      daemonEnv: {
-        ...this.config.agentDaemon.envFor(name),
-        // Preview-Status-Push (ADR 0001): der Daemon liest monit + Dev-Server
-        // in der VM lokal — dafür braucht er die Ports.
-        MACVIBES_PREVIEW_PORT: String(context.previewPort),
-        MACVIBES_MONIT_PORT: String(MONIT_HTTPD_PORT),
-        // Ein Mechanismus, zwei Nutzer (ADR 0002): gilt für bun add des Agenten
-        // UND für den Boot-Delta-Install in devserver-run.sh (sourcet die Env).
-        BUN_INSTALL_CACHE_DIR: BUN_CACHE_GUEST_DIR,
-      },
-    });
-
-    // Service-Konfiguration pro Projekt aufs Volume schreiben (ro-Mount).
-    // Owner-only (0700/0600): daemon.env.sh enthält das Proxy-Token — andere
-    // Host-Nutzer haben darauf nichts zu suchen (nicht auf die umask verlassen).
-    const etcDir = join(projectVolumeDir(this.config.macvibesHome, context.projectId), 'vm-etc');
-    rmSync(etcDir, { recursive: true, force: true });
-    mkdirSync(etcDir, { recursive: true, mode: 0o700 });
-    for (const [relativePath, content] of Object.entries(services.files)) {
-      const filePath = join(etcDir, relativePath);
-      mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
-      writeFileSync(filePath, content, { mode: 0o600 });
-    }
-
-    // node_modules kommt vorinstalliert aus dem Snapshot und wird in den
-    // gemounteten Workspace gelinkt — kein VOLL-Install zur Laufzeit; das
-    // Delta aus bun.lock zieht devserver-run.sh beim Start (ADR 0002).
-    // Verlinkt ALLE node_modules (auch apps/<x>/node_modules bei
-    // Workspace-Templates wie fullstack), nicht nur das Root — sonst fehlt
-    // z. B. vite in .bin.
-    const bootstrap = baselineBootstrapScript;
-
-    await startSandbox({
-      name,
-      snapshot: baselineSnapshotName(context.templateDir),
-      workdir: GUEST_WORKDIR,
-      cpus: this.config.cpus,
-      memoryMib: this.config.memoryMib,
-      previewHostPort: hostPort,
-      previewGuestPort: context.previewPort,
-      mounts: [
-        { host: workspaceDir, guest: GUEST_WORKDIR },
-        { host: agentConfigDir, guest: AGENT_CONFIG_GUEST_DIR },
-        { host: bunCacheDir, guest: BUN_CACHE_GUEST_DIR },
-        { host: etcDir, guest: VM_ETC_DIR, readonly: true },
-        { host: this.config.agentDaemon.bundleDir, guest: VM_BIN_DIR, readonly: true },
-      ],
-      // Absoluter Pfad: das SDK lehnt ein blosses 'sh' ab (die CLI nahm es an).
-      command: ['/bin/sh', '-c', `${bootstrap}; ${services.pid1Command}`],
-      ...(this.config.vmIdleTimeoutSecs !== undefined
-        ? { idleTimeoutSecs: this.config.vmIdleTimeoutSecs }
-        : {}),
-    });
-    // `msb run -d` kehrt zurück, bevor der Gast-Agent-Endpunkt bereit ist —
-    // ohne dieses Warten scheitern frühe execs ("no agent endpoint found").
-    //
-    // Ab hier LÄUFT die VM, und ihr Token ist ausgestellt (envFor oben). Ein
-    // Fehler darf sie deshalb nicht zurücklassen: sonst bliebe eine laufende
-    // MicroVM mit gültigem Token übrig, für die es keinen Handle und damit
-    // keinen stop() mehr gibt — Credential- und Egress-Proxy stünden ihr weiter
-    // offen, obwohl der Start für den Aufrufer gescheitert ist.
+    // Ab hier sind Host-Port UND VM-Token vergeben (envFor in bootVm). Jeder
+    // Fehler danach MUSS beides zurücknehmen und eine womöglich schon laufende
+    // VM stoppen — sonst bliebe eine MicroVM mit gültigem Token übrig, für die
+    // es keinen Handle und damit kein stop() mehr gibt: Credential- und
+    // Egress-Proxy stünden ihr weiter offen, obwohl der Start für den Aufrufer
+    // gescheitert ist. Früher lag dieses Aufräumen NUR im waitForReady-Pfad;
+    // ein Wurf aus dem Start selbst (msb-Schemakonflikt, fehlender Snapshot,
+    // OOM) ging daran vorbei und leckte Port und Token.
     try {
-      await (this.config.waitForReady ?? waitForSandboxReady)(name);
+      await this.bootVm(context, name, hostPort, { workspaceDir, agentConfigDir, bunCacheDir });
     } catch (error) {
       this.config.agentDaemon.revokeToken?.(name);
       this.ports.release(hostPort);
@@ -273,6 +232,78 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
         await this.stopVm(name);
       },
     };
+  }
+
+  /**
+   * Schreibt die Service-Konfiguration aufs Volume, startet die VM und wartet,
+   * bis ihr Agent-Endpunkt bereit ist. Wirft dieser Weg an irgendeiner Stelle,
+   * räumt der Aufrufer Port, Token und VM auf.
+   */
+  private async bootVm(
+    context: SandboxContext,
+    name: string,
+    hostPort: number,
+    dirs: { workspaceDir: string; agentConfigDir: string; bunCacheDir: string },
+  ): Promise<void> {
+    const services = buildVmServices({
+      devCommand: context.devCommand,
+      previewPort: context.previewPort,
+      daemonEnv: {
+        ...this.config.agentDaemon.envFor(name),
+        // Preview-Status-Push (ADR 0001): der Daemon liest monit + Dev-Server
+        // in der VM lokal — dafür braucht er die Ports.
+        MACVIBES_PREVIEW_PORT: String(context.previewPort),
+        MACVIBES_MONIT_PORT: String(MONIT_HTTPD_PORT),
+        // Ein Mechanismus, zwei Nutzer (ADR 0002): gilt für bun add des Agenten
+        // UND für den Boot-Delta-Install in devserver-run.sh (sourcet die Env).
+        BUN_INSTALL_CACHE_DIR: BUN_CACHE_GUEST_DIR,
+      },
+    });
+
+    // Service-Konfiguration pro Projekt aufs Volume schreiben (ro-Mount).
+    // Owner-only (0700/0600): daemon.env.sh enthält das Proxy-Token — andere
+    // Host-Nutzer haben darauf nichts zu suchen (nicht auf die umask verlassen).
+    const etcDir = join(projectVolumeDir(this.config.macvibesHome, context.projectId), 'vm-etc');
+    rmSync(etcDir, { recursive: true, force: true });
+    mkdirSync(etcDir, { recursive: true, mode: 0o700 });
+    for (const [relativePath, content] of Object.entries(services.files)) {
+      const filePath = join(etcDir, relativePath);
+      mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
+      writeFileSync(filePath, content, { mode: 0o600 });
+    }
+
+    // node_modules kommt vorinstalliert aus dem Snapshot und wird in den
+    // gemounteten Workspace gelinkt — kein VOLL-Install zur Laufzeit; das
+    // Delta aus bun.lock zieht devserver-run.sh beim Start (ADR 0002).
+    // Verlinkt ALLE node_modules (auch apps/<x>/node_modules bei
+    // Workspace-Templates wie fullstack), nicht nur das Root — sonst fehlt
+    // z. B. vite in .bin.
+    const bootstrap = baselineBootstrapScript;
+
+    await (this.config.startSandbox ?? startSandbox)({
+      name,
+      snapshot: baselineSnapshotName(context.templateDir),
+      workdir: GUEST_WORKDIR,
+      cpus: this.config.cpus,
+      memoryMib: this.config.memoryMib,
+      previewHostPort: hostPort,
+      previewGuestPort: context.previewPort,
+      mounts: [
+        { host: dirs.workspaceDir, guest: GUEST_WORKDIR },
+        { host: dirs.agentConfigDir, guest: AGENT_CONFIG_GUEST_DIR },
+        { host: dirs.bunCacheDir, guest: BUN_CACHE_GUEST_DIR },
+        { host: etcDir, guest: VM_ETC_DIR, readonly: true },
+        { host: this.config.agentDaemon.bundleDir, guest: VM_BIN_DIR, readonly: true },
+      ],
+      // Absoluter Pfad: das SDK lehnt ein blosses 'sh' ab (die CLI nahm es an).
+      command: ['/bin/sh', '-c', `${bootstrap}; ${services.pid1Command}`],
+      ...(this.config.vmIdleTimeoutSecs !== undefined
+        ? { idleTimeoutSecs: this.config.vmIdleTimeoutSecs }
+        : {}),
+    });
+    // `msb run -d` kehrt zurück, bevor der Gast-Agent-Endpunkt bereit ist —
+    // ohne dieses Warten scheitern frühe execs ("no agent endpoint found").
+    await (this.config.waitForReady ?? waitForSandboxReady)(name);
   }
 
   private async stopVm(name: string): Promise<void> {

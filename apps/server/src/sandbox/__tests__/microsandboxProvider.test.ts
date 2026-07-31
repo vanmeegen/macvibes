@@ -27,6 +27,7 @@ import {
   previewPortMapping,
 } from '../microsandboxProvider';
 import { execShell, listSandboxNames } from '../msbClient';
+import { PortAllocator } from '../portService';
 import type { SandboxHandle } from '../provider';
 import type { MicrosandboxProviderConfig } from '../microsandboxProvider';
 
@@ -461,6 +462,65 @@ describe.skipIf(!available)('Aufräumen nach fehlgeschlagenem Start', () => {
     },
     { timeout: 120_000 },
   );
+});
+
+/**
+ * Derselbe Aufräumpfad, aber eine Stufe früher: nicht das Bereitwerden, sondern
+ * der VM-Start selbst scheitert (msb-Schemakonflikt, fehlendes Image, OOM).
+ *
+ * Vorher lag das Aufräumen ausschliesslich im `waitForReady`-Fehlerpfad, ein
+ * Wurf aus `startSandbox` ging daran vorbei. Jeder Fehlstart reservierte damit
+ * dauerhaft einen Host-Port im providerweiten Allocator UND liess ein gültiges
+ * VM-Token stehen — das authentifiziert Credential-Proxy, Egress-Proxy und
+ * Agent-Gateway, obwohl die Plattform den Start für gescheitert hält und keinen
+ * Handle zum Stoppen besitzt.
+ */
+describe.skipIf(!available)('Aufräumen, wenn schon der VM-Start scheitert', () => {
+  test('gibt den Host-Port frei und entwertet das Token', async () => {
+    const { home, bare } = await projectSetup('cleanup-2');
+    const basis = providerConfig(home, bare);
+    const widerrufen: string[] = [];
+    const freigegeben: number[] = [];
+
+    // Freigaben mitschneiden, ohne das Verhalten zu ändern.
+    const ports = new PortAllocator();
+    const echteFreigabe = ports.release.bind(ports);
+    ports.release = (port: number): void => {
+      freigegeben.push(port);
+      echteFreigabe(port);
+    };
+
+    const provider = new MicrosandboxSandboxProvider({
+      ...basis,
+      ports,
+      agentDaemon: {
+        ...basis.agentDaemon,
+        revokeToken: (name: string) => {
+          widerrufen.push(name);
+        },
+      },
+      // Es startet keine echte VM — der Start wirft, bevor msb etwas tut.
+      startSandbox: async () => {
+        throw new Error('database schema is newer than this msb binary (simuliert)');
+      },
+    });
+
+    await expect(
+      provider.start({
+        projectId: 'cleanup-2',
+        branchName: 'marco/cleanup-2',
+        workspaceDir: workspaceDirFor(home, 'cleanup-2'),
+        templateDir: FIXTURE_TEMPLATE_DIR,
+        devCommand: 'bun server.ts',
+        previewPort: 5178,
+      }),
+    ).rejects.toThrow('database schema is newer');
+
+    // Ohne Widerruf bliebe das Token für Credential- und Egress-Proxy gültig.
+    expect(widerrufen).toEqual(['macvibes-cleanup-2']);
+    // Ohne Freigabe wäre der Port für die Lebensdauer des Prozesses verloren.
+    expect(freigegeben).toHaveLength(1);
+  });
 });
 
 /**
