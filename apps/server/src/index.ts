@@ -31,6 +31,7 @@ import { ChatService } from './services/chatService';
 import { ensureBareRepo } from './services/gitService';
 import { startMirrorScheduler } from './services/mirrorService';
 import { startLocalRouter } from './services/localRouterService';
+import { ShutdownSequence } from './shutdownSequence';
 import { projectRepoFor } from './services/workspaceService';
 
 const config = loadConfig();
@@ -79,6 +80,16 @@ if (config.anthropic.oauthToken === null && config.anthropic.apiKey === null) {
   );
 }
 
+// EIN Handler-Paar für den gesamten Prozess. Abschaltschritte werden
+// registriert, während der Server hochfährt, und laufen beim Signal rückwärts
+// ab (zuletzt Gestartetes zuerst gestoppt). Die Registrierung steht bewusst so
+// früh, dass auch ein Ctrl-C MITTEN im Hochlauf noch geordnet abräumt — der
+// erste Router-Start kann Minuten dauern (venv + LiteLLM).
+const shutdownSequence = new ShutdownSequence();
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.on(signal, () => void shutdownSequence.handle(signal));
+}
+
 // Lokalen Modell-Router (Anthropic-Shim) MITSTARTEN — im Hintergrund, damit der
 // Server sofort hochkommt; qwen-Turns vor Router-Readiness scheitern mit klarer
 // 502 des Proxys. Ein extern laufender Shim wird erkannt und nie angefasst.
@@ -92,11 +103,12 @@ const localRouterReady =
       })
     : Promise.resolve({ state: 'unavailable' as const, stop: async () => {} });
 // Selbst gestarteten Shim beim Beenden mitnehmen (SIGTERM = bun run shutdown).
-for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  process.on(signal, () => {
-    void localRouterReady.then((router) => router.stop()).finally(() => process.exit(0));
-  });
-}
+// Als Schritt, NICHT als eigener Handler: ein zweiter Handler mit eigenem
+// process.exit(0) hat vorher den Auto-Commit der Sandboxes abgeschnitten.
+shutdownSequence.register('lokaler Modell-Router', async () => {
+  const router = await localRouterReady;
+  await router.stop();
+});
 
 /** Meldet eine group/other-lesbare .env — dort steht der Claude-Token (F26). */
 function warnIfEnvFileReadable(envPath: string): void {
@@ -380,19 +392,9 @@ if (config.mirror.remoteUrl !== null) {
 }
 
 // MicroVMs laufen detached — beim Herunterfahren sauber stoppen (inkl. Auto-Commit).
-let shuttingDown = false;
-async function shutdown(signal: string): Promise<void> {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  console.log(`${signal} empfangen — stoppe alle Sandboxes…`);
-  mirror.stop();
-  previewGateway.stop();
-  try {
-    await sandboxManager.stopAll();
-  } catch (error) {
-    console.error('Fehler beim Stoppen der Sandboxes:', error);
-  }
-  process.exit(0);
-}
-process.on('SIGINT', () => void shutdown('SIGINT'));
-process.on('SIGTERM', () => void shutdown('SIGTERM'));
+// Reihenfolge ergibt sich aus der Registrierung: rückwärts, also Sandboxes
+// zuerst (ihr Auto-Commit ist das Empfindlichste), dann Gateway, Mirror und
+// zuletzt der Modell-Router.
+shutdownSequence.register('GitHub-Mirror', () => mirror.stop());
+shutdownSequence.register('Preview-Gateway', () => previewGateway.stop());
+shutdownSequence.register('Sandboxes (inkl. Auto-Commit)', () => sandboxManager.stopAll());
