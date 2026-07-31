@@ -178,15 +178,33 @@ export class ChatService {
   async prewarm(projectId: string, workspaceDir: string): Promise<void> {
     if (!this.prewarmEnabled) return;
     if (this.warmups.has(projectId)) return;
-    const projectRow = (
-      await this.db.select().from(projects).where(eq(projects.id, projectId)).limit(1)
-    )[0];
+    // Der Aufrufer (schema/index.ts) startet prewarm als floating promise. Eine
+    // Rejection hätte dort keinen Handler und beendete den ganzen Serverprozess
+    // — eine SQLITE_BUSY beim Öffnen EINES Projekts risse damit alle anderen
+    // Sitzungen und alle laufenden MicroVMs mit. Der Warmup ist reine
+    // Beschleunigung: scheitert er, geht es ohne ihn weiter.
+    let projectRow;
+    try {
+      projectRow = (
+        await this.db.select().from(projects).where(eq(projects.id, projectId)).limit(1)
+      )[0];
+    } catch (error) {
+      console.error(`Config-Warmup für ${projectId} nicht gestartet (DB-Fehler):`, error);
+      return;
+    }
     if (projectRow?.claudeSessionId != null) return;
     const model = projectRow?.agentModel ?? DEFAULT_AGENT_MODEL;
     // Langsame lokale Modelle NICHT vorwärmen: der minutenlange Warmup belegt
     // den Ein-Turn-Daemon und der erste echte Prompt würde abgewiesen.
     if (isSlowAgentModel(model)) return;
-    this.warmups.set(projectId, this.runWarmup(projectId, workspaceDir, model));
+    // Eintrag nach dem Lauf wieder entfernen: er dient nur dazu, einen ZWEITEN
+    // gleichzeitigen Warmup zu verhindern. Blieb er liegen, war prewarm für
+    // dieses Projekt dauerhaft wirkungslos — auch nach Schliessen und erneutem
+    // Öffnen mit einer frischen VM, deren Config wieder kalt ist.
+    const lauf = this.runWarmup(projectId, workspaceDir, model).finally(() => {
+      this.warmups.delete(projectId);
+    });
+    this.warmups.set(projectId, lauf);
   }
 
   private async runWarmup(projectId: string, workspaceDir: string, model: string): Promise<void> {
@@ -269,10 +287,17 @@ export class ChatService {
    */
   stopTurn(projectId: string): void {
     const state = this.state(projectId);
+    // Ist überhaupt etwas unterwegs? Nur dann darf ein Abbruch vorgemerkt
+    // werden. Sonst blieb das Flag nach einem Stop ins Leere liegen (Doppelklick,
+    // veralteter turnActive-Stand im Client) und brach Minuten später den
+    // nächsten, völlig unbeteiligten Turn ab.
+    const etwasUnterwegs = state.queue.length > 0 || state.pumpRunning;
     state.queue.length = 0;
     if (state.currentHandle) {
       state.currentHandle.abort();
-    } else {
+      return;
+    }
+    if (etwasUnterwegs) {
       state.abortRequested = true;
     }
   }
@@ -361,6 +386,9 @@ export class ChatService {
       }
     } finally {
       state.pumpRunning = false;
+      // Sicherheitsnetz: ein Abbruchwunsch, der keinen Turn mehr gefunden hat,
+      // darf nicht auf den nächsten überspringen.
+      state.abortRequested = false;
     }
   }
 
@@ -381,7 +409,9 @@ export class ChatService {
       const result = await this.runAttempt(projectId, turn, attempt === maxAttempts, allowResume);
       if (result.lastRow !== null) lastRow = result.lastRow;
       completed = result.completed;
-      if (result.completed || result.sawMeaningful) break;
+      // Ein Nutzerabbruch beendet den Turn endgültig: ihn zu wiederholen hiesse,
+      // genau die Arbeit auszuführen, die der Nutzer gerade gestoppt hat.
+      if (result.completed || result.sawMeaningful || result.benutzerAbbruch) break;
       if (attempt < maxAttempts) {
         lastRow = await this.insertMessage(
           projectId,
@@ -435,7 +465,13 @@ export class ChatService {
     turn: QueuedTurn,
     isLastAttempt: boolean,
     allowResume: boolean,
-  ): Promise<{ completed: boolean; sawMeaningful: boolean; lastRow: ChatMessageRow | null }> {
+  ): Promise<{
+    completed: boolean;
+    sawMeaningful: boolean;
+    lastRow: ChatMessageRow | null;
+    /** Vom Nutzer abgebrochen (Stop/Steering) — kein Flake, also kein Retry. */
+    benutzerAbbruch: boolean;
+  }> {
     const state = this.state(projectId);
 
     // Läuft ein Config-Warmup, erst darauf warten — sonst konkurrieren zwei
@@ -479,13 +515,26 @@ export class ChatService {
     const prompt = canResume
       ? turn.prompt
       : await this.withHistoryContext(projectId, turn.turnId, turn.prompt);
-    const handle = this.runner.startTurn({
+    const rohHandle = this.runner.startTurn({
       projectId,
       prompt,
       workspaceDir: turn.workspaceDir,
       resumeSessionId: canResume ? projectRow.claudeSessionId : null,
       model,
     });
+    // Ein vom NUTZER ausgelöster Abbruch (Stop-Button, Steering) ist kein
+    // msb-Flake und darf deshalb keinen zweiten Durchlauf auslösen. Von aussen
+    // ist nur dieses umhüllte Handle erreichbar (state.currentHandle), der
+    // Watchdog unten greift bewusst auf rohHandle zu — so bleiben die beiden
+    // Abbruchgründe unterscheidbar, ohne zusätzlichen Zustand.
+    let benutzerAbbruch = false;
+    const handle: TurnHandle = {
+      events: rohHandle.events,
+      abort: () => {
+        benutzerAbbruch = true;
+        rohHandle.abort();
+      },
+    };
     state.currentHandle = handle;
     // Abbruch nachholen, falls Stop/Interrupt schon VOR diesem Zeitpunkt kam
     // (Race: s. ProjectChatState.abortRequested).
@@ -617,8 +666,10 @@ export class ChatService {
           break;
         case 'turn-aborted':
           // Stiller Flake-Abbruch (nichts Sinnvolles passiert, Retry folgt):
-          // keine verwirrende „Turn abgebrochen"-Zeile posten.
-          if (sawMeaningful || isLastAttempt) {
+          // keine verwirrende „Turn abgebrochen"-Zeile posten. Beim
+          // Nutzerabbruch folgt kein Retry, also ist dieser Versuch der letzte
+          // — die Rückmeldung MUSS dann sichtbar sein.
+          if (benutzerAbbruch || sawMeaningful || isLastAttempt) {
             await insert('system', 'Turn abgebrochen');
           }
           break;
@@ -642,7 +693,9 @@ export class ChatService {
         if (step === 'timeout') {
           // Stiller Hänger: abbrechen. Beim letzten Versuch als Fehler SICHTBAR
           // machen (statt ewig „Agent arbeitet"); sonst folgt gleich der Retry.
-          handle.abort();
+          // Bewusst rohHandle: DAS hier ist der Watchdog, kein Nutzerabbruch —
+          // ein Hänger ist genau der Fall, für den der Retry gedacht ist.
+          rohHandle.abort();
           const detail = await drainForErrorDetail();
           if (sawMeaningful || isLastAttempt) {
             const usedMs = sawAnyEvent ? timeouts.idleMs : firstEventBudget;
@@ -679,6 +732,6 @@ export class ChatService {
       state.currentHandle = null;
     }
 
-    return { completed, sawMeaningful, lastRow };
+    return { completed, sawMeaningful, lastRow, benutzerAbbruch };
   }
 }

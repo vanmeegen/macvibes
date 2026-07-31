@@ -424,7 +424,12 @@ builder.mutationType({
           // der erste echte Turn trägt dann nicht mehr den claude-First-Run.
           // Nur für den Owner: Besucher dürfen weder den Agent-Daemon belegen
           // noch die letzte Aktivität des Projekts verfälschen.
-          void ctx.chatService.prewarm(project.id, workspaceDir);
+          // Kein nacktes `void` (F18): ohne Rejection-Handler beendet ein
+          // Fehler hier den ganzen Serverprozess. prewarm fängt inzwischen
+          // selbst ab — der Handler bleibt als zweite Sicherung.
+          ctx.chatService.prewarm(project.id, workspaceDir).catch((error: unknown) => {
+            console.error(`Config-Warmup für ${project.id} fehlgeschlagen:`, error);
+          });
           await touchProject(ctx.db, project.id);
         }
         return project;

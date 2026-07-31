@@ -880,6 +880,132 @@ describe('stopTurn (R6 Stop-Button)', () => {
   });
 });
 
+/**
+ * Ein Runner, der einen Abbruch ernst nimmt: nach abort() liefert er NUR
+ * `turn-aborted` und sonst nichts. Genau daran hing der Fehler — ein solcher
+ * Turn hat kein „sinnvolles" Event gesehen und galt deshalb als msb-Flake.
+ */
+function abbrechbarerRunner(starts: string[], verzoegerungMs = 20): AgentRunner {
+  return {
+    startTurn(options: TurnOptions): TurnHandle {
+      starts.push(options.prompt);
+      let abbrechen: () => void = () => {};
+      const abgebrochen = new Promise<void>((resolve) => {
+        abbrechen = resolve;
+      });
+      const events = (async function* (): AsyncGenerator<AgentEvent> {
+        const ausgang = await Promise.race([
+          abgebrochen.then(() => 'abbruch' as const),
+          Bun.sleep(verzoegerungMs).then(() => 'weiter' as const),
+        ]);
+        if (ausgang === 'abbruch') {
+          yield { type: 'turn-aborted' };
+          return;
+        }
+        yield { type: 'text-delta', text: 'fertig' };
+        yield { type: 'turn-completed', sessionId: 'sess-1' };
+      })();
+      return { events, abort: () => abbrechen() };
+    },
+  };
+}
+
+describe('Abbruch ist kein Flake — kein stiller zweiter Durchlauf', () => {
+  test('Stop vor dem ersten Event lässt den Turn NICHT neu laufen', async () => {
+    // Der Nutzer drückt Stop direkt nach dem Senden. Der Turn liefert nur
+    // `turn-aborted`; das zählt nicht als sinnvolles Lebenszeichen, also hielt
+    // runTurn den Versuch für einen msb-Flake und schickte denselben Prompt ein
+    // zweites Mal los — diesmal ohne Abbruchwunsch. Der Agent führte den Turn
+    // also trotz Stop vollständig aus, schrieb Dateien und committete sie.
+    const starts: string[] = [];
+    const { service, projectId, turnEnds } = await setup(abbrechbarerRunner(starts, 10_000));
+
+    await service.sendMessage(sendInput(projectId, 'bitte nicht ausführen'));
+    await waitFor(() => starts.length === 1);
+    service.stopTurn(projectId);
+
+    // Ohne Fix startet genau hier der zweite Versuch — mit demselben Prompt,
+    // aber ohne Abbruchwunsch, und läuft dann vollständig durch.
+    await Bun.sleep(200);
+    expect(starts).toEqual(['bitte nicht ausführen']);
+
+    await waitFor(() => !service.isTurnActive(projectId), 15_000);
+    expect(turnEnds).toEqual([]);
+    // Der Abbruch bleibt sichtbar — sonst stünde der Nutzer ohne Rückmeldung da.
+    const messages = await service.listMessages(projectId);
+    expect(messages.find((m) => m.role === 'system')?.content).toContain('abgebrochen');
+  });
+
+  test('ein Stop ohne laufenden Turn bricht nicht den nächsten ab', async () => {
+    // stopTurn merkt den Abbruch vor, wenn noch kein Handle steht. Lief aber gar
+    // nichts (Doppelklick, veralteter turnActive-Stand im Client), blieb das
+    // Flag liegen: Minuten später wurde der nächste, völlig unbeteiligte Turn
+    // sofort abgebrochen und lief nur dank Retry überhaupt durch.
+    const starts: string[] = [];
+    const { service, projectId } = await setup(abbrechbarerRunner(starts));
+
+    service.stopTurn(projectId); // nichts läuft, nichts in der Queue
+
+    await service.sendMessage(sendInput(projectId, 'ganz normaler Prompt'));
+    await waitFor(() => !service.isTurnActive(projectId), 15_000);
+
+    expect(starts).toEqual(['ganz normaler Prompt']);
+    const messages = await service.listMessages(projectId);
+    expect(messages.find((m) => m.content.includes('zweiter Versuch'))).toBeUndefined();
+  });
+});
+
+describe('Config-Warmup: Robustheit', () => {
+  test('ein DB-Fehler im Warmup reißt den Serverprozess nicht mit', async () => {
+    // schema/index.ts startet prewarm als `void ...` ohne Rejection-Handler.
+    // Die DB-Abfrage in prewarm lag ausserhalb jedes try/catch — eine
+    // SQLITE_BUSY beim Öffnen eines Projekts beendete damit den ganzen Server
+    // und riss alle anderen Sitzungen und MicroVMs mit.
+    const db = createTestDb();
+    const owner = await createUser(db, 'marco');
+    const projectId = await createProjectRow(db, owner);
+    const kaputteDb = new Proxy(db, {
+      get(ziel, eigenschaft, empfaenger): unknown {
+        if (eigenschaft === 'select') {
+          return () => {
+            throw new Error('SQLITE_BUSY: database is locked');
+          };
+        }
+        return Reflect.get(ziel, eigenschaft, empfaenger);
+      },
+    }) as Db;
+    const service = new ChatService(kaputteDb, new FakeAgentRunner(1), {}, {});
+
+    await expect(service.prewarm(projectId, '/tmp/ws')).resolves.toBeUndefined();
+  });
+
+  test('nach einem beendeten Warmup ist erneutes Vorwärmen möglich', async () => {
+    // Der warmups-Eintrag wurde nie entfernt. prewarm war danach für dieses
+    // Projekt dauerhaft ein No-Op — auch wenn das Projekt geschlossen und mit
+    // einer FRISCHEN VM wieder geöffnet wurde, deren Config wieder kalt ist.
+    const prompts: string[] = [];
+    const runner: AgentRunner = {
+      startTurn(options: TurnOptions): TurnHandle {
+        prompts.push(options.prompt);
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          yield { type: 'turn-completed', sessionId: null };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { service, projectId } = await setup(runner);
+
+    await service.prewarm(projectId, '/tmp/ws');
+    await waitFor(() => prompts.length === 1);
+    await Bun.sleep(50); // Warmup zu Ende laufen lassen
+
+    await service.prewarm(projectId, '/tmp/ws');
+    await waitFor(() => prompts.length === 2);
+
+    expect(prompts.length).toBe(2);
+  });
+});
+
 describe('Fehlerbehandlung (R6)', () => {
   test('api-retry wird als eine Statuszeile sichtbar — ohne Spam bei Folge-Retries', async () => {
     const retryRunner: AgentRunner = {
