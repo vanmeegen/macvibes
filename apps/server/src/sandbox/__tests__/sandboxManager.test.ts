@@ -208,6 +208,93 @@ describe('Betrachter-Refcount (H11): nur der letzte Betrachter stellt Grace scha
   });
 });
 
+/**
+ * stop() akzeptierte einen Eintrag im Status `starting`, wartete den laufenden
+ * Start (`startPromise`) aber nie ab: `entry.handle` ist waehrend des Starts
+ * noch null, also stoppte stop() nichts, meldete Erfolg — und der Start setzte
+ * danach das Handle und schaltete den Eintrag zurueck auf `running`.
+ *
+ * Jeder Aufrufer, der einem aufgeloesten stop() glaubt, lag damit falsch:
+ * stopAll() liess beim Herunterfahren eine MicroVM zurueck, die LRU-Eviction
+ * gab einen Platz frei, der sofort wieder belegt war — und der
+ * deleteProject-Resolver loeschte direkt nach stop() das Projektvolume, also
+ * Workspace, Git und Agent-Config unter einer VM weg, die gerade hochkam und
+ * mit gueltigem Gateway-Token weiterlief.
+ */
+describe('stop() waehrend eines laufenden Starts', () => {
+  test('wartet den Start ab und stoppt die VM wirklich', async () => {
+    let startFreigeben: () => void = () => {};
+    const startLaeuft = new Promise<void>((resolve) => {
+      startFreigeben = resolve;
+    });
+    const gestoppt: string[] = [];
+    const provider: SandboxProvider = {
+      async start(context: SandboxContext): Promise<SandboxHandle> {
+        await startLaeuft;
+        return {
+          previewHostPort: 9999,
+          previewStatus: () => 'ready' as const,
+          stop: async () => {
+            gestoppt.push(context.projectId);
+          },
+        };
+      },
+    };
+    const manager = new SandboxManager({
+      provider,
+      graceMs: 10_000,
+      idleMs: 10_000,
+      maxSandboxes: 8,
+    });
+
+    // Start anstossen, aber nicht abwarten — er haengt im Provider fest.
+    const eintritt = manager.enter(ctx('p1'), 'marco');
+    await Bun.sleep(10);
+    expect(manager.status('p1')).toBe('starting');
+
+    // Stoppen, waehrend der Start noch laeuft, und den Start dann freigeben.
+    const stopp = manager.stop('p1');
+    await Bun.sleep(10);
+    startFreigeben();
+    await stopp;
+    await eintritt;
+
+    // Ohne Fix stuende hier 'running' und `gestoppt` waere leer: die VM liefe
+    // weiter, obwohl stop() Erfolg gemeldet hat.
+    expect(manager.status('p1')).toBe('stopped');
+    expect(gestoppt).toEqual(['p1']);
+  });
+
+  test('ein gescheiterter Start hinterlaesst nichts zu stoppen', async () => {
+    let startFreigeben: () => void = () => {};
+    const startLaeuft = new Promise<void>((resolve) => {
+      startFreigeben = resolve;
+    });
+    const provider: SandboxProvider = {
+      async start(): Promise<SandboxHandle> {
+        await startLaeuft;
+        throw new Error('msb antwortet nicht');
+      },
+    };
+    const manager = new SandboxManager({
+      provider,
+      graceMs: 10_000,
+      idleMs: 10_000,
+      maxSandboxes: 8,
+    });
+
+    const eintritt = manager.enter(ctx('p1'), 'marco');
+    await Bun.sleep(10);
+    const stopp = manager.stop('p1');
+    startFreigeben();
+
+    // Der Startfehler gehoert dem enter()-Aufrufer, nicht dem Stopper.
+    await expect(eintritt).rejects.toThrow('msb antwortet nicht');
+    await expect(stopp).resolves.toBeUndefined();
+    expect(manager.status('p1')).toBe('stopped');
+  });
+});
+
 describe('leave / Grace-Period (R9)', () => {
   test('stoppt nach Ablauf der Grace-Period, Auto-Commit-Hook vor dem Stopp', async () => {
     const { provider, manager, beforeStopLog } = setup({ graceMs: 30 });

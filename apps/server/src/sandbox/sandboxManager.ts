@@ -208,6 +208,30 @@ export class SandboxManager {
     if (entry.status === 'stopping' && entry.stopPromise) return entry.stopPromise;
     if (entry.status !== 'running' && entry.status !== 'starting') return;
 
+    // Läuft noch ein START, muss der ZUERST fertig werden. Sonst stoppt dieser
+    // Aufruf nichts (entry.handle ist während des Starts null), meldet aber
+    // Erfolg — und der Start setzt danach das Handle und schaltet zurück auf
+    // `running`. Aufrufer, die einem aufgelösten stop() glauben, lägen falsch:
+    // stopAll() liesse eine VM zurück, und deleteProject löschte das
+    // Projektvolume unter einer gerade hochkommenden VM weg.
+    if (entry.status === 'starting' && entry.startPromise) {
+      try {
+        await entry.startPromise;
+      } catch {
+        // Ein gescheiterter Start hinterlässt nichts zu stoppen. Der Fehler
+        // gehört dem enter()-Aufrufer, der ihn ohnehin bekommt — hier wäre er
+        // nur das Echo eines fremden Problems.
+      }
+      // Nach dem Warten kann sich der Zustand geändert haben. Bewusst über eine
+      // FRISCHE Referenz aus der Map: TypeScript hält `entry.status` sonst
+      // weiter auf 'starting' verengt — über ein await hinweg gilt das nicht.
+      const aktuell = this.entries.get(projectId);
+      if (aktuell === undefined || aktuell !== entry) return;
+      if (aktuell.status === 'stopping' && aktuell.stopPromise) return aktuell.stopPromise;
+      // Start gescheitert → Status ist bereits `stopped`, es gibt nichts zu tun.
+      if (aktuell.status !== 'running') return;
+    }
+
     this.clearGrace(entry);
     this.clearIdle(entry);
     this.setStatus(entry, 'stopping');
