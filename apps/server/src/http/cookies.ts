@@ -37,16 +37,37 @@ export function cookieStoreOf(request: Request): CookieStoreLike {
  * zweites auf einem anderen Pfad setzen — der Browser sendet dann beide, den
  * spezifischeren Pfad zuerst.
  */
+function cookieValues(cookieHeader: string | null, name: string): string[] {
+  if (cookieHeader === null || cookieHeader.length === 0) return [];
+  const werte: string[] = [];
+  for (const teil of cookieHeader.split(';')) {
+    const eq = teil.indexOf('=');
+    if (eq === -1) continue;
+    if (teil.slice(0, eq).trim() === name) werte.push(teil.slice(eq + 1).trim());
+  }
+  return werte;
+}
+
 export function countSessionCookies(cookieHeader: string | null): number {
-  if (cookieHeader === null || cookieHeader.length === 0) return 0;
-  return cookieHeader
-    .split(';')
-    .map((teil) => teil.trim())
-    .filter((teil) => {
-      const eq = teil.indexOf('=');
-      if (eq === -1) return false;
-      return teil.slice(0, eq).trim() === SESSION_COOKIE;
-    }).length;
+  return cookieValues(cookieHeader, SESSION_COOKIE).length;
+}
+
+/**
+ * Der EINE Wert eines Cookies aus einem rohen Header — null, wenn er fehlt oder
+ * mehrdeutig ist (H2, s. o.).
+ *
+ * Existiert, damit die H2-Regel nur an EINER Stelle steht. Das Preview-Gateway
+ * ist ein rohes `Bun.serve` ohne den CookieStore des Yoga-Plugins und kann
+ * `readSessionToken` deshalb nicht nutzen — es hatte die Regel folglich ein
+ * zweites Mal selbst implementiert. Zwei Kopien derselben
+ * Sicherheitsentscheidung driften irgendwann auseinander.
+ *
+ * Liefert den Wert UNDEKODIERT: das Gateway dekodiert selbst gekapselt (H7),
+ * weil ein `%ZZ` sonst einen unbehandelten URIError vor der Auth-Prüfung wirft.
+ */
+export function singleCookieValue(cookieHeader: string | null, name: string): string | null {
+  const werte = cookieValues(cookieHeader, name);
+  return werte.length === 1 ? (werte[0] as string) : null;
 }
 
 export async function readSessionToken(request: Request): Promise<string | null> {

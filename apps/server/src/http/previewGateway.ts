@@ -1,5 +1,5 @@
 import type { ServerWebSocket } from 'bun';
-import { SESSION_COOKIE } from './cookies';
+import { SESSION_COOKIE, singleCookieValue } from './cookies';
 
 /**
  * Preview-Gateway: EIN fester Port, der jede Projekt-Preview auf ihren
@@ -53,15 +53,11 @@ function idFromPPath(pathname: string): string | null {
  *   angemeldet, statt sich auf die Reihenfolge des Browsers zu verlassen.
  */
 function cookieValue(cookieHeader: string | null, name: string): string | null {
-  if (cookieHeader === null) return null;
-  const treffer: string[] = [];
-  for (const part of cookieHeader.split(';')) {
-    const eq = part.indexOf('=');
-    if (eq === -1) continue;
-    if (part.slice(0, eq).trim() === name) treffer.push(part.slice(eq + 1).trim());
-  }
-  if (treffer.length !== 1) return null;
-  return decodeOrNull(treffer[0] as string);
+  // Die Mehrdeutigkeitsregel (H2) steht bewusst NUR in http/cookies.ts — sie
+  // gilt für die GraphQL-Seite und hier gleichermassen und darf nicht in zwei
+  // Kopien auseinanderdriften. Der Decode bleibt hier: er muss gekapselt sein.
+  const roh = singleCookieValue(cookieHeader, name);
+  return roh === null ? null : decodeOrNull(roh);
 }
 
 /**

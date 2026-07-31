@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import {
   createAnthropicProxy,
   injectThinkingDisplay,
+  prepareRequestBody,
   PROXY_TOKEN_HEADER,
   type AnthropicProxyConfig,
 } from '../anthropicProxy';
@@ -570,5 +571,35 @@ describe('Body-Limit (H5): die untrusted VM darf den Host nicht sättigen', () =
     const response = await proxy(vmRequest(), '/v1/messages');
     expect(response.status).toBe(200);
     expect(seen).toHaveLength(1);
+  });
+});
+
+/**
+ * Der Body wurde pro Request zweimal geparst und einmal neu serialisiert:
+ * injectThinkingDisplay parste + stringifizierte, danach parste modelFromBody
+ * das Ergebnis erneut, nur um `model` zu lesen. Auf dem heissesten Pfad des
+ * Proxys (jeder Agent-Turn) ist das reine Doppelarbeit.
+ */
+describe('prepareRequestBody: Body genau einmal parsen', () => {
+  test('liefert Modell und aufbereiteten Body in einem Durchgang', () => {
+    const body = JSON.stringify({
+      model: 'claude-opus-4-8',
+      thinking: { type: 'adaptive' },
+    });
+    const ergebnis = prepareRequestBody(body);
+    expect(ergebnis.model).toBe('claude-opus-4-8');
+    expect(JSON.parse(ergebnis.body).thinking.display).toBe('summarized');
+  });
+
+  test('liest das Modell auch, wenn am Body nichts zu ändern ist', () => {
+    const body = JSON.stringify({ model: 'qwen3.6-coder', thinking: { type: 'disabled' } });
+    const ergebnis = prepareRequestBody(body);
+    expect(ergebnis.model).toBe('qwen3.6-coder');
+    expect(ergebnis.body).toBe(body);
+  });
+
+  test('verträgt Nicht-JSON und fehlendes Modell', () => {
+    expect(prepareRequestBody('nicht-json{')).toEqual({ body: 'nicht-json{', model: null });
+    expect(prepareRequestBody('{}')).toEqual({ body: '{}', model: null });
   });
 });

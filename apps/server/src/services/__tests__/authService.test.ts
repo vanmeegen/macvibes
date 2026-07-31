@@ -360,3 +360,61 @@ describe('Session-Token wird gehasht gespeichert', () => {
     expect(await db.select().from(sessions)).toHaveLength(0);
   });
 });
+
+/**
+ * resolveSession schrieb die neue Ablaufzeit bei JEDEM authentifizierten
+ * Request in die Datenbank — ohne jede Schwelle. Bei einem Sekundenpoll des
+ * Frontends sind das dutzende Schreibvorgänge pro Minute und Nutzer auf
+ * derselben Zeile; unter bun:sqlite konkurrieren die mit jedem anderen
+ * Schreiber. Rollierende Verlängerung braucht das nicht: es genügt, sie
+ * nachzuziehen, wenn ein nennenswerter Teil der Frist verstrichen ist.
+ */
+describe('resolveSession: rollierende Verlängerung mit Schwelle', () => {
+  async function ablauf(db: ReturnType<typeof createTestDb>, token: string): Promise<number> {
+    const zeile = (
+      await db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, sessionKey(token)))
+        .limit(1)
+    )[0];
+    if (!zeile) throw new Error('Session nicht gefunden');
+    return zeile.expiresAt.getTime();
+  }
+
+  test('schreibt NICHT, solange der grösste Teil der Frist übrig ist', async () => {
+    const db = createTestDb();
+    const { session } = await register(db, CONFIG, registerInput());
+    const token = session!.token;
+
+    // Schreibvorgänge zählen statt Zeitstempel vergleichen: SQLite legt die
+    // Zeit sekundengenau ab, ein Unterschied von Millisekunden ginge unter.
+    let schreibvorgaenge = 0;
+    const zaehlendeDb = new Proxy(db, {
+      get(ziel, eigenschaft, empfaenger): unknown {
+        if (eigenschaft === 'update') schreibvorgaenge += 1;
+        return Reflect.get(ziel, eigenschaft, empfaenger);
+      },
+    }) as typeof db;
+
+    expect(await resolveSession(zaehlendeDb, CONFIG, token)).not.toBeNull();
+
+    expect(schreibvorgaenge).toBe(0);
+  });
+
+  test('verlängert, sobald weniger als die Hälfte der Frist übrig ist', async () => {
+    const db = createTestDb();
+    const { session } = await register(db, CONFIG, registerInput());
+    const token = session!.token;
+    // Session künstlich altern lassen: nur noch 40 % der Frist übrig.
+    await db
+      .update(sessions)
+      .set({ expiresAt: new Date(Date.now() + Math.floor(CONFIG.sessionTtlMs * 0.4)) })
+      .where(eq(sessions.id, sessionKey(token)));
+    const vorher = await ablauf(db, token);
+
+    expect(await resolveSession(db, CONFIG, token)).not.toBeNull();
+
+    expect(await ablauf(db, token)).toBeGreaterThan(vorher);
+  });
+});

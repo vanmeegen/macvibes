@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   countSessionCookies,
+  singleCookieValue,
   isSecureRequest,
   readSessionToken,
   type CookieStoreLike,
@@ -113,5 +114,39 @@ describe('readSessionToken (H2): mehrdeutige Cookies gelten als nicht angemeldet
 
   test('liefert null ohne Cookie', async () => {
     expect(await readSessionToken(requestMit(null))).toBeNull();
+  });
+});
+
+/**
+ * Die H2-Regel („mehrfach vorhandener Name = mehrdeutig = nicht angemeldet")
+ * lag zweimal im Code: einmal hier für die GraphQL-Seite, einmal als eigene
+ * Implementierung im Preview-Gateway. Zwei Kopien derselben
+ * Sicherheitsentscheidung können auseinanderdriften — genau diese Regel härtet
+ * gegen Cookie-Tossing aus einer Preview, in der agent-geschriebenes JS läuft.
+ */
+describe('singleCookieValue: eine Regel für beide Cookie-Leser (H2)', () => {
+  test('liefert den Wert, wenn der Name genau einmal vorkommt', () => {
+    expect(singleCookieValue('a=1; macvibes_session=abc; b=2', 'macvibes_session')).toBe('abc');
+  });
+
+  test('liefert null bei Mehrdeutigkeit', () => {
+    expect(
+      singleCookieValue('macvibes_session=fremd; macvibes_session=echt', 'macvibes_session'),
+    ).toBeNull();
+  });
+
+  test('liefert null, wenn der Name fehlt oder gar kein Header da ist', () => {
+    expect(singleCookieValue('a=1', 'macvibes_session')).toBeNull();
+    expect(singleCookieValue(null, 'macvibes_session')).toBeNull();
+  });
+
+  test('zählt genauso wie countSessionCookies', () => {
+    const header = 'macvibes_session=x; macvibes_session=y';
+    expect(countSessionCookies(header)).toBe(2);
+    expect(singleCookieValue(header, 'macvibes_session')).toBeNull();
+  });
+
+  test('funktioniert auch für andere Cookie-Namen (Preview-Routing)', () => {
+    expect(singleCookieValue('macvibes_preview=p1', 'macvibes_preview')).toBe('p1');
   });
 });

@@ -268,8 +268,16 @@ export async function resolveSession(
     return null;
   }
 
-  const newExpiry = new Date(Date.now() + config.sessionTtlMs);
-  await db.update(sessions).set({ expiresAt: newExpiry }).where(eq(sessions.id, key));
+  // Rollierend verlängern, aber nicht bei JEDEM Request: das Frontend pollt im
+  // Sekundentakt, das wären dutzende Schreibvorgänge pro Minute und Nutzer auf
+  // derselben Zeile — die unter bun:sqlite mit jedem anderen Schreiber
+  // konkurrieren. Es genügt, nachzuziehen, sobald ein nennenswerter Teil der
+  // Frist verstrichen ist; die Session verlängert sich dadurch genauso.
+  const restMs = session.expiresAt.getTime() - Date.now();
+  if (restMs < config.sessionTtlMs / 2) {
+    const newExpiry = new Date(Date.now() + config.sessionTtlMs);
+    await db.update(sessions).set({ expiresAt: newExpiry }).where(eq(sessions.id, key));
+  }
 
   const userFound = await db.select().from(users).where(eq(users.id, session.userId)).limit(1);
   const user = userFound[0];

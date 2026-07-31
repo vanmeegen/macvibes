@@ -24,35 +24,56 @@ function withOAuthBeta(existing: string | null): string {
   return parts.join(',');
 }
 
+export interface AufbereiteterBody {
+  /** Der (ggf. angepasste) Body, so wie er an den Upstream geht. */
+  body: string;
+  /** Das angefragte Modell — bestimmt die Route (Claude oder lokaler Router). */
+  model: string | null;
+}
+
 /**
- * Erzwingt bei aktivem Extended Thinking den Stream der Reasoning-Zusammenfassung:
- * Neuere Modelle streamen den Thinking-Text sonst NICHT (nur `signature_delta`,
- * `thinking:""`) — eine Latenz-Optimierung, kein Credential-Effekt. Setzen wir
- * `thinking.display: 'summarized'`, liefert die API `thinking_delta`-Text-Events,
- * die unser Parser/UI als „💭"-Zeile live darstellen kann.
+ * Bereitet den Request-Body in EINEM Durchgang auf: setzt `thinking.display`
+ * und liest zugleich das Modell.
  *
- * Angefasst wird nur ein JSON-Body mit bereits AKTIVEM Thinking und ohne explizit
- * gesetztes `display`. Alles andere (kein Thinking, fremdes `display`, kein/ungültiges
- * JSON) bleibt unverändert — der Proxy darf keine Requests kaputtmachen.
+ * Zum `display`: Neuere Modelle streamen den Thinking-Text sonst NICHT (nur
+ * `signature_delta`, `thinking:""`) — eine Latenz-Optimierung, kein
+ * Credential-Effekt. Mit `thinking.display: 'summarized'` liefert die API
+ * `thinking_delta`-Text-Events, die unser Parser/UI als „💭"-Zeile live
+ * darstellen kann. Angefasst wird nur ein JSON-Body mit bereits AKTIVEM
+ * Thinking und ohne explizit gesetztes `display`; alles andere bleibt
+ * unverändert — der Proxy darf keine Requests kaputtmachen.
+ *
+ * Vorher lief das in zwei Schritten — erst parsen + stringifizieren fürs
+ * Thinking, dann das Ergebnis erneut parsen, nur um `model` zu lesen. Auf dem
+ * heissesten Pfad des Proxys (jeder Agent-Turn) ist das reine Doppelarbeit.
  */
-export function injectThinkingDisplay(bodyText: string): string {
+export function prepareRequestBody(bodyText: string): AufbereiteterBody {
   let parsed: unknown;
   try {
     parsed = JSON.parse(bodyText);
   } catch {
-    return bodyText;
+    return { body: bodyText, model: null };
   }
-  if (typeof parsed !== 'object' || parsed === null) return bodyText;
-  const thinking = (parsed as Record<string, unknown>).thinking;
-  if (typeof thinking !== 'object' || thinking === null) return bodyText;
+  if (typeof parsed !== 'object' || parsed === null) return { body: bodyText, model: null };
+  const obj = parsed as Record<string, unknown>;
+  const rohesModell = obj['model'];
+  const model = typeof rohesModell === 'string' ? rohesModell : null;
+
+  const thinking = obj.thinking;
+  if (typeof thinking !== 'object' || thinking === null) return { body: bodyText, model };
   const t = thinking as Record<string, unknown>;
   // Nur bei AKTIVEM Thinking eingreifen. On-Modi: "adaptive" (die einzige On-Form
   // auf Opus 4.8/4.7/Fable 5) und das ältere "enabled". "disabled"/fehlend bleibt
   // unangetastet, ein bereits gesetztes "summarized" ebenso (idempotent).
-  if (t.type !== 'adaptive' && t.type !== 'enabled') return bodyText;
-  if (t.display === 'summarized') return bodyText;
+  if (t.type !== 'adaptive' && t.type !== 'enabled') return { body: bodyText, model };
+  if (t.display === 'summarized') return { body: bodyText, model };
   t.display = 'summarized';
-  return JSON.stringify(parsed);
+  return { body: JSON.stringify(parsed), model };
+}
+
+/** Nur noch die Thinking-Anpassung — bleibt für die bestehenden Tests erhalten. */
+export function injectThinkingDisplay(bodyText: string): string {
+  return prepareRequestBody(bodyText).body;
 }
 
 export interface AnthropicProxyConfig {
@@ -192,18 +213,6 @@ function withKeepAlive(
 export type AnthropicProxyHandler = (request: Request, upstreamPath: string) => Promise<Response>;
 
 /** Modellname aus dem (JSON-)Request-Body — null bei GET/kein JSON/kein model. */
-function modelFromBody(bodyText: string | undefined): string | null {
-  if (bodyText === undefined) return null;
-  try {
-    const parsed: unknown = JSON.parse(bodyText);
-    if (typeof parsed !== 'object' || parsed === null) return null;
-    const model = (parsed as Record<string, unknown>)['model'];
-    return typeof model === 'string' ? model : null;
-  } catch {
-    return null;
-  }
-}
-
 /** Eine Route ist nutzbar, wenn sie irgendeine Auth mitbringen kann. */
 function routeUsable(route: ModelRoute): boolean {
   return route.oauthToken != null || route.apiKey != null;
@@ -305,15 +314,18 @@ export function createAnthropicProxy(config: AnthropicProxyConfig): AnthropicPro
     // Request ist ein einzelnes JSON — content-length setzt fetch neu. Die
     // SSE-ANTWORT bleibt davon unberührt (Streaming).
     let outgoingBody: string | undefined;
+    let angefragtesModell: string | null = null;
     if (hasBody) {
       const roh = await readTextWithLimit(request, maxBodyBytes);
       if (roh === null) {
         // Auch eine gelogene/fehlende content-length fängt die Grenze noch ab.
         return new Response('Request-Body zu groß', { status: 413 });
       }
-      outgoingBody = injectThinkingDisplay(roh);
+      const aufbereitet = prepareRequestBody(roh);
+      outgoingBody = aufbereitet.body;
+      angefragtesModell = aufbereitet.model;
     }
-    const route = routeFor(modelFromBody(outgoingBody));
+    const route = routeFor(angefragtesModell);
     if (route === null) {
       return new Response(
         'Keine nutzbare Modell-Route — CLAUDE_CODE_OAUTH_TOKEN (claude setup-token) ' +
