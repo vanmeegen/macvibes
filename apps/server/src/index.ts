@@ -20,6 +20,7 @@ import {
   microsandboxSandboxName,
   msbAvailable,
 } from './sandbox/microsandboxProvider';
+import { touchSandbox } from './sandbox/msbClient';
 import { ProcessSandboxProvider } from './sandbox/processProvider';
 import { selectBackends, type BackendSelection } from './sandbox/backendSelection';
 import { SandboxManager } from './sandbox/sandboxManager';
@@ -141,6 +142,13 @@ if (useMicrosandbox) {
   await buildDaemonBundle(daemonBundleDir);
 }
 
+/**
+ * Wie weit die Idle-Frist der VM hinter dem host-seitigen Idle-Timer liegt
+ * (ADR 0003). Im Normalbetrieb greift damit immer zuerst macvibes' eigene
+ * Logik; die VM-Frist feuert nur, wenn dieser Prozess nicht mehr da ist.
+ */
+const VM_IDLE_MARGIN_MS = 15 * 60 * 1000;
+
 const sandboxProvider = useMicrosandbox
   ? new MicrosandboxSandboxProvider({
       macvibesHome: config.macvibesHome,
@@ -148,6 +156,10 @@ const sandboxProvider = useMicrosandbox
       image: config.sandbox.image,
       cpus: config.sandbox.cpus,
       memoryMib: config.sandbox.memoryMib,
+      // ADR 0003: Auffangnetz für den Fall, dass dieser Prozess stirbt und
+      // niemand mehr die Frist zurücksetzt. Abgeleitet statt eigener Parameter,
+      // damit die VM-Frist immer hinter dem host-seitigen Idle-Timer liegt.
+      vmIdleTimeoutSecs: Math.round((config.sandbox.idleMs + VM_IDLE_MARGIN_MS) / 1000),
       agentDaemon: {
         bundleDir: daemonBundleDir,
         revokeToken: (sandboxName: string) => vmTokens.revoke(sandboxName),
@@ -185,6 +197,11 @@ const sandboxManager = new SandboxManager({
   graceMs: config.sandbox.graceMs,
   idleMs: config.sandbox.idleMs,
   maxSandboxes: config.sandbox.maxSandboxes,
+  // ADR 0003: Jeder host-seitige touch() hält auch die VM-Frist offen —
+  // gedrosselt, weil das im Pfad jedes Agent-Events liegt.
+  ...(useMicrosandbox
+    ? { touchSandbox: (projectId: string) => touchSandbox(microsandboxSandboxName(projectId)) }
+    : {}),
   onStatusChange: (projectId, status) => {
     console.log(`Sandbox ${projectId}: ${status}`);
   },

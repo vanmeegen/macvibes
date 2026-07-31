@@ -426,3 +426,89 @@ describe('gleichzeitiges enter startet nur EINE Sandbox (F14)', () => {
     expect(manager.status('p1')).toBe('running');
   });
 });
+
+/**
+ * ADR 0003: Die VM bekommt eine eigene Idle-Frist als Auffangnetz für den Fall,
+ * dass der Host stirbt. Damit sie im Normalbetrieb nie zuschlägt, stößt jeder
+ * host-seitige touch() zusätzlich einen touch() auf der Sandbox an — gedrosselt,
+ * weil noteAgentActivity bei JEDEM Agent-Event feuert.
+ */
+describe('VM-Idle-Auffangnetz (ADR 0003)', () => {
+  function setupMitVmTouch(overrides: { vmTouchIntervalMs?: number } = {}) {
+    const provider = new FakeProvider();
+    const beruehrt: string[] = [];
+    const manager = new SandboxManager({
+      provider,
+      graceMs: 10_000,
+      idleMs: 10_000,
+      maxSandboxes: 8,
+      touchSandbox: async (name) => {
+        beruehrt.push(name);
+      },
+      ...(overrides.vmTouchIntervalMs !== undefined
+        ? { vmTouchIntervalMs: overrides.vmTouchIntervalMs }
+        : {}),
+    });
+    return { manager, beruehrt };
+  }
+
+  test('berührt die VM beim Betreten', async () => {
+    const { manager, beruehrt } = setupMitVmTouch();
+    await manager.enter(ctx('p1'), 'u1');
+    await Bun.sleep(20);
+    expect(beruehrt).toEqual(['p1']);
+  });
+
+  test('drosselt: viele Agent-Events ergeben nicht viele VM-Berührungen', async () => {
+    // Der eigentliche Fallstrick: onAgentActivity feuert pro Text-Delta.
+    const { manager, beruehrt } = setupMitVmTouch({ vmTouchIntervalMs: 60_000 });
+    await manager.enter(ctx('p1'), 'u1');
+    await Bun.sleep(20);
+    const nachStart = beruehrt.length;
+
+    for (let i = 0; i < 200; i += 1) manager.noteAgentActivity('p1');
+    await Bun.sleep(20);
+
+    expect(beruehrt.length).toBe(nachStart);
+  });
+
+  test('berührt wieder, sobald das Drossel-Intervall abgelaufen ist', async () => {
+    const { manager, beruehrt } = setupMitVmTouch({ vmTouchIntervalMs: 30 });
+    await manager.enter(ctx('p1'), 'u1');
+    await Bun.sleep(20);
+    const nachStart = beruehrt.length;
+
+    await Bun.sleep(50);
+    manager.noteAgentActivity('p1');
+    await Bun.sleep(20);
+
+    expect(beruehrt.length).toBe(nachStart + 1);
+  });
+
+  test('ein Fehler beim VM-Touch bricht den Turn nicht ab', async () => {
+    // Ein hängendes msb darf niemals einen laufenden Turn stören.
+    const provider = new FakeProvider();
+    const manager = new SandboxManager({
+      provider,
+      graceMs: 10_000,
+      idleMs: 10_000,
+      maxSandboxes: 8,
+      touchSandbox: async () => {
+        throw new Error('msb antwortet nicht');
+      },
+    });
+    await manager.enter(ctx('p1'), 'u1');
+    await Bun.sleep(20);
+    manager.noteAgentActivity('p1');
+    await Bun.sleep(20);
+    expect(manager.status('p1')).toBe('running');
+  });
+
+  test('ohne touchSandbox verhält sich der Manager wie bisher', async () => {
+    const { provider, manager } = setup({ graceMs: 20 });
+    await manager.enter(ctx('p1'), 'u1');
+    manager.noteAgentActivity('p1');
+    expect(manager.status('p1')).toBe('running');
+    expect(provider.startCalls).toEqual(['p1']);
+  });
+});

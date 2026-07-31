@@ -35,6 +35,17 @@ export interface SandboxManagerOptions {
    * weitere Grace-Period auf, statt den Turn mitten drin zu killen.
    */
   isBusy?: (projectId: string) => boolean;
+  /**
+   * Setzt die Idle-Frist der VM zurück (ADR 0003). Fehlt sie, verhält sich der
+   * Manager wie bisher — nützlich für Tests und den Process-Provider.
+   */
+  touchSandbox?: (projectId: string) => Promise<void>;
+  /**
+   * Mindestabstand zwischen zwei VM-Berührungen. noteAgentActivity feuert bei
+   * JEDEM Agent-Event (also pro Text-Delta) — ungedrosselt wären das dreistellig
+   * viele API-Aufrufe pro Turn. Default 60 s; die VM-Frist liegt bei 45 min.
+   */
+  vmTouchIntervalMs?: number;
 }
 
 type Timer = ReturnType<typeof setTimeout>;
@@ -50,6 +61,8 @@ interface SandboxEntry {
   startPromise: Promise<void> | null;
   /** Läuft der Stopp gerade? enter() wartet darauf, statt zu überschreiben (F17). */
   stopPromise: Promise<void> | null;
+  /** Wann zuletzt die Idle-Frist der VM zurückgesetzt wurde (ADR 0003). */
+  lastVmTouchAt: number;
   /**
    * Wer schaut gerade zu (H11). `leaveProject` ist bewusst ownership-frei, damit
    * Besucher fremde Sandboxes wieder freigeben können (R10) — ohne Refcount
@@ -59,6 +72,9 @@ interface SandboxEntry {
    */
   viewers: Set<string>;
 }
+
+/** Mindestabstand zwischen zwei VM-Berührungen (ADR 0003). */
+const DEFAULT_VM_TOUCH_INTERVAL_MS = 60_000;
 
 export class SandboxManager {
   private readonly entries = new Map<string, SandboxEntry>();
@@ -103,6 +119,7 @@ export class SandboxManager {
       idleTimer: null,
       startPromise: null,
       stopPromise: null,
+      lastVmTouchAt: 0,
       viewers: new Set([viewer]),
     };
     this.entries.set(context.projectId, entry);
@@ -235,6 +252,29 @@ export class SandboxManager {
       entry.idleTimer = null;
       void this.stop(entry.context.projectId);
     }, this.options.idleMs);
+    this.touchVm(entry);
+  }
+
+  /**
+   * Setzt die Idle-Frist der VM zurück (ADR 0003) — gedrosselt und
+   * fire-and-forget.
+   *
+   * Fire-and-forget ist hier Absicht: Dieser Aufruf hängt im Pfad jedes
+   * Agent-Events. Ein langsames oder hängendes msb darf einen laufenden Turn
+   * unter keinen Umständen aufhalten. Ein Fehler wird geloggt, nicht
+   * verschluckt — er ist folgenlos, weil die VM-Frist ein Auffangnetz ist und
+   * der host-seitige Idle-Timer unabhängig davon weiterläuft.
+   */
+  private touchVm(entry: SandboxEntry): void {
+    const touchSandbox = this.options.touchSandbox;
+    if (!touchSandbox) return;
+    const intervalMs = this.options.vmTouchIntervalMs ?? DEFAULT_VM_TOUCH_INTERVAL_MS;
+    const jetzt = Date.now();
+    if (jetzt - entry.lastVmTouchAt < intervalMs) return;
+    entry.lastVmTouchAt = jetzt;
+    void touchSandbox(entry.context.projectId).catch((error: unknown) => {
+      console.error(`VM-Idle-Frist für ${entry.context.projectId} nicht zurückgesetzt:`, error);
+    });
   }
 
   private setStatus(entry: SandboxEntry, status: SandboxStatus): void {

@@ -192,6 +192,11 @@ export interface SandboxSpec {
    * keine Beschränkung hatte. Sie läuft ohne Agent und nur beim Baseline-Bau.
    */
   netzwerk?: 'projekt' | 'unbeschraenkt';
+  /**
+   * Idle-Frist der VM in Sekunden (ADR 0003) — Auffangnetz, falls der Host
+   * stirbt und niemand mehr die Frist zurücksetzt. Ohne Angabe: keine Frist.
+   */
+  idleTimeoutSecs?: number;
 }
 
 /**
@@ -286,6 +291,10 @@ function bauBuilder(spec: SandboxSpec) {
     });
   }
 
+  if (spec.idleTimeoutSecs !== undefined) {
+    builder = builder.idleTimeout(spec.idleTimeoutSecs);
+  }
+
   const [cmd, ...args] = spec.command;
   if (cmd === undefined) {
     throw new SandboxRuntimeError(`Sandbox „${spec.name}": leeres Startkommando`);
@@ -369,6 +378,25 @@ export async function listSandboxNames(): Promise<string[]> {
   } catch (error) {
     throw new SandboxRuntimeError(
       `Sandboxes konnten nicht aufgelistet werden: ${fehlertext(error)}`,
+      error,
+    );
+  }
+}
+
+/**
+ * Setzt die Idle-Frist einer Sandbox zurück (ADR 0003).
+ *
+ * Eine unbekannte Sandbox ist kein Fehler: Zwischen dem Auslösen und dem
+ * Eintreffen kann sie regulär gestoppt worden sein.
+ */
+export async function touchSandbox(name: string): Promise<void> {
+  try {
+    const handle = await Sandbox.get(name);
+    await handle.touch();
+  } catch (error) {
+    if (istSandboxNichtGefunden(error)) return;
+    throw new SandboxRuntimeError(
+      `Idle-Frist von „${name}" konnte nicht zurückgesetzt werden: ${fehlertext(error)}`,
       error,
     );
   }

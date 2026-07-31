@@ -56,6 +56,12 @@ export interface MicrosandboxProviderConfig {
    * `waitForSandboxReady` aus msbClient.ts).
    */
   waitForReady?: (sandboxName: string) => Promise<void>;
+  /**
+   * Idle-Frist der VM in Sekunden (ADR 0003). Wird aus dem host-seitigen
+   * Idle-Timer abgeleitet (idleMs + 15 min) — bewusst kein eigener Parameter,
+   * damit beide Werte nicht auseinanderlaufen können.
+   */
+  vmIdleTimeoutSecs?: number;
 }
 
 /** Ab wann ein Daemon-Status-Push als veraltet gilt (Daemon pusht alle ≤5 s). */
@@ -215,6 +221,9 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       ],
       // Absoluter Pfad: das SDK lehnt ein blosses 'sh' ab (die CLI nahm es an).
       command: ['/bin/sh', '-c', `${bootstrap}; ${services.pid1Command}`],
+      ...(this.config.vmIdleTimeoutSecs !== undefined
+        ? { idleTimeoutSecs: this.config.vmIdleTimeoutSecs }
+        : {}),
     });
     // `msb run -d` kehrt zurück, bevor der Gast-Agent-Endpunkt bereit ist —
     // ohne dieses Warten scheitern frühe execs ("no agent endpoint found").
