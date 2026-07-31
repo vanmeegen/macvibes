@@ -183,3 +183,74 @@ describe('EgressProxy — Zielpolicy (F3)', () => {
     expect(out).toContain('400');
   });
 });
+
+/**
+ * Bytes, die eintreffen, WÄHREND die asynchrone Zielprüfung (DNS + Policy)
+ * noch läuft, landeten in state.buf und wurden dort als neuer Request-Kopf
+ * geparst — statt für den Upstream gepuffert zu werden. Kommt der Body in
+ * einem eigenen TCP-Segment (bei POST der Normalfall), antwortete der Proxy
+ * mit 400 Bad Request. Der Fehler trat nur sporadisch auf, weil er vom
+ * Segment-Timing abhängt.
+ */
+describe('EgressProxy — Bytes während der Zielprüfung', () => {
+  let echo: ReturnType<typeof Bun.serve>;
+  let langsam: EgressProxyHandle;
+
+  beforeAll(() => {
+    echo = Bun.serve({
+      port: 0,
+      fetch: async (req) => new Response(`gelesen:${await req.text()}`),
+    });
+    langsam = startEgressProxy({
+      port: 0,
+      verifyToken: () => ({ sandbox: 'test' }),
+      // Langsame Prüfung: öffnet das Zeitfenster verlässlich.
+      checkTarget: async (host) => {
+        await Bun.sleep(60);
+        return { ok: true, address: host };
+      },
+    });
+  });
+
+  afterAll(() => {
+    echo.stop(true);
+    langsam.stop();
+  });
+
+  test('ein nachgereichter POST-Body geht nicht verloren', async () => {
+    const koerper = 'hallo-welt';
+    const kopf =
+      `POST http://127.0.0.1:${echo.port}/ HTTP/1.1\r\n` +
+      `Host: 127.0.0.1:${echo.port}\r\n` +
+      `Content-Length: ${koerper.length}\r\n` +
+      'Connection: close\r\n\r\n';
+
+    const antwort = await new Promise<string>((resolve, reject) => {
+      let puffer = '';
+      Bun.connect({
+        hostname: '127.0.0.1',
+        port: langsam.port,
+        socket: {
+          open(s) {
+            s.write(kopf);
+            // Body erst schicken, wenn die Zielprüfung sicher noch läuft.
+            setTimeout(() => s.write(koerper), 15);
+          },
+          data(_s, chunk) {
+            puffer += new TextDecoder().decode(chunk);
+          },
+          close() {
+            resolve(puffer);
+          },
+          error(_s, err) {
+            reject(err);
+          },
+        },
+      }).catch(reject);
+      setTimeout(() => resolve(puffer), 4000);
+    });
+
+    expect(antwort).not.toContain('400 Bad Request');
+    expect(antwort).toContain('gelesen:hallo-welt');
+  });
+});

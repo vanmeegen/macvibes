@@ -94,6 +94,28 @@ interface ConnState {
   buf: Buffer;
   upstream: Socket | null;
   established: boolean;
+  /** Zielprüfung (DNS + Policy) läuft — sie ist asynchron. */
+  connecting: boolean;
+  /**
+   * Bytes, die während der Zielprüfung eintreffen. Sie gehören zum LAUFENDEN
+   * Request (typischerweise der POST-Body in einem eigenen TCP-Segment) und
+   * dürfen nicht als neuer Request-Kopf geparst werden — genau das führte zu
+   * sporadischen „400 Bad Request".
+   */
+  pending: Buffer;
+}
+
+/**
+ * Gibt die während der Zielprüfung aufgelaufenen Bytes an den Upstream weiter.
+ * Muss NACH dem `rest` aus demselben Segment laufen — sonst kämen die Bytes
+ * beim Ziel in falscher Reihenfolge an.
+ */
+function flushPending(state: ConnState, up: Socket): void {
+  if (state.pending.length > 0) {
+    up.write(state.pending);
+    state.pending = Buffer.alloc(0);
+  }
+  state.connecting = false;
 }
 
 export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle {
@@ -171,13 +193,25 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
     port: options.port,
     socket: {
       open(socket) {
-        socket.data = { buf: Buffer.alloc(0), upstream: null, established: false };
+        socket.data = {
+          buf: Buffer.alloc(0),
+          upstream: null,
+          established: false,
+          connecting: false,
+          pending: Buffer.alloc(0),
+        };
       },
       data(socket, chunk) {
         const state = socket.data;
         // Tunnel steht: Bytes 1:1 durchreichen.
         if (state.established && state.upstream) {
           state.upstream.write(chunk);
+          return;
+        }
+        // Zielprüfung läuft noch: die Bytes gehören zum laufenden Request und
+        // werden aufgehoben, bis der Upstream steht.
+        if (state.connecting) {
+          state.pending = Buffer.concat([state.pending, chunk]);
           return;
         }
         state.buf = Buffer.concat([state.buf, chunk]);
@@ -217,10 +251,14 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
           const sep = target.lastIndexOf(':');
           const host = sep > 0 ? target.slice(0, sep) : target;
           const port = sep > 0 ? Number(target.slice(sep + 1)) : 443;
+          state.connecting = true;
           connectChecked(socket, host, port, (up) => {
             socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
             state.established = true;
+            // Reihenfolge zählt: erst der Rest aus demselben Segment, dann was
+            // während der Prüfung nachkam.
             if (rest.length > 0) up.write(rest);
+            flushPending(state, up);
           });
           return;
         }
@@ -239,10 +277,12 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
           const newHead =
             `${method} ${url.pathname}${url.search} HTTP/1.1\r\n` +
             `${forwarded.join('\r\n')}\r\n\r\n`;
+          state.connecting = true;
           connectChecked(socket, url.hostname, port, (up) => {
             state.established = true;
             up.write(newHead);
             if (rest.length > 0) up.write(rest);
+            flushPending(state, up);
           });
           return;
         }
