@@ -94,6 +94,34 @@ export class SpeechStore {
     );
   }
 
+  /**
+   * Beschriftung des Mikro-Buttons. Die Verfügbarkeit schlägt den Status: wer
+   * gar nicht aufnehmen kann, soll den Grund lesen, nicht „Aufnahme stoppen".
+   *
+   * Lag vorher als Funktion in ChatPage.tsx — Verzweigungslogik in einer
+   * Komponente, entgegen der verbindlichen Presentation-Model-Regel, und dort
+   * auch nicht testbar.
+   */
+  get tooltip(): string {
+    switch (this.availability) {
+      case 'insecure':
+        return (
+          'Diktat braucht einen sicheren Kontext. Auf dem Mac localhost verwenden; ' +
+          'im LAN einmalig chrome://flags/#unsafely-treat-insecure-origin-as-secure ' +
+          'für diese Adresse aktivieren.'
+        );
+      case 'unsupported':
+        return 'Lokale Spracherkennung braucht Chrome/Chromium 139+.';
+      case 'unavailable':
+        return 'Für diese Sprache ist keine lokale Erkennung verfügbar.';
+      default:
+        break;
+    }
+    if (this.status === 'recording') return 'Aufnahme stoppen';
+    if (this.status === 'installing') return 'Sprachpaket wird installiert …';
+    return 'Diktieren — läuft komplett lokal im Browser';
+  }
+
   /** Grundvoraussetzungen prüfen (beim Mount) — nur synchrone Checks. */
   init(): void {
     const support = this.supportFn();

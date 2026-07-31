@@ -275,3 +275,57 @@ describe('SpeechStore', () => {
     });
   });
 });
+
+/**
+ * Der Tooltip-Text lag als Funktion in ChatPage.tsx und verzweigte dort über
+ * `availability` und `status` — Logik in einer Komponente, entgegen der
+ * verbindlichen Presentation-Model-Regel („UI-Komponenten logikfrei, alle Logik
+ * in MobX-Stores"). Damit war er auch nicht testbar.
+ */
+describe('tooltip (Presentation-Model: Logik gehört in den Store)', () => {
+  it('erklärt den unsicheren Kontext', () => {
+    const { store } = makeStore();
+    store.availability = 'insecure';
+    expect(store.tooltip).toContain('sicheren Kontext');
+  });
+
+  it('nennt die Browser-Anforderung, wenn nicht unterstützt', () => {
+    const { store } = makeStore();
+    store.availability = 'unsupported';
+    expect(store.tooltip).toContain('Chrome');
+  });
+
+  it('meldet eine fehlende Sprache', () => {
+    const { store } = makeStore();
+    store.availability = 'unavailable';
+    expect(store.tooltip).toContain('Sprache');
+  });
+
+  it('bietet im Aufnahmezustand das Stoppen an', () => {
+    const { store } = makeStore();
+    store.availability = 'available';
+    store.status = 'recording';
+    expect(store.tooltip).toBe('Aufnahme stoppen');
+  });
+
+  it('zeigt die laufende Installation', () => {
+    const { store } = makeStore();
+    store.availability = 'available';
+    store.status = 'installing';
+    expect(store.tooltip).toContain('installiert');
+  });
+
+  it('lädt sonst zum Diktieren ein', () => {
+    const { store } = makeStore();
+    store.availability = 'available';
+    store.status = 'idle';
+    expect(store.tooltip).toContain('lokal');
+  });
+
+  it('Verfügbarkeit schlägt den Status — insecure bleibt insecure', () => {
+    const { store } = makeStore();
+    store.availability = 'insecure';
+    store.status = 'recording';
+    expect(store.tooltip).toContain('sicheren Kontext');
+  });
+});

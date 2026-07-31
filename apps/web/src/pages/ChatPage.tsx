@@ -36,27 +36,6 @@ export interface ChatPageProps {
   speechStore: SpeechStore;
 }
 
-/** Tooltip des Mikro-Buttons je nach Verfügbarkeit/Status. */
-function micTooltip(speechStore: SpeechStore): string {
-  switch (speechStore.availability) {
-    case 'insecure':
-      return (
-        'Diktat braucht einen sicheren Kontext. Auf dem Mac localhost verwenden; ' +
-        'im LAN einmalig chrome://flags/#unsafely-treat-insecure-origin-as-secure ' +
-        'für diese Adresse aktivieren.'
-      );
-    case 'unsupported':
-      return 'Lokale Spracherkennung braucht Chrome/Chromium 139+.';
-    case 'unavailable':
-      return 'Für diese Sprache ist keine lokale Erkennung verfügbar.';
-    default:
-      break;
-  }
-  if (speechStore.status === 'recording') return 'Aufnahme stoppen';
-  if (speechStore.status === 'installing') return 'Sprachpaket wird installiert …';
-  return 'Diktieren — läuft komplett lokal im Browser';
-}
-
 const MessageBubble = observer(function MessageBubble({
   message,
 }: {
@@ -426,7 +405,7 @@ export const ChatPage = observer(function ChatPage({
                     inputProps={{ 'data-testselector': 'chat-input' }}
                   />
                   {/* Diktat: lokale Erkennung im Browser (Chrome On-Device). */}
-                  <Tooltip title={micTooltip(speechStore)}>
+                  <Tooltip title={speechStore.tooltip}>
                     {/* span: Tooltips brauchen bei disabled-Buttons einen Wrapper */}
                     <span>
                       <IconButton

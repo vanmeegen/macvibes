@@ -396,20 +396,7 @@ export class ProjectsStore {
     this.loading = true;
     this.error = null;
     try {
-      const data = await gqlRequest<{
-        projects: Project[];
-        templates: Template[];
-        previewGatewayPort: number;
-        previewGatewayHttpsPort: number | null;
-        agentModels: AgentModelInfo[];
-      }>(PROJECTS_AND_TEMPLATES_QUERY);
-      runInAction(() => {
-        this.projects = data.projects;
-        this.templates = data.templates;
-        this.previewGatewayPort = data.previewGatewayPort;
-        this.previewGatewayHttpsPort = data.previewGatewayHttpsPort;
-        this.agentModels = data.agentModels;
-      });
+      await this.fetchInto();
     } catch (err) {
       console.error('ProjectsStore.load fehlgeschlagen', err);
       runInAction(() => {
@@ -425,23 +412,35 @@ export class ProjectsStore {
   /** Stilles Nachladen fürs Status-Polling — ohne Lade-Spinner, Fehler nur geloggt. */
   async refresh(): Promise<void> {
     try {
-      const data = await gqlRequest<{
-        projects: Project[];
-        templates: Template[];
-        previewGatewayPort: number;
-        previewGatewayHttpsPort: number | null;
-        agentModels: AgentModelInfo[];
-      }>(PROJECTS_AND_TEMPLATES_QUERY);
-      runInAction(() => {
-        this.projects = data.projects;
-        this.templates = data.templates;
-        this.previewGatewayPort = data.previewGatewayPort;
-        this.previewGatewayHttpsPort = data.previewGatewayHttpsPort;
-        this.agentModels = data.agentModels;
-      });
+      await this.fetchInto();
     } catch (err) {
+      // Bewusst KEIN this.error: das Polling läuft im Hintergrund, ein einzelner
+      // Fehlschlag darf nicht die ganze Seite mit einer Fehlermeldung überziehen.
       console.error('ProjectsStore.refresh fehlgeschlagen', err);
     }
+  }
+
+  /**
+   * Die eigentliche Abfrage — geteilt von `load` (mit Spinner und sichtbarem
+   * Fehler) und `refresh` (still). Vorher war `refresh` eine wörtliche Kopie
+   * von `load`: dieselbe Query, dieselbe Ergebniszuweisung, nur ohne die beiden
+   * Zustandsflags. Jede Feldänderung musste an zwei Stellen nachgezogen werden.
+   */
+  private async fetchInto(): Promise<void> {
+    const data = await gqlRequest<{
+      projects: Project[];
+      templates: Template[];
+      previewGatewayPort: number;
+      previewGatewayHttpsPort: number | null;
+      agentModels: AgentModelInfo[];
+    }>(PROJECTS_AND_TEMPLATES_QUERY);
+    runInAction(() => {
+      this.projects = data.projects;
+      this.templates = data.templates;
+      this.previewGatewayPort = data.previewGatewayPort;
+      this.previewGatewayHttpsPort = data.previewGatewayHttpsPort;
+      this.agentModels = data.agentModels;
+    });
   }
 
   startPolling(intervalMs = 2000): void {
