@@ -265,6 +265,28 @@ export class SandboxManager {
     }
   }
 
+  /**
+   * Vergisst ein Projekt vollständig — für gelöschte Projekte.
+   *
+   * Ohne das blieb der Eintrag samt Kontext, Betrachter-Set und Timern für die
+   * Lebensdauer des Prozesses liegen, auch wenn es das Projekt gar nicht mehr
+   * gab. Der Aufrufer muss vorher `stop()` aufrufen; `forget` räumt nur den
+   * Buchhaltungsteil ab und startet oder stoppt nichts.
+   */
+  forget(projectId: string): void {
+    const entry = this.entries.get(projectId);
+    if (entry === undefined) return;
+    this.clearGrace(entry);
+    this.clearIdle(entry);
+    entry.viewers.clear();
+    this.entries.delete(projectId);
+  }
+
+  /** Wie viele Projekte im Speicher gehalten werden (die Zahl hinter dem Leck). */
+  trackedProjects(): number {
+    return this.entries.size;
+  }
+
   async stopAll(): Promise<void> {
     await Promise.all([...this.entries.keys()].map((projectId) => this.stop(projectId)));
   }

@@ -367,6 +367,11 @@ builder.mutationType({
         // Sandbox stoppen, bevor die Volumes entfernt werden (R2).
         await ctx.sandboxManager.stop(String(args.id));
         await deleteProject(ctx.db, user, String(args.id), ctx.config.macvibesHome);
+        // Zustand freigeben: ohne das behalten SandboxManager und ChatService
+        // Kontext, Timer, Queue und Subscriber eines Projekts, das es nicht
+        // mehr gibt, für die Lebensdauer des Prozesses.
+        ctx.sandboxManager.forget(String(args.id));
+        ctx.chatService.forget(String(args.id));
         return true;
       },
     }),

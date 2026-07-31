@@ -1,4 +1,4 @@
-import { asc, eq, sql } from 'drizzle-orm';
+import { asc, desc, eq, sql } from 'drizzle-orm';
 import { DEFAULT_AGENT_MODEL, agentTimeoutsFor, isSlowAgentModel } from '../agent/agentModel';
 import type { AgentEvent } from '../agent/events';
 import type { AgentRunner, TurnHandle } from '../agent/runner';
@@ -11,6 +11,13 @@ import { chatMessages, projects, type ChatMessageRow } from '../db/schema';
  * unbegrenzt, im Missbrauchsfall bis zur Sättigung von Speicher und Platte.
  */
 export const MAX_MESSAGE_CHARS = 200_000;
+
+/**
+ * Wie viele Zeilen die Kontext-Wiederherstellung höchstens aus der DB holt.
+ * Sie behält davon 30 (nur user/assistant, ohne den laufenden Turn) — vorher
+ * wurde dafür die KOMPLETTE Historie des Projekts geladen.
+ */
+const HISTORY_FETCH_LIMIT = 200;
 
 export interface ChatEventPayload {
   message: ChatMessageRow;
@@ -161,6 +168,17 @@ export class ChatService {
       .orderBy(sql`rowid`, asc(chatMessages.createdAt));
   }
 
+  /** Die letzten `limit` Zeilen eines Projekts, in Anzeigereihenfolge. */
+  private async letzteNachrichten(projectId: string, limit: number): Promise<ChatMessageRow[]> {
+    const rows = await this.db
+      .select()
+      .from(chatMessages)
+      .where(eq(chatMessages.projectId, projectId))
+      .orderBy(desc(sql`rowid`))
+      .limit(limit);
+    return rows.reverse();
+  }
+
   isTurnActive(projectId: string): boolean {
     const state = this.states.get(projectId);
     if (!state) return false;
@@ -300,6 +318,29 @@ export class ChatService {
     if (etwasUnterwegs) {
       state.abortRequested = true;
     }
+  }
+
+  /**
+   * Vergisst den Zustand eines Projekts — für gelöschte Projekte.
+   *
+   * Ohne das blieben Queue, Subscriber und `currentHandle` für die Lebensdauer
+   * des Prozesses liegen. Ein laufender Turn wird abgebrochen: er schriebe
+   * sonst weiter in ein Projekt, das es nicht mehr gibt, samt Auto-Commit in
+   * dessen Branch.
+   */
+  forget(projectId: string): void {
+    const state = this.states.get(projectId);
+    if (state === undefined) return;
+    state.queue.length = 0;
+    state.currentHandle?.abort();
+    state.subscribers.clear();
+    this.states.delete(projectId);
+    this.warmups.delete(projectId);
+  }
+
+  /** Wie viele Projekte im Speicher gehalten werden (die Zahl hinter dem Leck). */
+  trackedProjects(): number {
+    return this.states.size;
   }
 
   /** Live-Stream aller Chat-Events eines Projekts (auch für Nur-Lese-Besucher, R10). */
@@ -442,7 +483,11 @@ export class ChatService {
     currentTurnId: string,
     prompt: string,
   ): Promise<string> {
-    const rows = await this.listMessages(projectId);
+    // Bewusst NICHT die ganze Historie laden: davon bleiben ohnehin nur die
+    // letzten 30 Zeilen übrig. Das Fenster ist grosszügig genug, dass nach dem
+    // Filtern (nur user/assistant, ohne den aktuellen Turn) noch 30 Zeilen
+    // zusammenkommen, und trotzdem unabhängig von der Projektgrösse.
+    const rows = await this.letzteNachrichten(projectId, HISTORY_FETCH_LIMIT);
     const convo = rows.filter(
       (m) => m.turnId !== currentTurnId && (m.role === 'user' || m.role === 'assistant'),
     );

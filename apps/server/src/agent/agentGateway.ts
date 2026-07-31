@@ -82,6 +82,9 @@ export class AgentGateway {
       this.connectWaiters.set(sandbox, waiters);
       const timer = setTimeout(() => {
         waiters.delete(onConnect);
+        // Auch hier das leere Set entfernen: sonst bleibt nach jedem
+        // Verbindungs-Timeout ein leerer Eintrag zurück.
+        if (waiters.size === 0) this.connectWaiters.delete(sandbox);
         reject(new Error(`Agent-Daemon von ${sandbox} hat sich nicht verbunden (${timeoutMs}ms)`));
       }, timeoutMs);
       const onConnect = (): void => {
@@ -125,6 +128,9 @@ export class AgentGateway {
     set.add(listener);
     return () => {
       set.delete(listener);
+      // Leeres Set auch aus der Map nehmen — sonst bleibt pro je gesehener
+      // Sandbox ein leerer Eintrag für die Lebensdauer des Prozesses liegen.
+      if (set.size === 0) this.listeners.delete(sandbox);
     };
   }
 

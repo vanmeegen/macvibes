@@ -599,3 +599,28 @@ describe('VM-Idle-Auffangnetz (ADR 0003)', () => {
     expect(provider.startCalls).toEqual(['p1']);
   });
 });
+
+/**
+ * Ein Eintrag wurde nie aus der Tabelle entfernt: Kontext, Betrachter-Set und
+ * Timer eines gestoppten Projekts blieben fuer die Lebensdauer des Prozesses
+ * liegen — auch fuer Projekte, die es gar nicht mehr gibt.
+ */
+describe('forget: geloeschte Projekte nicht ewig mitschleppen', () => {
+  test('entfernt den Eintrag samt Timern', async () => {
+    const { manager } = setup();
+    await manager.enter(ctx('p1'), 'marco');
+    expect(manager.trackedProjects()).toBe(1);
+
+    await manager.stop('p1');
+    manager.forget('p1');
+
+    expect(manager.trackedProjects()).toBe(0);
+    expect(manager.status('p1')).toBe('stopped');
+  });
+
+  test('ist folgenlos fuer ein unbekanntes Projekt', () => {
+    const { manager } = setup();
+    expect(() => manager.forget('gibt-es-nicht')).not.toThrow();
+    expect(manager.trackedProjects()).toBe(0);
+  });
+});

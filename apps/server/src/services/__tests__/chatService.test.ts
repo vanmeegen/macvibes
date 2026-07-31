@@ -1157,3 +1157,55 @@ describe('Config-Warmup hat eine Frist', () => {
     expect(antwort.map((m) => m.content).join('')).toContain('fertig');
   });
 });
+
+/**
+ * ChatService.states wuchs unbegrenzt: Queue, Subscriber und currentHandle
+ * eines Projekts blieben fuer die Lebensdauer des Prozesses liegen — auch
+ * nachdem das Projekt geloescht wurde.
+ */
+describe('forget: Zustand geloeschter Projekte freigeben', () => {
+  test('entfernt den Projektzustand', async () => {
+    const { service, projectId } = await setup();
+    await service.sendMessage(sendInput(projectId, 'hallo'));
+    await waitFor(() => !service.isTurnActive(projectId));
+    expect(service.trackedProjects()).toBe(1);
+
+    service.forget(projectId);
+
+    expect(service.trackedProjects()).toBe(0);
+  });
+
+  test('bricht einen laufenden Turn ab, statt ihn verwaisen zu lassen', async () => {
+    let abgebrochen = false;
+    let gestartet = false;
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        gestartet = true;
+        let abbrechen: () => void = () => {};
+        const abgewartet = new Promise<void>((resolve) => {
+          abbrechen = resolve;
+        });
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          await abgewartet;
+          yield { type: 'turn-aborted' };
+        })();
+        return {
+          events,
+          abort: () => {
+            abgebrochen = true;
+            abbrechen();
+          },
+        };
+      },
+    };
+    const { service, projectId } = await setup(runner);
+    await service.sendMessage(sendInput(projectId, 'laeuft noch'));
+    await waitFor(() => gestartet);
+
+    service.forget(projectId);
+
+    // Ohne Abbruch liefe der Turn weiter und schriebe in ein Projekt, das es
+    // nicht mehr gibt — inklusive Auto-Commit in dessen Branch.
+    expect(abgebrochen).toBe(true);
+  });
+});
