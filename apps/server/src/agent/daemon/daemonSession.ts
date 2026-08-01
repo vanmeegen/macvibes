@@ -106,10 +106,14 @@ export class DaemonSession {
   startTurn(params: StartTurnParams): void {
     if (this.currentTurnId !== null) {
       // Der Host serialisiert Turns pro Projekt — das hier ist reine Notwehr.
-      this.emitEvent(params.turnId, {
-        type: 'error',
-        message: 'Agent-Daemon: Turn abgewiesen — es läuft bereits ein Turn.',
-      });
+      // Greift sie trotzdem, ist diese Sitzung verklemmt: die SDK-Query hängt,
+      // ohne dass die Verbindung abgerissen wäre (sonst hätte `abandonTurn` den
+      // Turn längst freigegeben). Herauszukommen ist nur über einen Neustart,
+      // den ausschliesslich der Daemon selbst auslösen kann — deshalb wird die
+      // Ablehnung als eigene Nachricht gemeldet, damit der Host ihn per
+      // `shutdown` anfordern kann. Bewusst KEIN error-Event: was der Nutzer zu
+      // sehen bekommt, entscheidet der Host nach dem Heilungsversuch.
+      this.config.emit({ kind: 'turn-rejected', turnId: params.turnId });
       this.emitEvent(params.turnId, { type: 'turn-aborted' });
       return;
     }

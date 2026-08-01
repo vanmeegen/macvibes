@@ -209,3 +209,24 @@ describe('parseDaemonToHost — Längengrenzen für ALLE Wire-Strings', () => {
     expect(parseDaemonToHost(rohes)).toBeNull();
   });
 });
+
+/**
+ * Die Notwehr-Sperre des Daemons („es läuft bereits ein Turn") ist der einzige
+ * Zustand, aus dem der Host ihn nicht selbst herausholen konnte. Damit er
+ * darauf reagieren KANN, meldet der Daemon die Ablehnung ausdrücklich — statt
+ * sie nur als Fehlertext in den Event-Strom zu legen, den niemand
+ * maschinenlesbar auswerten kann.
+ */
+describe('turn-rejected (Daemon → Host)', () => {
+  test('wird als eigene Nachricht erkannt', () => {
+    expect(parseDaemonToHost(JSON.stringify({ kind: 'turn-rejected', turnId: 't-1' }))).toEqual({
+      kind: 'turn-rejected',
+      turnId: 't-1',
+    });
+  });
+
+  test('ohne turnId ist die Nachricht wertlos und wird verworfen', () => {
+    expect(parseDaemonToHost(JSON.stringify({ kind: 'turn-rejected' }))).toBeNull();
+    expect(parseDaemonToHost(JSON.stringify({ kind: 'turn-rejected', turnId: 7 }))).toBeNull();
+  });
+});

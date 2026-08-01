@@ -79,6 +79,29 @@ export class DaemonAgentRunner implements AgentRunner {
         acked = true;
         return;
       }
+      if (message.kind === 'turn-rejected' && message.turnId === turnId) {
+        // Der Daemon sieht einen laufenden Turn, den der Host nicht kennt —
+        // seine Sitzung ist verklemmt. Neustart anfordern: nur der Daemon selbst
+        // kann das auslösen (msb-exec kommt an den PID-1-Baum der VM nicht
+        // heran), der In-VM-Supervisor bringt ihn frisch zurück. Der Retry des
+        // chatService trifft dann einen sauberen Daemon.
+        acked = true;
+        const neustartAngefordert = gateway.send(sandbox, { kind: 'shutdown' });
+        pushAll(
+          neustartAngefordert
+            ? [{ type: 'turn-aborted' }]
+            : [
+                {
+                  type: 'error',
+                  message:
+                    'Agent-Daemon blockiert und nicht mehr erreichbar — der Neustart ' +
+                    'konnte nicht angefordert werden. Projekt schliessen und neu öffnen.',
+                },
+                { type: 'turn-aborted' },
+              ],
+        );
+        return;
+      }
       if (message.kind !== 'event' || message.turnId !== turnId) return;
       acked = true;
       pushAll([message.event]);

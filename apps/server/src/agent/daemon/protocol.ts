@@ -45,6 +45,19 @@ export type DaemonToHostMessage =
    * bleibt scheinbar offen) und Sends verschwinden spurlos (Live-Befund).
    */
   | { kind: 'turn-started'; turnId: string }
+  /**
+   * Der Daemon hat den Turn ABGELEHNT, weil er noch einen laufen sieht
+   * (Notwehr-Sperre in `DaemonSession.startTurn`).
+   *
+   * Eine eigene Nachricht und kein blosser Fehlertext im Event-Strom: Der Host
+   * serialisiert Turns pro Projekt: Sieht der Daemon trotzdem einen laufenden,
+   * ist seine Sitzung verklemmt — etwa weil die SDK-Query haengt, ohne die
+   * Verbindung zu verlieren (dann greift `abandonTurn` nicht). Aus diesem
+   * Zustand kommt er nur durch einen Neustart heraus, und den kann nur er
+   * selbst ausloesen (s. `shutdown`). Der Host muss die Ablehnung also
+   * maschinell erkennen koennen, nicht nur anzeigen.
+   */
+  | { kind: 'turn-rejected'; turnId: string }
   | { kind: 'event'; turnId: string; event: AgentEvent }
   /**
    * Preview-Status aus der VM (ADR 0001): der Daemon liest monit lokal und
@@ -130,6 +143,10 @@ export function parseDaemonToHost(raw: string): DaemonToHostMessage | null {
   // sie in Maps und schreibt sie in die DB.
   if (msg['kind'] === 'turn-started' && istKurzerString(msg['turnId'], MAX_ID_CHARS)) {
     return { kind: 'turn-started', turnId: msg['turnId'] };
+  }
+
+  if (msg['kind'] === 'turn-rejected' && istKurzerString(msg['turnId'], MAX_ID_CHARS)) {
+    return { kind: 'turn-rejected', turnId: msg['turnId'] };
   }
 
   if (msg['kind'] === 'event' && istKurzerString(msg['turnId'], MAX_ID_CHARS)) {

@@ -234,3 +234,69 @@ describe('DaemonAgentRunner', () => {
     await collected;
   });
 });
+
+/**
+ * Selbstheilung fuer den einzigen Zustand, aus dem der Host den Daemon bisher
+ * nicht herausholen konnte: Wedgt dessen SDK-Query, ohne dass die Verbindung
+ * abreisst, bleibt currentTurnId gesetzt und die Notwehr-Sperre weist JEDEN
+ * Folge-Turn ab. abandonTurn() greift dort nicht — es haengt am close-Handler.
+ *
+ * Das Protokoll hat fuer genau das eine shutdown-Nachricht: der Daemon beendet
+ * sich, der In-VM-Supervisor startet ihn frisch. Nur gesendet hat sie nie
+ * jemand — die dokumentierte Heilung existierte ausschliesslich auf dem Papier.
+ */
+describe('Verklemmter Daemon: Neustart anfordern', () => {
+  test('sendet shutdown, wenn der Daemon den Turn ablehnt', async () => {
+    const gw = new FakeGateway();
+    const runner = makeRunner(gw);
+    const handle = runner.startTurn(TURN);
+    const gesammelt = collect(handle.events);
+    await tick();
+
+    gw.notify('sb-p1', {
+      kind: 'message',
+      message: { kind: 'turn-rejected', turnId: firstTurnId(gw) },
+    });
+
+    const events = await gesammelt;
+    expect(gw.sent.some((m) => m.kind === 'shutdown')).toBe(true);
+    // Der Turn endet — der Retry des chatService trifft den frischen Daemon.
+    expect(events.at(-1)).toEqual({ type: 'turn-aborted' });
+  });
+
+  test('meldet einen Fehler, wenn nicht einmal der Neustart zugestellt werden kann', async () => {
+    const gw = new FakeGateway();
+    const runner = makeRunner(gw);
+    const handle = runner.startTurn(TURN);
+    const gesammelt = collect(handle.events);
+    await tick();
+    const turnId = firstTurnId(gw);
+
+    // Ab jetzt geht nichts mehr raus (Verbindung weg).
+    gw.sendSucceeds = false;
+    gw.notify('sb-p1', { kind: 'message', message: { kind: 'turn-rejected', turnId } });
+
+    const events = await gesammelt;
+    // Sonst stuende der Nutzer ohne jede Erklaerung da.
+    const fehler = events.find((e) => e.type === 'error');
+    expect(fehler).toBeDefined();
+    expect(fehler?.type === 'error' && fehler.message).toContain('blockiert');
+    expect(events.at(-1)).toEqual({ type: 'turn-aborted' });
+  });
+
+  test('eine Ablehnung fuer einen FREMDEN Turn wird ignoriert', async () => {
+    const gw = new FakeGateway();
+    const runner = makeRunner(gw);
+    const handle = runner.startTurn(TURN);
+    const gesammelt = collect(handle.events);
+    await tick();
+
+    gw.notify('sb-p1', { kind: 'message', message: { kind: 'turn-rejected', turnId: 'fremd' } });
+    await tick();
+    expect(gw.sent.some((m) => m.kind === 'shutdown')).toBe(false);
+
+    // Turn reguläer beenden, damit der Generator endet.
+    gw.emitEvent('sb-p1', firstTurnId(gw), { type: 'turn-completed', sessionId: 's' });
+    await gesammelt;
+  });
+});

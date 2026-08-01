@@ -245,8 +245,15 @@ describe('DaemonSession', () => {
     h.session.startTurn({ ...START, turnId: 't-2' });
     await tick();
 
+    // Die Ablehnung wird als EIGENE Nachricht gemeldet, nicht nur als Fehlertext
+    // im Event-Strom: nur so kann der Host maschinell darauf reagieren und den
+    // verklemmten Daemon neu starten lassen.
+    expect(h.emitted).toContainEqual({ kind: 'turn-rejected', turnId: 't-2' });
     const events = eventsFor(h.emitted, 't-2');
-    expect(events[0]?.type).toBe('error');
+    // Kein error-Event mehr: die Ablehnung ist ein behandelbarer Zustand, keine
+    // Fehlermeldung fuer den Nutzer. Was er zu sehen bekommt, entscheidet der
+    // Host, nachdem der Heilungsversuch gelaufen ist.
+    expect(events.find((e) => e.type === 'error')).toBeUndefined();
     expect(events.at(-1)).toEqual({ type: 'turn-aborted' });
     // Der laufende Turn ist davon unberührt.
     h.queries[0]!.push({ type: 'result', subtype: 'success', session_id: 's-1' });
