@@ -31,6 +31,8 @@ export interface EgressProxyOptions {
    * lokalen Fake-Upstream prüfen können, ohne die Policy aufzuweichen.
    */
   checkTarget?: TargetChecker;
+  /** Obergrenze des pending-Puffers pro Verbindung (Default 8 MiB). Test-Naht. */
+  maxPendingBytes?: number;
 }
 
 /**
@@ -90,32 +92,66 @@ export interface EgressProxyHandle {
   stop: () => void;
 }
 
+/**
+ * Obergrenze für den `pending`-Puffer einer Verbindung (H5-analog). Der Puffer
+ * hält Bytes, solange der Upstream noch nicht (vollständig) aufnahmebereit ist
+ * — während der asynchronen Zielprüfung und bei Backpressure. Ohne Grenze ist
+ * er ein Speicher-Hebel für die per Design nicht vertrauenswürdige MicroVM: ein
+ * `CONNECT` auf einen langsam auflösenden Hostnamen plus Dauerfeuer triebe den
+ * Host-RSS bis zum OOM. 8 MiB deckt legitime grosse Bodies in der kurzen
+ * Prüfphase und begrenzt zugleich den Schaden.
+ */
+const MAX_PENDING_BYTES = 8 * 1024 * 1024;
+
+/** Der Ausschnitt eines Bun-Sockets, den `flushPending` braucht (Test-Naht). */
+export interface WritableSocket {
+  write(data: Uint8Array): number;
+}
+
 interface ConnState {
   buf: Buffer;
   upstream: Socket | null;
+  /** Upstream verbunden UND `pending` vollständig geflusht — direkter Pfad. */
   established: boolean;
   /** Zielprüfung (DNS + Policy) läuft — sie ist asynchron. */
   connecting: boolean;
   /**
-   * Bytes, die während der Zielprüfung eintreffen. Sie gehören zum LAUFENDEN
-   * Request (typischerweise der POST-Body in einem eigenen TCP-Segment) und
-   * dürfen nicht als neuer Request-Kopf geparst werden — genau das führte zu
-   * sporadischen „400 Bad Request".
+   * Bytes, die zum laufenden Request gehören, aber noch nicht (vollständig) an
+   * den Upstream geschrieben sind: während der Zielprüfung (typischerweise der
+   * POST-Body in einem eigenen TCP-Segment) und der ungeschriebene Rest bei
+   * Backpressure. Als Request-Kopf geparst hätte das zu sporadischen „400 Bad
+   * Request" geführt; verworfen zu truncierten Requests.
    */
   pending: Buffer;
 }
 
 /**
- * Gibt die während der Zielprüfung aufgelaufenen Bytes an den Upstream weiter.
- * Muss NACH dem `rest` aus demselben Segment laufen — sonst kämen die Bytes
- * beim Ziel in falscher Reihenfolge an.
+ * Schreibt so viel von `pending` an den Upstream, wie der Socket annimmt, und
+ * behält den ungeschriebenen Rest.
+ *
+ * Bun's `Socket.write` schreibt bei vollem Kernel-Puffer WENIGER als übergeben
+ * und meldet die tatsächlich geschriebene Zahl — der Rest muss aufgehoben und
+ * beim `drain`-Event erneut geschrieben werden. Ihn (wie zuvor) bedingungslos
+ * zu verwerfen, trunciert den Request: der Upstream bekommt weniger als seine
+ * content-length ankündigt und hängt bis zum Timeout.
+ *
+ * `established` wird erst gesetzt, wenn `pending` LEER ist. Solange noch ein
+ * Rest aussteht, müssen neue Bytes weiter über `pending` laufen — schriebe der
+ * data-Handler sie schon direkt an den Upstream, überholten sie den Rest und
+ * die Reihenfolge bräche.
  */
-function flushPending(state: ConnState, up: Socket): void {
-  if (state.pending.length > 0) {
-    up.write(state.pending);
-    state.pending = Buffer.alloc(0);
+export function flushPending(state: ConnState, up: WritableSocket): void {
+  while (state.pending.length > 0) {
+    const geschrieben = up.write(state.pending);
+    // <= 0: Socket zu oder komplett gepuffert — der drain-Handler macht weiter.
+    if (typeof geschrieben !== 'number' || geschrieben <= 0) break;
+    state.pending =
+      geschrieben >= state.pending.length
+        ? Buffer.alloc(0)
+        : Buffer.from(state.pending.subarray(geschrieben));
   }
   state.connecting = false;
+  if (state.pending.length === 0) state.established = true;
 }
 
 export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle {
@@ -134,6 +170,11 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
 
   const refuse = (client: Socket<ConnState>, reason: string): void => {
     console.warn(`EgressProxy: Ziel abgelehnt — ${reason}`);
+    // Puffer freigeben und das connecting-Flag löschen: die Verbindung wird
+    // geschlossen, aber bis der Close greift, könnten sonst weiter Bytes
+    // auflaufen (der Upstream kommt ja nie, flushPending läuft nie).
+    client.data.pending = Buffer.alloc(0);
+    client.data.connecting = false;
     client.write(
       `HTTP/1.1 403 Forbidden\r\nConnection: close\r\ncontent-length: 0\r\nx-macvibes-reason: ${reason.replace(/[\r\n]/g, ' ')}\r\n\r\n`,
     );
@@ -170,6 +211,11 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
           client.data.upstream = up;
           onOpen(up);
         },
+        drain(up) {
+          // Kernel-Puffer hat wieder Platz — ausstehende pending-Bytes weiter
+          // an den Upstream schreiben (Backpressure, s. flushPending).
+          if (client.data.pending.length > 0) flushPending(client.data, up);
+        },
         data(_up, chunk) {
           client.write(chunk);
         },
@@ -183,6 +229,10 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
       },
     }).catch((error: unknown) => {
       console.error(`EgressProxy: Connect zu ${host}:${port} fehlgeschlagen:`, error);
+      // Wie bei refuse: kein Upstream, also läuft flushPending nie — Puffer
+      // freigeben, damit bis zum Close nichts mehr aufläuft.
+      client.data.pending = Buffer.alloc(0);
+      client.data.connecting = false;
       client.write('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
       client.end();
     });
@@ -203,15 +253,26 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
       },
       data(socket, chunk) {
         const state = socket.data;
-        // Tunnel steht: Bytes 1:1 durchreichen.
+        // Tunnel steht und pending ist leer: Bytes 1:1 durchreichen.
         if (state.established && state.upstream) {
           state.upstream.write(chunk);
           return;
         }
-        // Zielprüfung läuft noch: die Bytes gehören zum laufenden Request und
-        // werden aufgehoben, bis der Upstream steht.
-        if (state.connecting) {
+        // Bytes gehören zum laufenden Request, der Upstream ist aber noch nicht
+        // (vollständig) aufnahmebereit: während der Zielprüfung (kein Upstream)
+        // oder solange ein pending-Rest bei Backpressure aussteht. Aufheben —
+        // mit Obergrenze, sonst ist der Puffer ein OOM-Hebel für die untrusted
+        // VM.
+        if (state.connecting || state.upstream !== null) {
+          const grenze = options.maxPendingBytes ?? MAX_PENDING_BYTES;
+          if (state.pending.length + chunk.length > grenze) {
+            console.warn(`EgressProxy: pending-Puffer über ${grenze} B — Verbindung getrennt.`);
+            socket.end();
+            return;
+          }
           state.pending = Buffer.concat([state.pending, chunk]);
+          // Upstream schon da (Backpressure-Phase): sofort nachschieben.
+          if (state.upstream !== null) flushPending(state, state.upstream);
           return;
         }
         state.buf = Buffer.concat([state.buf, chunk]);
@@ -254,10 +315,11 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
           state.connecting = true;
           connectChecked(socket, host, port, (up) => {
             socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-            state.established = true;
-            // Reihenfolge zählt: erst der Rest aus demselben Segment, dann was
-            // während der Prüfung nachkam.
-            if (rest.length > 0) up.write(rest);
+            // Alles über pending schreiben, in Reihenfolge: erst der Rest aus
+            // demselben Segment, dann was während der Prüfung nachkam.
+            // flushPending achtet auf Backpressure und setzt established, sobald
+            // pending leer ist.
+            state.pending = rest.length > 0 ? Buffer.concat([rest, state.pending]) : state.pending;
             flushPending(state, up);
           });
           return;
@@ -279,9 +341,9 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
             `${forwarded.join('\r\n')}\r\n\r\n`;
           state.connecting = true;
           connectChecked(socket, url.hostname, port, (up) => {
-            state.established = true;
-            up.write(newHead);
-            if (rest.length > 0) up.write(rest);
+            // newHead + rest + pending in Reihenfolge über den Puffer, damit
+            // Backpressure und Reihenfolge korrekt behandelt werden.
+            state.pending = Buffer.concat([Buffer.from(newHead), rest, state.pending]);
             flushPending(state, up);
           });
           return;

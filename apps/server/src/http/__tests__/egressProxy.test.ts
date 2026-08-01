@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { startEgressProxy, type EgressProxyHandle } from '../egressProxy';
+import {
+  startEgressProxy,
+  flushPending,
+  type EgressProxyHandle,
+  type WritableSocket,
+} from '../egressProxy';
 
 /**
  * Egress-Proxy (CONNECT + absolute-form GET): microsandbox' Regel-Engine
@@ -252,5 +257,136 @@ describe('EgressProxy — Bytes während der Zielprüfung', () => {
 
     expect(antwort).not.toContain('400 Bad Request');
     expect(antwort).toContain('gelesen:hallo-welt');
+  });
+});
+
+/**
+ * flushPending isoliert (#10): Bun's Socket.write schreibt bei Backpressure
+ * WENIGER als uebergeben. Der ungeschriebene Rest wurde vorher bedingungslos
+ * verworfen -> truncierter Request, Upstream haengt bis Timeout.
+ */
+describe('flushPending: Backpressure verwirft keine Bytes', () => {
+  function fakeState(pending: string) {
+    return {
+      buf: Buffer.alloc(0),
+      upstream: null,
+      established: false,
+      connecting: true,
+      pending: Buffer.from(pending),
+    };
+  }
+
+  test('schreibt alles, wenn der Socket alles annimmt', () => {
+    const state = fakeState('hallo-welt');
+    const geschrieben: Buffer[] = [];
+    const sock: WritableSocket = {
+      write: (d) => {
+        geschrieben.push(Buffer.from(d));
+        return d.length;
+      },
+    };
+    flushPending(state, sock);
+    expect(Buffer.concat(geschrieben).toString()).toBe('hallo-welt');
+    expect(state.pending.length).toBe(0);
+    expect(state.established).toBe(true);
+    expect(state.connecting).toBe(false);
+  });
+
+  test('behaelt den Rest, wenn der Socket nur einen Teil annimmt', () => {
+    const state = fakeState('0123456789');
+    let ersterAufruf = true;
+    const sock: WritableSocket = {
+      write: (d) => {
+        // Erster Aufruf: nur 4 Bytes. Danach alles.
+        if (ersterAufruf) {
+          ersterAufruf = false;
+          return 4;
+        }
+        return d.length;
+      },
+    };
+    flushPending(state, sock);
+    // Ohne Fix waere pending hier leer und established true -> 6 Bytes verloren.
+    // Mit Fix schreibt die while-Schleife im selben Aufruf den Rest (zweiter
+    // write nimmt alles), also ist am Ende alles raus.
+    expect(state.pending.length).toBe(0);
+    expect(state.established).toBe(true);
+  });
+
+  test('bricht ab und BEHAELT den Rest, wenn der Socket nichts mehr annimmt (Backpressure)', () => {
+    const state = fakeState('0123456789');
+    let rest = 10;
+    const sock: WritableSocket = {
+      write: (_d) => {
+        if (rest === 10) {
+          rest = 6;
+          return 4; // erste 4 Bytes
+        }
+        return 0; // Kernel-Puffer voll -> nichts mehr, drain macht spaeter weiter
+      },
+    };
+    flushPending(state, sock);
+    // Der ungeschriebene Rest bleibt erhalten (drain-Handler schreibt ihn),
+    // established bleibt false, solange pending nicht leer ist.
+    expect(state.pending.toString()).toBe('456789');
+    expect(state.established).toBe(false);
+  });
+});
+
+/**
+ * #1a: Der pending-Puffer waechst waehrend einer haengenden Zielpruefung
+ * unbegrenzt -> OOM-Hebel fuer die per Design nicht vertrauenswuerdige MicroVM.
+ * Mit Obergrenze wird die Verbindung getrennt statt den Host-RSS zu treiben.
+ */
+describe('EgressProxy — pending-Obergrenze (#1a)', () => {
+  let langsam: EgressProxyHandle;
+
+  beforeAll(() => {
+    langsam = startEgressProxy({
+      port: 0,
+      verifyToken: () => ({ sandbox: 'test' }),
+      // Zielpruefung haengt: der Upstream kommt nie, pending wuerde ohne Grenze
+      // ewig wachsen.
+      checkTarget: () => new Promise(() => {}),
+      maxPendingBytes: 4096,
+    });
+  });
+
+  afterAll(() => langsam.stop());
+
+  test('trennt die Verbindung, wenn pending die Grenze ueberschreitet', async () => {
+    const geschlossen = await new Promise<boolean>((resolve) => {
+      let zu = false;
+      Bun.connect({
+        hostname: '127.0.0.1',
+        port: langsam.port,
+        socket: {
+          open(s) {
+            // Head, der eine haengende Zielpruefung ausloest.
+            s.write('POST http://haengt.example/ HTTP/1.1\r\nHost: x\r\n\r\n');
+            // Body verzoegert als eigene Segmente nachschieben, waehrend die
+            // Zielpruefung haengt — deutlich mehr als die 4096-B-Grenze.
+            let i = 0;
+            const timer = setInterval(() => {
+              i += 1;
+              s.write('x'.repeat(2000));
+              if (i >= 10) clearInterval(timer);
+            }, 5);
+          },
+          data() {
+            // Der Proxy antwortet ggf. mit Fehlerzeilen — hier nur konsumieren.
+          },
+          close() {
+            zu = true;
+            resolve(true);
+          },
+          error() {
+            resolve(zu);
+          },
+        },
+      }).catch(() => resolve(false));
+      setTimeout(() => resolve(false), 3000);
+    });
+    expect(geschlossen).toBe(true);
   });
 });
