@@ -80,9 +80,13 @@ describe('ShutdownSequence: Auto-Commit darf nicht abgeschnitten werden', () => 
   });
 
   test('ein zweites Signal führt die Schritte nicht erneut aus', async () => {
+    // Die Schritte laufen genau EINMAL — auch wenn zweimal Ctrl-C kommt.
+    // (Dass das zweite Signal zusätzlich einen sofortigen Notausstieg auslöst,
+    // prüft der Timeout-Block weiter unten; im echten process.exit gewinnt der
+    // erste exit-Aufruf ohnehin.)
     let laeufe = 0;
-    let exits = 0;
-    const sequenz = new ShutdownSequence({ exit: () => void (exits += 1), log: () => {} });
+    const codes: number[] = [];
+    const sequenz = new ShutdownSequence({ exit: (code) => void codes.push(code), log: () => {} });
     sequenz.register('Sandboxes', async () => {
       laeufe += 1;
       await Bun.sleep(10);
@@ -92,7 +96,6 @@ describe('ShutdownSequence: Auto-Commit darf nicht abgeschnitten werden', () => 
     await Promise.all([sequenz.handle('SIGINT'), sequenz.handle('SIGINT')]);
 
     expect(laeufe).toBe(1);
-    expect(exits).toBe(1);
   });
 
   test('ohne registrierte Schritte wird trotzdem beendet', async () => {
@@ -102,5 +105,51 @@ describe('ShutdownSequence: Auto-Commit darf nicht abgeschnitten werden', () => 
     await sequenz.handle('SIGTERM');
 
     expect(exits).toBe(1);
+  });
+});
+
+/**
+ * Der zweite Review fand: die Sequenz hatte KEINEN Timeout pro Schritt. Hängt
+ * ein Schritt (stopAll() wartet auf ein startPromise, git auf eine index.lock,
+ * msb stop kehrt nicht zurück), wird exit() nie erreicht und der Prozess ist
+ * nur per SIGKILL beendbar — wodurch genau der Auto-Commit verloren geht, den
+ * die Sequenz retten sollte.
+ */
+describe('ShutdownSequence: hängender Schritt macht den Prozess nicht unbeendbar', () => {
+  test('überspringt einen hängenden Schritt nach der Frist und beendet trotzdem', async () => {
+    const { eintraege, notiere } = protokoll();
+    const sequenz = new ShutdownSequence({
+      exit: () => notiere('exit'),
+      log: () => {},
+      stepTimeoutMs: 30,
+    });
+
+    sequenz.register('Sandboxes', () => notiere('sandboxes'));
+    sequenz.register('haengt', () => new Promise<void>(() => {})); // nie erfüllt
+
+    await sequenz.handle('SIGTERM');
+
+    // Rückwärts: der hängende Schritt zuerst (wird nach 30ms übersprungen),
+    // dann der Sandboxes-Schritt, dann exit.
+    expect(eintraege).toEqual(['sandboxes', 'exit']);
+  });
+
+  test('ein zweites Signal während eines hängenden Abgangs beendet sofort', async () => {
+    const codes: number[] = [];
+    const sequenz = new ShutdownSequence({
+      exit: (code) => void codes.push(code),
+      log: () => {},
+      stepTimeoutMs: 10_000, // lang, damit der erste Lauf beim Test noch hängt
+    });
+    sequenz.register('haengt', () => new Promise<void>(() => {}));
+
+    // Erstes Signal: startet den (hängenden) Abgang, wartet NICHT darauf.
+    void sequenz.handle('SIGINT');
+    await Bun.sleep(10);
+    // Zweites Ctrl-C: der Nutzer will jetzt raus.
+    await sequenz.handle('SIGINT');
+
+    // Sofortiges Beenden mit einem Code != 0 (der Abgang war nicht sauber).
+    expect(codes).toContain(1);
   });
 });
