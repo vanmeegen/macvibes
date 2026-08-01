@@ -1,5 +1,5 @@
 import type { AgentEvent } from '../events';
-import type { PreviewStatus } from '../../sandbox/provider';
+import type { PreviewStatus } from '../../preview/status';
 
 /**
  * WS-Protokoll Host ↔ Agent-Daemon (in der VM). Der Daemon wählt sich beim

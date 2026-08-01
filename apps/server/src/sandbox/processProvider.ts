@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { ensureWorkspace } from '../services/workspaceService';
-import { httpProbe } from './httpProbe';
+import { httpProbe } from '../preview/httpProbe';
 import { PreviewSupervisor, type SupervisedProcess } from './previewSupervisor';
 import { findFreePort } from './portService';
 import type { PreviewStatus, SandboxContext, SandboxHandle, SandboxProvider } from './provider';

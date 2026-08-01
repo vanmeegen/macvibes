@@ -1,3 +1,7 @@
+import type { PreviewStatus } from '../preview/status';
+
+export type { PreviewStatus };
+
 export type SandboxStatus = 'starting' | 'running' | 'stopping' | 'stopped';
 
 /** Alles, was ein Provider braucht, um die Sandbox eines Projekts zu starten. */
@@ -10,8 +14,6 @@ export interface SandboxContext {
   devCommand: string;
   previewPort: number;
 }
-
-export type PreviewStatus = 'starting' | 'ready' | 'restarting' | 'failed' | 'stopped';
 
 export interface SandboxHandle {
   /**

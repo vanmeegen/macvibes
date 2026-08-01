@@ -1,5 +1,5 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import { httpProbe } from '../../sandbox/httpProbe';
+import { httpProbe } from '../../preview/httpProbe';
 import { DaemonSession } from './daemonSession';
 import type { QueryHandle } from './daemonSession';
 import { PreviewStatusReporter } from './previewStatusReporter';

@@ -1,4 +1,4 @@
-import type { PreviewStatus } from './provider';
+import type { PreviewStatus } from './status';
 
 /**
  * Übersetzt die monit-Status-Ausgabe (`GET /_status?format=text` der

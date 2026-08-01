@@ -1,5 +1,5 @@
-import { gateReadyWithProbe, previewStatusFromMonitText } from '../../sandbox/monitStatus';
-import type { PreviewStatus } from '../../sandbox/provider';
+import { gateReadyWithProbe, previewStatusFromMonitText } from '../../preview/monitStatus';
+import type { PreviewStatus } from '../../preview/status';
 
 export interface PreviewStatusReporterDeps {
   /** Liest die monit-Statusseite IN der VM (localhost, kein Port-Mapping). */

@@ -7,7 +7,7 @@ import {
   projectVolumeDir,
 } from '../services/workspaceService';
 import { baselineBootstrapScript, baselineExists, baselineSnapshotName } from './baselineService';
-import { httpProbe } from './httpProbe';
+import { httpProbe } from '../preview/httpProbe';
 import {
   removeSandbox,
   SandboxRuntimeError,
