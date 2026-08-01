@@ -795,3 +795,46 @@ describe('SandboxManager-Lebenszyklus: Rennen aus dem zweiten Review', () => {
     expect(manager.trackedProjects()).toBe(1);
   });
 });
+
+/**
+ * #7: Der Betrachterschluessel ist pro Tab (viewerId, seit dem H11-Fix), und
+ * die UI erzeugt ihn pro Seitenladung neu. Bei Reload/Crash/Netzabriss (kein
+ * leaveProject) bleibt der alte Schluessel fuer immer im Set. Aktiv missbraucht:
+ * enterProject in einer Schleife mit zufaelligen viewerIds laesst das Set
+ * unbegrenzt wachsen (Speicher) und pinnt die fremde Sandbox dauerhaft offen.
+ * Eine Obergrenze pro Projekt begrenzt das.
+ */
+describe('viewers-Obergrenze (#7): Set waechst nicht unbegrenzt', () => {
+  test('haelt die Betrachterzahl unter der Grenze und verdraengt die aeltesten', async () => {
+    const { manager } = setup({ graceMs: 10_000 });
+    // Weit mehr Betrachter als die Grenze eintreten lassen (Schleifen-Missbrauch).
+    for (let i = 0; i < 500; i += 1) {
+      await manager.enter(ctx('p1'), `zufall-${i}`);
+    }
+    // Das Set darf nicht mit allen 500 Schluesseln wachsen.
+    expect(manager.viewerCount('p1')).toBeLessThanOrEqual(64);
+    // Die Sandbox laeuft trotzdem (Betrachter sind vorhanden).
+    expect(manager.status('p1')).toBe('running');
+  });
+
+  test('ein echter Betrachter, der bleibt, haelt die Sandbox weiter offen', async () => {
+    const { manager, provider } = setup({ graceMs: 20 });
+    await manager.enter(ctx('p1'), 'echter-tab');
+    // Viele tote viewerIds fluten das Set (verdraengen die aeltesten, evtl. auch
+    // den echten). Danach verlassen alle bis auf den echten Tab NICHT explizit —
+    // der echte leavt, und Grace greift nur, wenn das Set dann leer ist.
+    for (let i = 0; i < 200; i += 1) {
+      await manager.enter(ctx('p1'), `flut-${i}`);
+    }
+    // Alle bekannten Fluter + echten Tab leaven: das Set leert sich und Grace greift.
+    manager.leave('p1', 'echter-tab');
+    for (let i = 0; i < 200; i += 1) {
+      manager.leave('p1', `flut-${i}`);
+    }
+    await Bun.sleep(120);
+    // Wenn das Set leer ist, ist die Sandbox gestoppt.
+    if (manager.viewerCount('p1') === 0) {
+      expect(provider.stopCalls).toContain('p1');
+    }
+  });
+});

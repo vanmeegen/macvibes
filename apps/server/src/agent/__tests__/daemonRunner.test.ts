@@ -260,6 +260,10 @@ describe('Verklemmter Daemon: Neustart anfordern', () => {
 
     const events = await gesammelt;
     expect(gw.sent.some((m) => m.kind === 'shutdown')).toBe(true);
+    // Die veraltete Verbindung des sich beendenden Daemons MUSS verworfen
+    // werden — sonst kehrt waitForConnection des chatService-Retrys sofort auf
+    // sie zurück und sendet in einen Socket, den niemand mehr liest.
+    expect(gw.invalidated).toContain('sb-p1');
     // Der Turn endet — der Retry des chatService trifft den frischen Daemon.
     expect(events.at(-1)).toEqual({ type: 'turn-aborted' });
   });

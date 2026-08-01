@@ -87,6 +87,11 @@ export class DaemonAgentRunner implements AgentRunner {
         // chatService trifft dann einen sauberen Daemon.
         acked = true;
         const neustartAngefordert = gateway.send(sandbox, { kind: 'shutdown' });
+        // Die veraltete Verbindung verwerfen (wie im ack-Timeout-Pfad): der
+        // sich beendende Daemon liest nicht mehr, aber sein Socket bliebe sonst
+        // registriert. Ohne das kehrte waitForConnection des Retrys sofort auf
+        // ihn zurück und der Retry liefe wieder in die tote Verbindung.
+        gateway.invalidate(sandbox);
         pushAll(
           neustartAngefordert
             ? [{ type: 'turn-aborted' }]

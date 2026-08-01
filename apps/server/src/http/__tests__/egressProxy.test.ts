@@ -271,6 +271,7 @@ describe('flushPending: Backpressure verwirft keine Bytes', () => {
       buf: Buffer.alloc(0),
       upstream: null,
       established: false,
+      einzelRequest: false,
       connecting: true,
       pending: Buffer.from(pending),
     };
@@ -388,5 +389,79 @@ describe('EgressProxy — pending-Obergrenze (#1a)', () => {
       setTimeout(() => resolve(false), 3000);
     });
     expect(geschlossen).toBe(true);
+  });
+});
+
+/**
+ * #11: absolute-form (plain HTTP ueber Proxy) ist KEIN Tunnel — jeder Request
+ * braucht eigenes Umschreiben (Proxy-Header strippen, origin-form). Der Code
+ * behandelte die Verbindung nach dem ersten Request aber wie einen Tunnel:
+ * weitere Bytes gingen roh an den Upstream. Ein keep-alive-Client (undici mit
+ * http_proxy, Default) schickt seinen ZWEITEN Request weiter in absolute-form
+ * MIT Proxy-Authorization -> das VM-Token landet im Klartext beim Origin.
+ */
+describe('EgressProxy — absolute-form leakt das Token nicht auf keep-alive (#11)', () => {
+  let sieht: string[];
+  let origin: ReturnType<typeof Bun.serve>;
+  let p: EgressProxyHandle;
+
+  beforeAll(() => {
+    sieht = [];
+    origin = Bun.serve({
+      port: 0,
+      fetch: (req) => {
+        // Was der Origin an Headern/Ziel sieht — hier darf NIE ein Proxy-Token auftauchen.
+        sieht.push(
+          `${req.method} ${new URL(req.url).pathname} auth=${req.headers.get('proxy-authorization') ?? 'keins'}`,
+        );
+        return new Response('ok');
+      },
+    });
+    p = startEgressProxy({
+      port: 0,
+      verifyToken: () => ({ sandbox: 'test' }),
+      checkTarget: async (host) => ({ ok: true, address: host }),
+    });
+  });
+
+  afterAll(() => {
+    origin.stop(true);
+    p.stop();
+  });
+
+  test('ein zweiter absolute-form-Request auf derselben Verbindung leakt kein Token', async () => {
+    const auth = Buffer.from('mv:geheim').toString('base64');
+    const req = (pfad: string) =>
+      `GET http://127.0.0.1:${origin.port}${pfad} HTTP/1.1\r\n` +
+      `Host: 127.0.0.1:${origin.port}\r\nProxy-Authorization: Basic ${auth}\r\n\r\n`;
+
+    await new Promise<void>((resolve) => {
+      const s = Bun.connect({
+        hostname: '127.0.0.1',
+        port: p.port,
+        socket: {
+          open(sock) {
+            sock.write(req('/erste'));
+            // Zweiten Request verzoegert auf DERSELBEN Verbindung nachschieben.
+            setTimeout(() => sock.write(req('/zweite')), 60);
+          },
+          data() {
+            // Antworten hier nur konsumieren.
+          },
+          close() {
+            resolve();
+          },
+          error() {
+            resolve();
+          },
+        },
+      });
+      void s;
+      setTimeout(() => resolve(), 2000);
+    });
+
+    // Der Origin darf den zweiten Request niemals mit anhaengendem Proxy-Token
+    // gesehen haben. (Der erste ist korrekt umgeschrieben, ohne Token.)
+    expect(sieht.every((z) => z.includes('auth=keins'))).toBe(true);
   });
 });

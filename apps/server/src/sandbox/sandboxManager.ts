@@ -64,14 +64,24 @@ interface SandboxEntry {
   /** Wann zuletzt die Idle-Frist der VM zurückgesetzt wurde (ADR 0003). */
   lastVmTouchAt: number;
   /**
-   * Wer schaut gerade zu (H11). `leaveProject` ist bewusst ownership-frei, damit
-   * Besucher fremde Sandboxes wieder freigeben können (R10) — ohne Refcount
-   * stellte damit aber ein einzelner fremder Aufruf den Grace-Timer scharf und
-   * stoppte die VM des Eigentümers, samt Auto-Commit in dessen Branch. Grace
-   * greift deshalb erst, wenn der LETZTE Betrachter gegangen ist.
+   * Wer schaut gerade zu (H11), Betrachter → letzter Eintritt (für LRU).
+   * `leaveProject` ist bewusst ownership-frei, damit Besucher fremde Sandboxes
+   * wieder freigeben können (R10) — ohne Refcount stellte damit aber ein
+   * einzelner fremder Aufruf den Grace-Timer scharf und stoppte die VM des
+   * Eigentümers. Grace greift deshalb erst, wenn der LETZTE Betrachter gegangen
+   * ist.
+   *
+   * Begrenzt (MAX_VIEWERS): der Schlüssel ist pro Tab und wird pro Seitenladung
+   * neu erzeugt; bei Reload/Crash bleibt der alte für immer stehen, und ein
+   * enterProject in einer Schleife mit zufälligen Schlüsseln liesse das Set
+   * unbegrenzt wachsen. Bei Überschreitung werden die ältesten Einträge
+   * verdrängt — das sind mutmasslich tote Betrachter.
    */
-  viewers: Set<string>;
+  viewers: Map<string, number>;
 }
+
+/** Höchstzahl gleichzeitiger Betrachter pro Projekt (gegen unbegrenztes Wachstum). */
+const MAX_VIEWERS = 64;
 
 /** Mindestabstand zwischen zwei VM-Berührungen (ADR 0003). */
 const DEFAULT_VM_TOUCH_INTERVAL_MS = 60_000;
@@ -111,14 +121,14 @@ export class SandboxManager {
     if (existing && existing.status === 'starting' && existing.startPromise) {
       // Start läuft schon — darauf warten, damit der Agent nicht auf eine noch
       // nicht exec-bereite VM losfeuert ("no agent endpoint found", Race-Fix).
-      existing.viewers.add(viewer);
+      this.addViewer(existing, viewer);
       this.clearGrace(existing);
       await existing.startPromise;
       this.touch(existing);
       return;
     }
     if (existing && existing.status === 'running') {
-      existing.viewers.add(viewer);
+      this.addViewer(existing, viewer);
       this.clearGrace(existing);
       this.touch(existing);
       return;
@@ -134,7 +144,7 @@ export class SandboxManager {
       startPromise: null,
       stopPromise: null,
       lastVmTouchAt: 0,
-      viewers: new Set([viewer]),
+      viewers: new Map([[viewer, Date.now()]]),
     };
     this.entries.set(context.projectId, entry);
     // Status und startPromise SYNCHRON setzen, bevor irgendein await folgt:
@@ -182,6 +192,28 @@ export class SandboxManager {
     if (!entry.viewers.delete(viewer)) return;
     if (entry.viewers.size > 0) return;
     this.armGrace(entry);
+  }
+
+  /**
+   * Betrachter aufnehmen und die Obergrenze durchsetzen. Über MAX_VIEWERS
+   * werden die ältesten Einträge verdrängt (LRU) — bei Reload/Crash ohne
+   * `leave` sind das mutmasslich tote Betrachter, und ein Schleifen-Missbrauch
+   * kann das Set so nicht unbegrenzt aufblähen.
+   */
+  private addViewer(entry: SandboxEntry, viewer: string): void {
+    entry.viewers.set(viewer, Date.now());
+    if (entry.viewers.size <= MAX_VIEWERS) return;
+    // Map bewahrt Einfügereihenfolge; ein erneuter set() aktualisiert den Wert,
+    // rückt den Schlüssel aber NICHT ans Ende — deshalb nach seenAt sortieren.
+    const nachAlter = [...entry.viewers.entries()].sort((a, b) => a[1] - b[1]);
+    for (const [key] of nachAlter.slice(0, entry.viewers.size - MAX_VIEWERS)) {
+      entry.viewers.delete(key);
+    }
+  }
+
+  /** Zahl der aktuell gezählten Betrachter (H11-Refcount). */
+  viewerCount(projectId: string): number {
+    return this.entries.get(projectId)?.viewers.size ?? 0;
   }
 
   /**

@@ -358,6 +358,31 @@ describe('Kontext-Recovery: frischer Start bekommt die Chat-Historie mitgegeben'
     await waitFor(() => !service.isTurnActive(projectId));
     expect(cap.prompt()).toBe('allererster prompt');
   });
+
+  test('viele tool-Zeilen verdrängen die Konversation NICHT aus dem Fenster (#13)', async () => {
+    // Ein tool-lastiger Turn schreibt dutzende tool/system/error-Zeilen. Vorher
+    // holte withHistoryContext die letzten 200 ROHzeilen und filterte danach —
+    // die waren dann fast nur tool-Zeilen, und die Konversation fiel aus dem
+    // Fenster. Der Agent startete gedächtnislos.
+    const cap = capturingRunner();
+    const { service, projectId } = await setup(cap.runner);
+
+    await service.postMessage(projectId, 'user', 'Baue mir einen Shop');
+    await service.postMessage(projectId, 'assistant', 'Warenkorb ist fertig.');
+    // 250 tool-Zeilen dazwischen — mehr als jedes plausible Rohfenster.
+    for (let i = 0; i < 250; i += 1) {
+      await service.postMessage(projectId, 'tool', `edit datei-${i}.ts`);
+    }
+
+    await service.sendMessage(sendInput(projectId, 'weiter'));
+    await waitFor(() => !service.isTurnActive(projectId));
+
+    const p = cap.prompt();
+    // Die Konversation muss trotz der 250 tool-Zeilen im Prompt landen.
+    expect(p).toContain('Baue mir einen Shop');
+    expect(p).toContain('Warenkorb ist fertig');
+    expect(p).toContain('weiter');
+  });
 });
 
 describe('Retry ohne Session-Resume: hängender/korrupter Resume heilt sich selbst', () => {

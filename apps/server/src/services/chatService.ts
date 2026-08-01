@@ -1,4 +1,4 @@
-import { asc, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { DEFAULT_AGENT_MODEL, agentTimeoutsFor, isSlowAgentModel } from '../agent/agentModel';
 import type { AgentEvent } from '../agent/events';
 import type { AgentRunner, TurnHandle } from '../agent/runner';
@@ -17,8 +17,6 @@ export const MAX_MESSAGE_CHARS = 200_000;
  * Sie behält davon 30 (nur user/assistant, ohne den laufenden Turn) — vorher
  * wurde dafür die KOMPLETTE Historie des Projekts geladen.
  */
-const HISTORY_FETCH_LIMIT = 200;
-
 /**
  * Wie lange ein `stopTurn`-Wunsch ohne laufenden Turn auf einen NÄCHSTEN Turn
  * wartet. Deckt die R6-Race ab (Stop-Klick und `sendMessage` desselben Klicks
@@ -192,17 +190,6 @@ export class ChatService {
       .from(chatMessages)
       .where(eq(chatMessages.projectId, projectId))
       .orderBy(sql`rowid`, asc(chatMessages.createdAt));
-  }
-
-  /** Die letzten `limit` Zeilen eines Projekts, in Anzeigereihenfolge. */
-  private async letzteNachrichten(projectId: string, limit: number): Promise<ChatMessageRow[]> {
-    const rows = await this.db
-      .select()
-      .from(chatMessages)
-      .where(eq(chatMessages.projectId, projectId))
-      .orderBy(desc(sql`rowid`))
-      .limit(limit);
-    return rows.reverse();
   }
 
   isTurnActive(projectId: string): boolean {
@@ -577,14 +564,25 @@ export class ChatService {
     currentTurnId: string,
     prompt: string,
   ): Promise<string> {
-    // Bewusst NICHT die ganze Historie laden: davon bleiben ohnehin nur die
-    // letzten 30 Zeilen übrig. Das Fenster ist grosszügig genug, dass nach dem
-    // Filtern (nur user/assistant, ohne den aktuellen Turn) noch 30 Zeilen
-    // zusammenkommen, und trotzdem unabhängig von der Projektgrösse.
-    const rows = await this.letzteNachrichten(projectId, HISTORY_FETCH_LIMIT);
-    const convo = rows.filter(
-      (m) => m.turnId !== currentTurnId && (m.role === 'user' || m.role === 'assistant'),
-    );
+    // Nur user/assistant-Zeilen laden — und das Filtern schon in die DB legen,
+    // NICHT erst danach. Sonst füllt ein tool-lastiger Turn die geholten Zeilen
+    // mit `tool`/`system`/`error` und nach dem Filter bleibt fast nichts (im
+    // schlimmsten Fall nichts) übrig: der Agent startete dann ohne Resume UND
+    // ohne Kontext und beantwortete ein „weiter" gedächtnislos.
+    const convo = (
+      await this.db
+        .select()
+        .from(chatMessages)
+        .where(
+          and(
+            eq(chatMessages.projectId, projectId),
+            ne(chatMessages.turnId, currentTurnId),
+            inArray(chatMessages.role, ['user', 'assistant']),
+          ),
+        )
+        .orderBy(desc(sql`rowid`))
+        .limit(30)
+    ).reverse();
     if (convo.length === 0) return prompt;
     const MAX_CHARS = 8_000;
     let verlauf = convo

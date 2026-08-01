@@ -113,6 +113,16 @@ interface ConnState {
   upstream: Socket | null;
   /** Upstream verbunden UND `pending` vollständig geflusht — direkter Pfad. */
   established: boolean;
+  /**
+   * Nur EIN Request wird durchgereicht (absolute-form, plain HTTP). Anders als
+   * CONNECT ist das kein Tunnel: jeder HTTP-Request bräuchte eigenes Umschreiben
+   * (Proxy-Header strippen, origin-form). Ein zweiter Request auf derselben
+   * keep-alive-Verbindung darf deshalb NICHT roh weitergereicht werden — er käme
+   * in absolute-form mitsamt `Proxy-Authorization: Basic base64(mv:<token>)`
+   * beim Origin an und leakte das VM-Token. Nach dem einen Request wird die
+   * Verbindung stattdessen geschlossen.
+   */
+  einzelRequest: boolean;
   /** Zielprüfung (DNS + Policy) läuft — sie ist asynchron. */
   connecting: boolean;
   /**
@@ -247,6 +257,7 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
           buf: Buffer.alloc(0),
           upstream: null,
           established: false,
+          einzelRequest: false,
           connecting: false,
           pending: Buffer.alloc(0),
         };
@@ -255,6 +266,14 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
         const state = socket.data;
         // Tunnel steht und pending ist leer: Bytes 1:1 durchreichen.
         if (state.established && state.upstream) {
+          // absolute-form ist kein Tunnel: ein zweiter Request auf dieser
+          // Verbindung würde das VM-Token an den Origin leaken. Verbindung
+          // schliessen statt roh weiterzureichen — ein korrekter Client öffnet
+          // dann eine neue, die frisch geparst und umgeschrieben wird.
+          if (state.einzelRequest) {
+            socket.end();
+            return;
+          }
           state.upstream.write(chunk);
           return;
         }
@@ -335,10 +354,16 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
             return;
           }
           const port = url.port ? Number(url.port) : url.protocol === 'https:' ? 443 : 80;
-          const forwarded = headerLines.filter((l) => !/^proxy-/i.test(l));
+          // Proxy-Header UND vorhandene Connection-Header strippen; wir erzwingen
+          // Connection: close, weil die Verbindung nach diesem einen Request
+          // nicht als keep-alive wiederverwendet werden darf (s. einzelRequest).
+          const forwarded = headerLines.filter(
+            (l) => l !== '' && !/^proxy-/i.test(l) && !/^connection:/i.test(l),
+          );
           const newHead =
             `${method} ${url.pathname}${url.search} HTTP/1.1\r\n` +
-            `${forwarded.join('\r\n')}\r\n\r\n`;
+            `${[...forwarded, 'Connection: close'].join('\r\n')}\r\n\r\n`;
+          state.einzelRequest = true;
           state.connecting = true;
           connectChecked(socket, url.hostname, port, (up) => {
             // newHead + rest + pending in Reihenfolge über den Puffer, damit

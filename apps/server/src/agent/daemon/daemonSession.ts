@@ -126,14 +126,12 @@ export class DaemonSession {
     // einem Modellwechsel; bei gleichem Modell landete der Heilungsversuch in
     // genau der haengenden Query, die er heilen sollte.
     if (this.live !== null && params.resumeSessionId === null && this.live.sessionSeen) {
-      this.live.input.end();
-      this.live = null;
+      this.verwerfeLive();
     }
     if (this.live !== null && this.live.model !== params.model) {
       // Modellwechsel: Resume über Modellgrenzen hängt (agentModel.ts) —
       // Query beenden und frisch (ohne resume) starten.
-      this.live.input.end();
-      this.live = null;
+      this.verwerfeLive();
       resumeSessionId = null;
     }
 
@@ -180,6 +178,23 @@ export class DaemonSession {
     this.live.handle.interrupt().catch((error) => {
       // Der Host hat lokal bereits abgebrochen; hier nur Diagnose.
       console.error('Agent-Daemon: interrupt() fehlgeschlagen:', error);
+    });
+  }
+
+  /**
+   * Verwirft die laufende Query. `input.end()` schliesst nur den Eingabestrom;
+   * eine mitten in der Generierung HÄNGENDE Query liefe ohne `interrupt()`
+   * weiter und schriebe — parallel zur neuen Query — in denselben Workspace
+   * (verschränkte Edits, halb angewandter Auto-Commit). Genau deshalb rufen auch
+   * `abandonTurn` und `interrupt` das SDK-`interrupt()`.
+   */
+  private verwerfeLive(): void {
+    if (this.live === null) return;
+    const live = this.live;
+    this.live = null;
+    live.input.end();
+    live.handle.interrupt().catch((error: unknown) => {
+      console.error('Agent-Daemon: interrupt() beim Verwerfen der Query fehlgeschlagen:', error);
     });
   }
 

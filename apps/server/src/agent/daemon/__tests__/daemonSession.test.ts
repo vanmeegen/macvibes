@@ -362,6 +362,10 @@ describe('resumeSessionId: null verlangt einen frischen Start', () => {
     // Zweite Query, bewusst ohne Resume.
     expect(h.queries.length).toBe(2);
     expect(h.queryParams[1]?.resumeSessionId).toBeNull();
+    // Die alte, moeglicherweise haengende Query MUSS interruptet werden — nur
+    // input.end() zu rufen laesst sie weitergenerieren, und zwei Agenten
+    // schrieben dann gleichzeitig in denselben Workspace.
+    expect(h.queries[0]?.interruptCalls).toBe(1);
   });
 
   test('haelt an der Query fest, solange sie noch keine Sitzung hat', async () => {
