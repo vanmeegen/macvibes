@@ -663,3 +663,135 @@ describe('viewerKey: eine Identitaet pro Verbindung, nicht pro Nutzer', () => {
     expect(manager.status('p1')).toBe('stopped');
   });
 });
+
+/**
+ * Die drei Lebenszyklus-Rennen aus dem zweiten Review — allesamt in Fixes des
+ * ERSTEN Reviews eingeschleppt.
+ */
+
+/** Provider, dessen Start an einem Gate haengt, bis man ihn freigibt. */
+function torProvider() {
+  const tore = new Map<string, () => void>();
+  const gestoppt: string[] = [];
+  const provider: SandboxProvider = {
+    async start(context: SandboxContext): Promise<SandboxHandle> {
+      await new Promise<void>((resolve) => tore.set(context.projectId, resolve));
+      return {
+        previewHostPort: 1,
+        previewStatus: () => 'ready' as const,
+        stop: async () => {
+          gestoppt.push(context.projectId);
+        },
+      };
+    },
+  };
+  return {
+    provider,
+    gestoppt,
+    freigeben: (projectId: string) => tore.get(projectId)?.(),
+    warteAufTor: async (projectId: string) => {
+      for (let i = 0; i < 200 && !tore.has(projectId); i += 1) await Bun.sleep(2);
+    },
+  };
+}
+
+describe('SandboxManager-Lebenszyklus: Rennen aus dem zweiten Review', () => {
+  test('#3 zwei parallele enter() bei vollem Limit deadlocken nicht', async () => {
+    // maxSandboxes=1: waehrend A startet, will B einen Platz. Die Eviction darf
+    // die startende A NICHT als Opfer waehlen und in stop() auf deren
+    // startPromise warten — sonst warten A und B im schlimmsten Fall
+    // wechselseitig aufeinander. Der Lauf MUSS in endlicher Zeit terminieren.
+    const t = torProvider();
+    const manager = new SandboxManager({
+      provider: t.provider,
+      graceMs: 10_000,
+      idleMs: 10_000,
+      maxSandboxes: 1,
+    });
+
+    const eintritte = Promise.allSettled([
+      manager.enter(ctx('A'), 'u1'),
+      manager.enter(ctx('B'), 'u2'),
+    ]);
+    await t.warteAufTor('A');
+    t.freigeben('A');
+    t.freigeben('B');
+
+    // Ohne Fix haengt das hier ewig. Mit Fix terminiert es (B ggf. mit
+    // CapacityError, weil der einzige Platz von der startenden A belegt ist).
+    const ergebnisse = await Promise.race([
+      eintritte,
+      Bun.sleep(3000).then(() => 'timeout' as const),
+    ]);
+    expect(ergebnisse).not.toBe('timeout');
+  });
+
+  test('#8 enter() waehrend eines Stopps haengt sich nicht an den sterbenden Start', async () => {
+    // stop() wartet auf das startPromise. Setzt es den Status erst NACH dem
+    // await auf stopping, sieht ein paralleles enter() in diesem Fenster noch
+    // starting und haengt sich an den gerade sterbenden Start — statt auf den
+    // Stopp zu warten und danach frisch zu starten.
+    const t = torProvider();
+    const manager = new SandboxManager({
+      provider: t.provider,
+      graceMs: 10_000,
+      idleMs: 10_000,
+      maxSandboxes: 8,
+    });
+
+    const ersterEintritt = manager.enter(ctx('p1'), 'u1');
+    await t.warteAufTor('p1');
+
+    // Stopp anfordern, waehrend p1 noch startet.
+    const stopp = manager.stop('p1');
+    // Sofort ein zweiter Eintritt — er darf sich NICHT an den sterbenden Start
+    // haengen, sondern muss den Stopp abwarten und neu starten.
+    const zweiterEintritt = manager.enter(ctx('p1'), 'u2');
+
+    // Ersten Start durchlaufen lassen; der Stopp raeumt ihn ab.
+    t.freigeben('p1');
+    await Promise.allSettled([ersterEintritt, stopp]);
+
+    // Jetzt haengt der zweite Eintritt an einem NEUEN Start — freigeben.
+    await t.warteAufTor('p1');
+    t.freigeben('p1');
+    await zweiterEintritt;
+
+    // Der zweite Eintritt sieht eine laufende Sandbox, nicht eine gestoppte.
+    expect(manager.status('p1')).toBe('running');
+    // Und die erste VM wurde wirklich gestoppt.
+    expect(t.gestoppt).toContain('p1');
+  });
+
+  test('#9 forget() verwaist keine VM, die zwischen stop() und forget() neu startet', async () => {
+    const t = torProvider();
+    const manager = new SandboxManager({
+      provider: t.provider,
+      graceMs: 10_000,
+      idleMs: 10_000,
+      maxSandboxes: 8,
+    });
+
+    // p1 laeuft.
+    const start1 = manager.enter(ctx('p1'), 'u1');
+    await t.warteAufTor('p1');
+    t.freigeben('p1');
+    await start1;
+
+    // deleteProject-Reihenfolge: stop(), dann forget(). Dazwischen kommt ein
+    // enter() und startet die VM neu.
+    await manager.stop('p1');
+    const neuerStart = manager.enter(ctx('p1'), 'u2');
+    await t.warteAufTor('p1');
+
+    manager.forget('p1');
+
+    t.freigeben('p1');
+    await neuerStart;
+
+    // forget() darf die neu gestartete VM nicht aus der Buchhaltung werfen —
+    // sonst laeuft sie ohne Handle zum Stoppen weiter.
+    expect(manager.status('p1')).not.toBe('stopped');
+    expect(manager.trackedProjects()).toBe(1);
+  });
+});

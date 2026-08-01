@@ -147,11 +147,20 @@ export class SandboxManager {
         await this.evictLeastActiveIfNeeded(context.projectId);
         entry.handle = await this.options.provider.start(context);
       } catch (error) {
-        this.setStatus(entry, 'stopped');
+        // Nur auf `stopped` schalten, wenn nicht bereits ein Stopp läuft — der
+        // hat den Status schon auf `stopping` gesetzt und räumt selbst auf.
+        if (entry.stopPromise === null) this.setStatus(entry, 'stopped');
         throw error;
       }
-      this.setStatus(entry, 'running');
-      this.touch(entry);
+      // Wurde WÄHREND des Starts ein Stopp angefordert (stopPromise gesetzt),
+      // NICHT auf `running` schalten: der laufende stopWork übernimmt das eben
+      // gesetzte Handle und stoppt es. Sonst stünde der Eintrag kurz auf
+      // `running`, obwohl er gerade stirbt, und ein paralleles enter() träte
+      // einer sterbenden Sandbox bei.
+      if (entry.stopPromise === null) {
+        this.setStatus(entry, 'running');
+        this.touch(entry);
+      }
     })();
     entry.startPromise = startWork;
     try {
@@ -222,36 +231,34 @@ export class SandboxManager {
     if (entry.status === 'stopping' && entry.stopPromise) return entry.stopPromise;
     if (entry.status !== 'running' && entry.status !== 'starting') return;
 
-    // Läuft noch ein START, muss der ZUERST fertig werden. Sonst stoppt dieser
-    // Aufruf nichts (entry.handle ist während des Starts null), meldet aber
-    // Erfolg — und der Start setzt danach das Handle und schaltet zurück auf
-    // `running`. Aufrufer, die einem aufgelösten stop() glauben, lägen falsch:
-    // stopAll() liesse eine VM zurück, und deleteProject löschte das
-    // Projektvolume unter einer gerade hochkommenden VM weg.
-    if (entry.status === 'starting' && entry.startPromise) {
-      try {
-        await entry.startPromise;
-      } catch {
-        // Ein gescheiterter Start hinterlässt nichts zu stoppen. Der Fehler
-        // gehört dem enter()-Aufrufer, der ihn ohnehin bekommt — hier wäre er
-        // nur das Echo eines fremden Problems.
-      }
-      // Nach dem Warten kann sich der Zustand geändert haben. Bewusst über eine
-      // FRISCHE Referenz aus der Map: TypeScript hält `entry.status` sonst
-      // weiter auf 'starting' verengt — über ein await hinweg gilt das nicht.
-      const aktuell = this.entries.get(projectId);
-      if (aktuell === undefined || aktuell !== entry) return;
-      if (aktuell.status === 'stopping' && aktuell.stopPromise) return aktuell.stopPromise;
-      // Start gescheitert → Status ist bereits `stopped`, es gibt nichts zu tun.
-      if (aktuell.status !== 'running') return;
-    }
-
+    // Status und stopPromise SYNCHRON setzen, BEVOR irgendein await folgt —
+    // auch bevor auf einen laufenden Start gewartet wird. Sonst sieht ein
+    // paralleles enter() den Eintrag in diesem Fenster noch als `starting` und
+    // hängt sich an den gerade sterbenden Start, statt auf den Stopp zu warten.
+    const startPromise = entry.startPromise;
     this.clearGrace(entry);
     this.clearIdle(entry);
     this.setStatus(entry, 'stopping');
 
     const stopWork = (async () => {
-      if (this.options.onBeforeStop) {
+      // Läuft noch ein START, muss der ZUERST fertig werden. Sonst stoppt dieser
+      // Aufruf nichts (entry.handle ist während des Starts null) — und der Start
+      // setzte danach das Handle. Der Start schaltet den Eintrag nicht mehr auf
+      // `running`, weil stopPromise bereits gesetzt ist; er übergibt uns nur das
+      // Handle.
+      if (startPromise) {
+        try {
+          await startPromise;
+        } catch {
+          // Ein gescheiterter Start hinterlässt nichts zu stoppen. Der Fehler
+          // gehört dem enter()-Aufrufer, der ihn ohnehin bekommt.
+        }
+      }
+
+      // onBeforeStop (Auto-Commit) nur, wenn wirklich eine VM läuft: ein
+      // gescheiterter Start hinterlässt kein Handle, dann gibt es nichts zu
+      // committen.
+      if (this.options.onBeforeStop && entry.handle) {
         try {
           await this.options.onBeforeStop(projectId);
         } catch (error) {
@@ -290,6 +297,22 @@ export class SandboxManager {
   forget(projectId: string): void {
     const entry = this.entries.get(projectId);
     if (entry === undefined) return;
+    // Ist die Sandbox nicht (mehr) gestoppt, ist zwischen dem stop() des
+    // Aufrufers und diesem forget() ein enter() dazwischengekommen und hat sie
+    // neu gestartet (Randfall: gelöschtes Projekt, gleichzeitiger Zugriff). Den
+    // Eintrag NICHT löschen — sonst liefe die MicroVM ohne Handle zum Stoppen
+    // weiter. Stattdessen erneut stoppen; der Eintrag bleibt so lange in der
+    // Buchhaltung, bis dieser Stopp ihn auf `stopped` gesetzt hat.
+    if (entry.status !== 'stopped') {
+      console.warn(
+        `forget(${projectId}): Sandbox ist ${entry.status} — erneut stoppen statt vergessen ` +
+          '(gleichzeitiger enter auf ein gelöschtes Projekt?).',
+      );
+      void this.stop(projectId).catch((error: unknown) => {
+        console.error(`Nachträglicher Stopp für ${projectId} schlug fehl:`, error);
+      });
+      return;
+    }
     this.clearGrace(entry);
     this.clearIdle(entry);
     entry.viewers.clear();
@@ -370,8 +393,16 @@ export class SandboxManager {
       // Projekten füllen und dabei laufende Turns anderer abbrechen.
       // Ownership selbst bleibt außen vor — sonst blockiert ein Einzelner
       // die gesamte Kapazität.
+      // Nur LAUFENDE Sandboxes kommen als Opfer infrage, nie startende. Eine
+      // gerade startende zu stoppen hiesse, in stop() auf ihr startPromise zu
+      // warten — und da die Eviction SELBST aus einem laufenden Start heraus
+      // aufgerufen wird, können sich zwei parallele enter() darüber
+      // wechselseitig blockieren (Deadlock). Startende zählen weiter zur
+      // Kapazität (active()), damit nicht zu viele VMs gleichzeitig hochkommen;
+      // sind die überzähligen Plätze aber alle noch am Starten, wird gewartet
+      // (CapacityError) statt einen Start abzuwürgen.
       const candidates = active().filter(
-        (e) => this.options.isBusy?.(e.context.projectId) !== true,
+        (e) => e.status === 'running' && this.options.isBusy?.(e.context.projectId) !== true,
       );
       if (candidates.length === 0) {
         throw new SandboxCapacityError(
