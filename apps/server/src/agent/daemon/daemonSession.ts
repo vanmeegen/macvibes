@@ -81,6 +81,13 @@ interface LiveQuery {
   handle: QueryHandle;
   model: string;
   input: PushIterable<SdkUserMessage>;
+  /**
+   * Hat diese Query schon eine Claude-Sitzung gemeldet? Entscheidet, ob ein
+   * `resumeSessionId: null` des Hosts einen frischen Start verlangt (dann ja)
+   * oder nur heisst „ich kenne noch keine Sitzung" (dann nein) — sonst risse
+   * jeder Turn vor der ersten Sitzungsmeldung die Query ab.
+   */
+  sessionSeen: boolean;
 }
 
 /**
@@ -108,6 +115,16 @@ export class DaemonSession {
     }
 
     let resumeSessionId = params.resumeSessionId;
+    // `resumeSessionId: null` heisst laut Protokoll „frischer Start" — die
+    // Recovery-Politik liegt beim Host. chatService verlaesst sich darauf: nach
+    // einem Haenger startet der zweite Versuch bewusst OHNE Resume, um eine
+    // korrupte Sitzung zu heilen. Bisher verwarf der Daemon `live` nur bei
+    // einem Modellwechsel; bei gleichem Modell landete der Heilungsversuch in
+    // genau der haengenden Query, die er heilen sollte.
+    if (this.live !== null && params.resumeSessionId === null && this.live.sessionSeen) {
+      this.live.input.end();
+      this.live = null;
+    }
     if (this.live !== null && this.live.model !== params.model) {
       // Modellwechsel: Resume über Modellgrenzen hängt (agentModel.ts) —
       // Query beenden und frisch (ohne resume) starten.
@@ -129,6 +146,30 @@ export class DaemonSession {
     });
   }
 
+  /**
+   * Die Verbindung zum Host ist weg — den laufenden Turn aufgeben.
+   *
+   * Der Host synthetisiert bei einem Abriss selbst `turn-aborted` und beendet
+   * den Turn; der Daemon erfuhr davon bisher nichts. Seine Query lief weiter
+   * und `currentTurnId` blieb gesetzt, sodass die Notwehr-Sperre in `startTurn`
+   * ab da JEDEN Folge-Turn abwies („es läuft bereits ein Turn") — bis die
+   * verwaiste Query zufällig von selbst endete.
+   *
+   * Die SDK-Query bleibt bewusst am Leben: sie trägt den Sitzungskontext, und
+   * der nächste Turn soll nahtlos darauf aufsetzen. Abgebrochen wird nur die
+   * gerade laufende Arbeit — sonst generierte das SDK eine Antwort weiter, die
+   * niemand mehr entgegennimmt, und der nächste Prompt liefe hinein.
+   */
+  abandonTurn(): void {
+    if (this.currentTurnId === null) return;
+    this.currentTurnId = null;
+    if (this.live === null) return;
+    this.interrupted = true;
+    this.live.handle.interrupt().catch((error: unknown) => {
+      console.error('Agent-Daemon: interrupt() nach Verbindungsabbruch fehlgeschlagen:', error);
+    });
+  }
+
   interrupt(turnId: string): void {
     if (this.currentTurnId !== turnId || this.live === null) return;
     this.interrupted = true;
@@ -146,7 +187,7 @@ export class DaemonSession {
       model,
       resumeSessionId,
     });
-    const live: LiveQuery = { handle, model, input };
+    const live: LiveQuery = { handle, model, input, sessionSeen: false };
     void this.consume(live);
     return live;
   }
@@ -173,6 +214,7 @@ export class DaemonSession {
       // Nach einem Interrupt ist der error-result des SDK erwartet — kein
       // echter Fehler, den der Nutzer sehen müsste.
       if (this.interrupted && event.type === 'error') continue;
+      if (event.type === 'session' && this.live !== null) this.live.sessionSeen = true;
       this.emitEvent(turnId, event);
       if (event.type === 'turn-completed' || event.type === 'turn-aborted') {
         this.currentTurnId = null;

@@ -192,6 +192,10 @@ function connect(attempt = 0): void {
   ws.addEventListener('close', () => {
     if (pingTimer !== null) clearInterval(pingTimer);
     if (socket === ws) socket = null;
+    // Der Host hat den Turn bei einem Abriss seinerseits abgebrochen. Ohne
+    // diesen Aufruf bliebe currentTurnId hier gesetzt und die Notwehr-Sperre
+    // in startTurn wiese ab da JEDEN Folge-Turn ab.
+    session.abandonTurn();
     const delayMs = Math.min(10_000, 500 * 2 ** Math.min(attempt, 4));
     console.error(`Agent-Daemon: Gateway-Verbindung weg — Reconnect in ${delayMs}ms`);
     setTimeout(() => connect(attempt + 1), delayMs);

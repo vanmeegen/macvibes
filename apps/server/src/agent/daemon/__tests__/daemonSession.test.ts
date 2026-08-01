@@ -267,3 +267,123 @@ describe('DaemonSession', () => {
     expect(h.queries[0]!.interruptCalls).toBe(0);
   });
 });
+
+/**
+ * Reisst die WebSocket zum Host mitten im Turn ab (msb-NAT verschluckt
+ * FIN/RST), synthetisiert der Host `turn-aborted` und beendet den Turn. Der
+ * Daemon erfuhr davon NICHTS: seine SDK-Query lief weiter, currentTurnId blieb
+ * gesetzt. Beim naechsten start-turn griff die Notwehr-Sperre und wies jeden
+ * Folge-Turn ab — „Turn abgewiesen — es laeuft bereits ein Turn." Der Nutzer
+ * kam nicht mehr weiter, bis die verwaiste Query zufaellig von selbst endete.
+ */
+describe('Verbindungsabbruch mitten im Turn', () => {
+  test('abandonTurn gibt den Turn frei und laesst den naechsten wieder zu', async () => {
+    const h = makeHarness();
+    h.session.startTurn(START);
+    await tick();
+
+    // Host weg — der Daemon merkt das nur ueber den close-Handler.
+    h.session.abandonTurn();
+    await tick();
+
+    h.session.startTurn({ ...START, turnId: 't-2' });
+    await tick();
+
+    const zweiter = eventsFor(h.emitted, 't-2');
+    expect(zweiter.find((e) => e.type === 'error')).toBeUndefined();
+    expect(zweiter.find((e) => e.type === 'turn-aborted')).toBeUndefined();
+  });
+
+  test('bricht die laufende SDK-Arbeit ab, statt sie weiterlaufen zu lassen', async () => {
+    const h = makeHarness();
+    h.session.startTurn(START);
+    await tick();
+
+    h.session.abandonTurn();
+    await tick();
+
+    // Ohne interrupt generierte das SDK weiter — Tokens fuer eine Antwort, die
+    // niemand mehr entgegennimmt, und der naechste Prompt liefe hinein.
+    expect(h.queries[0]?.interruptCalls).toBe(1);
+  });
+
+  test('ist folgenlos, wenn gerade kein Turn laeuft', () => {
+    const h = makeHarness();
+    expect(() => h.session.abandonTurn()).not.toThrow();
+    expect(h.queries.length).toBe(0);
+  });
+
+  test('die SDK-Query bleibt am Leben — der naechste Turn resumt nahtlos', async () => {
+    const h = makeHarness();
+    h.session.startTurn(START);
+    await tick();
+    h.session.abandonTurn();
+    await tick();
+
+    h.session.startTurn({ ...START, turnId: 't-2' });
+    await tick();
+
+    // KEINE zweite Query: der Abbruch betrifft den Turn, nicht die Sitzung.
+    expect(h.queries.length).toBe(1);
+  });
+});
+
+/**
+ * `resumeSessionId: null` heisst laut protocol.ts „frischer Start (die
+ * Recovery-Politik liegt beim Host)". chatService verlaesst sich darauf: nach
+ * einem Haenger startet der zweite Versuch bewusst OHNE Resume und stellt dem
+ * Prompt die Historie voran, um eine korrupte Sitzung zu heilen.
+ *
+ * Der Daemon verwarf `this.live` aber NUR bei einem Modellwechsel. Bei gleichem
+ * Modell landete der Heilungsversuch in genau der haengenden Query, die er
+ * heilen sollte — der Nutzer sah bei jedem Versuch dasselbe Timeout.
+ */
+describe('resumeSessionId: null verlangt einen frischen Start', () => {
+  test('verwirft eine Query, die bereits eine Sitzung hat', async () => {
+    const h = makeHarness();
+    h.session.startTurn({ ...START, resumeSessionId: 'sess-a' });
+    await tick();
+    // Sitzung etabliert (das SDK meldet sie ueber ein system/init-Message).
+    h.queries[0]?.push({ type: 'system', subtype: 'init', session_id: 'sess-a' });
+    await tick();
+    h.queries[0]?.push({ type: 'result', subtype: 'success', session_id: 'sess-a' });
+    await tick();
+
+    h.session.startTurn({ ...START, turnId: 't-2', resumeSessionId: null });
+    await tick();
+
+    // Zweite Query, bewusst ohne Resume.
+    expect(h.queries.length).toBe(2);
+    expect(h.queryParams[1]?.resumeSessionId).toBeNull();
+  });
+
+  test('haelt an der Query fest, solange sie noch keine Sitzung hat', async () => {
+    // Sonst risse jeder Turn vor der ersten Sitzungsmeldung die Query ab und
+    // der langlebige Streaming-Input waere wertlos.
+    const h = makeHarness();
+    h.session.startTurn({ ...START, resumeSessionId: null });
+    await tick();
+    h.queries[0]?.push({ type: 'result', subtype: 'success', session_id: null });
+    await tick();
+
+    h.session.startTurn({ ...START, turnId: 't-2', resumeSessionId: null });
+    await tick();
+
+    expect(h.queries.length).toBe(1);
+  });
+
+  test('ein nicht-null resumeSessionId laesst die laufende Query unberuehrt', async () => {
+    const h = makeHarness();
+    h.session.startTurn({ ...START, resumeSessionId: 'sess-a' });
+    await tick();
+    h.queries[0]?.push({ type: 'system', subtype: 'init', session_id: 'sess-a' });
+    await tick();
+    h.queries[0]?.push({ type: 'result', subtype: 'success', session_id: 'sess-a' });
+    await tick();
+
+    h.session.startTurn({ ...START, turnId: 't-2', resumeSessionId: 'sess-a' });
+    await tick();
+
+    expect(h.queries.length).toBe(1);
+  });
+});
