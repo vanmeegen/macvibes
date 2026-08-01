@@ -68,6 +68,30 @@ async function setup(
   return { db, service, projectId, turnEnds, activity };
 }
 
+/** Wie `setup`, aber mit frei gesetzten ChatService-Optionen (z. B. Fenster). */
+async function setupChat(
+  runner: AgentRunner,
+  options: { stopNextWindowMs?: number } = {},
+): Promise<TestSetup> {
+  const db = createTestDb();
+  const owner = await createUser(db, 'marco');
+  const projectId = await createProjectRow(db, owner);
+  const turnEnds: string[] = [];
+  const activity: string[] = [];
+  const service = new ChatService(
+    db,
+    runner,
+    {
+      onAgentActivity: (id) => activity.push(id),
+      onTurnEnd: async (_id, prompt) => {
+        turnEnds.push(prompt);
+      },
+    },
+    options,
+  );
+  return { db, service, projectId, turnEnds, activity };
+}
+
 function sendInput(projectId: string, text: string) {
   return { projectId, workspaceDir: '/tmp/fake-workspace', resumeSessionId: null, text };
 }
@@ -936,15 +960,18 @@ describe('Abbruch ist kein Flake — kein stiller zweiter Durchlauf', () => {
     expect(messages.find((m) => m.role === 'system')?.content).toContain('abgebrochen');
   });
 
-  test('ein Stop ohne laufenden Turn bricht nicht den nächsten ab', async () => {
+  test('ein Stop, dem KEIN Turn im Fenster folgt, bricht einen späteren nicht ab', async () => {
     // stopTurn merkt den Abbruch vor, wenn noch kein Handle steht. Lief aber gar
-    // nichts (Doppelklick, veralteter turnActive-Stand im Client), blieb das
-    // Flag liegen: Minuten später wurde der nächste, völlig unbeteiligte Turn
-    // sofort abgebrochen und lief nur dank Retry überhaupt durch.
+    // nichts (Doppelklick, veralteter turnActive-Stand im Client) und folgt auch
+    // keine Nachricht im Fenster, muss der Wunsch verfallen — sonst wird der
+    // nächste, völlig unbeteiligte Turn abgebrochen. Fenster hier winzig (10 ms).
     const starts: string[] = [];
-    const { service, projectId } = await setup(abbrechbarerRunner(starts));
+    const { service, projectId } = await setupChat(abbrechbarerRunner(starts), {
+      stopNextWindowMs: 10,
+    });
 
     service.stopTurn(projectId); // nichts läuft, nichts in der Queue
+    await Bun.sleep(40); // Fenster verstreichen lassen
 
     await service.sendMessage(sendInput(projectId, 'ganz normaler Prompt'));
     await waitFor(() => !service.isTurnActive(projectId), 15_000);
@@ -952,6 +979,44 @@ describe('Abbruch ist kein Flake — kein stiller zweiter Durchlauf', () => {
     expect(starts).toEqual(['ganz normaler Prompt']);
     const messages = await service.listMessages(projectId);
     expect(messages.find((m) => m.content.includes('zweiter Versuch'))).toBeUndefined();
+    expect(messages.find((m) => m.role === 'system')?.content).toBeUndefined();
+  });
+
+  test('#5 ein Stop VOR der Nachricht (R6-Race) bricht sie trotzdem ab', async () => {
+    // Die UI zeigt den Stop-Button optimistisch; über HTTP/2 kann stopTurn vor
+    // sendMessage abgearbeitet werden. Vorher verpuffte der Stop dann und der
+    // Agent führte den gestoppten Prompt vollständig aus.
+    const starts: string[] = [];
+    const { service, projectId, turnEnds } = await setupChat(abbrechbarerRunner(starts, 10_000), {
+      stopNextWindowMs: 5_000,
+    });
+
+    service.stopTurn(projectId); // Stop kommt ZUERST an
+    await service.sendMessage(sendInput(projectId, 'bitte doch stoppen'));
+
+    await waitFor(() => !service.isTurnActive(projectId), 15_000);
+
+    // Der Turn wurde gestartet, aber sofort abgebrochen — nicht ausgeführt.
+    expect(starts).toEqual(['bitte doch stoppen']);
+    expect(turnEnds).toEqual([]); // kein onTurnEnd -> kein Auto-Commit
+    const messages = await service.listMessages(projectId);
+    expect(messages.find((m) => m.role === 'system')?.content).toContain('abgebrochen');
+  });
+
+  test('#6 eine Steering-Nachricht ohne laufenden Turn geht NICHT verloren', async () => {
+    // sendMessage(interrupt) kam an, als der vorherige Turn gerade geendet hatte
+    // (currentHandle bereits null). Vorher setzte das den Abbruchwunsch, den die
+    // eigene neue Nachricht dann einlöste -> die Nachricht wurde nie bearbeitet,
+    // im Chat stand nur „Turn abgebrochen".
+    const starts: string[] = [];
+    const { service, projectId } = await setupChat(abbrechbarerRunner(starts));
+
+    // Kein laufender Turn. Eine Steering-Nachricht schicken.
+    await service.sendMessage({ ...sendInput(projectId, 'neue Richtung'), interrupt: true });
+    await waitFor(() => !service.isTurnActive(projectId), 15_000);
+
+    // Die Nachricht wird bearbeitet (Runner sieht sie), nicht abgebrochen.
+    expect(starts).toEqual(['neue Richtung']);
   });
 });
 

@@ -19,6 +19,15 @@ export const MAX_MESSAGE_CHARS = 200_000;
  */
 const HISTORY_FETCH_LIMIT = 200;
 
+/**
+ * Wie lange ein `stopTurn`-Wunsch ohne laufenden Turn auf einen NÄCHSTEN Turn
+ * wartet. Deckt die R6-Race ab (Stop-Klick und `sendMessage` desselben Klicks
+ * kommen über HTTP/2 in vertauschter Reihenfolge an — Millisekunden), verfällt
+ * aber schnell genug, dass ein Stop, dem gar kein Turn folgt, keinen viel
+ * späteren, fremden Turn abbricht.
+ */
+const DEFAULT_STOP_NEXT_WINDOW_MS = 5_000;
+
 export interface ChatEventPayload {
   message: ChatMessageRow;
   /** Läuft für dieses Projekt gerade (oder gleich, Queue) ein Agent-Turn? */
@@ -59,16 +68,18 @@ interface ProjectChatState {
    */
   currentHandle: TurnHandle | null;
   /**
-   * Stop/Interrupt kam an, BEVOR runAttempt den Handle gesetzt hat (Race: die UI
-   * zeigt den Stop-Button optimistisch, oft bevor `sendMessage` überhaupt beim
-   * Server ankommt). Ohne dieses Flag liefe `state.currentHandle?.abort()` ins
-   * Leere und der Turn liefe unbemerkt komplett durch.
+   * Ein Abbruchwunsch, der ankam, BEVOR ein Handle stand — z. B. weil die UI
+   * den Stop-Button optimistisch zeigt (oft bevor `sendMessage` überhaupt beim
+   * Server ankommt), oder weil ein Interrupt einen gerade erst startenden Turn
+   * treffen will. Ohne diesen Merker liefe `currentHandle?.abort()` ins Leere.
+   * runAttempt löst ihn beim Handle-Setzen ein (als Nutzerabbruch → kein Retry).
    *
-   * Wird beim Einlösen wie ein `abort()` auf dem umhüllten Handle behandelt —
-   * also ebenfalls als Nutzerabbruch. Gesetzt wird es nur, wenn tatsächlich
-   * etwas unterwegs ist (s. `stopTurn`), und beim Leerlaufen der Pump geräumt.
+   * `ausnahmeTurnId` nimmt genau EINEN Turn aus: bei `sendMessage(interrupt)`
+   * die eigene NEUE Nachricht — der Interrupt soll Laufendes abbrechen, nie sich
+   * selbst. `verfaelltAt` begrenzt einen `stopTurn`-Wunsch zeitlich, damit ein
+   * Stop, dem kein Turn folgt, nicht Minuten später einen fremden trifft.
    */
-  abortRequested: boolean;
+  abortRequested: { ausnahmeTurnId: string | null; verfaelltAt: number | null } | null;
   subscribers: Set<(payload: ChatEventPayload) => void>;
 }
 
@@ -95,6 +106,8 @@ export interface ChatServiceOptions {
   agentWarmupTimeoutMs?: number | undefined;
   /** Nachlauf nach dem Abbruch, um einen späten Fehlertext (stderr) einzusammeln. */
   agentAbortGraceMs?: number | undefined;
+  /** Fenster, in dem ein stopTurn ohne laufenden Turn den nächsten noch trifft. */
+  stopNextWindowMs?: number | undefined;
   /**
    * Timeout-Varianten für LANGSAME (lokale) Modelle — die denken vor dem ersten
    * sichtbaren Token deutlich länger. Welche Variante greift, entscheidet das
@@ -121,6 +134,7 @@ export class ChatService {
   /** Frist für den stillen Config-Warmup — er blockiert sonst den echten Turn. */
   private readonly warmupTimeoutMs: number;
   private readonly abortGraceMs: number;
+  private readonly stopNextWindowMs: number;
   private readonly slowIdleTimeoutMs: number;
   private readonly slowFirstEventTimeoutMs: number;
   private readonly slowColdStartTimeoutMs: number;
@@ -143,6 +157,7 @@ export class ChatService {
       this.idleTimeoutMs,
     );
     this.abortGraceMs = options.agentAbortGraceMs ?? 5_000;
+    this.stopNextWindowMs = options.stopNextWindowMs ?? DEFAULT_STOP_NEXT_WINDOW_MS;
     this.slowIdleTimeoutMs = options.agentSlowIdleTimeoutMs ?? 600_000;
     this.warmupTimeoutMs = options.agentWarmupTimeoutMs ?? 60_000;
     this.slowFirstEventTimeoutMs = Math.min(
@@ -163,7 +178,7 @@ export class ChatService {
         queue: [],
         pumpRunning: false,
         currentHandle: null,
-        abortRequested: false,
+        abortRequested: null,
         subscribers: new Set(),
       };
       this.states.set(projectId, state);
@@ -297,9 +312,9 @@ export class ChatService {
    *   msb-Flakes da; ein vom Nutzer veranlasster Abbruch ist keiner (s.
    *   `runTurn`).
    *
-   * Anders als `stopTurn` prüft der Abbruchwunsch hier NICHT, ob überhaupt
-   * etwas unterwegs ist: direkt darüber wurde ein Turn in die Queue gelegt, es
-   * ist also per Konstruktion etwas unterwegs.
+   * Ein `interrupt` bricht Laufendes ab, darf aber NIE die eigene neue
+   * Nachricht treffen — deshalb nimmt der vorgemerkte Wunsch sie per
+   * `ausnahmeTurnId` aus.
    */
   async sendMessage(input: SendMessageInput): Promise<void> {
     const state = this.state(input.projectId);
@@ -307,14 +322,19 @@ export class ChatService {
     state.queue.push({ turnId, prompt: input.text, workspaceDir: input.workspaceDir });
     await this.insertMessage(input.projectId, turnId, 'user', input.text);
     // Mid-Turn-Steering (Phase C): laufenden Turn abbrechen, damit die Pump
-    // sofort zur neuen Nachricht springt. Die Queue bleibt erhalten. Existiert
-    // der Handle noch nicht (Race: der VORHERIGE Turn hat gerade erst gestartet),
-    // merkt abortRequested das für runAttempt vor — sonst liefe der Abbruch ins Leere.
+    // sofort zur neuen Nachricht springt. Die Queue bleibt erhalten.
     if (input.interrupt === true) {
       if (state.currentHandle) {
         state.currentHandle.abort();
       } else {
-        state.abortRequested = true;
+        // Kein Handle: entweder startet der VORHERIGE Turn gerade (Race, Handle
+        // noch nicht gesetzt) → ihn abbrechen; oder es läuft nichts (der vorige
+        // ist eben durch) → die NEUE Nachricht soll normal bearbeitet werden.
+        // Beide deckt ein Wunsch ab, der die eigene neue turnId ausnimmt: er
+        // trifft den startenden vorigen Turn, aber niemals diese Nachricht (deren
+        // runAttempt räumt ihn dann folgenlos ab). Ohne Verfall — die Ausnahme
+        // schützt bereits vor einem Fehltreffer.
+        state.abortRequested = { ausnahmeTurnId: turnId, verfaelltAt: null };
       }
     }
     // Kein floating void (F18): ohne Rejection-Handler beendet ein Fehler in
@@ -354,19 +374,20 @@ export class ChatService {
    */
   stopTurn(projectId: string): void {
     const state = this.state(projectId);
-    // Ist überhaupt etwas unterwegs? Nur dann darf ein Abbruch vorgemerkt
-    // werden. Sonst blieb das Flag nach einem Stop ins Leere liegen (Doppelklick,
-    // veralteter turnActive-Stand im Client) und brach Minuten später den
-    // nächsten, völlig unbeteiligten Turn ab.
-    const etwasUnterwegs = state.queue.length > 0 || state.pumpRunning;
     state.queue.length = 0;
     if (state.currentHandle) {
       state.currentHandle.abort();
       return;
     }
-    if (etwasUnterwegs) {
-      state.abortRequested = true;
-    }
+    // Kein Handle: der laufende Turn startet evtl. gerade (Handle noch nicht
+    // gesetzt), ODER der Nutzer stoppt eine gleich kommende Nachricht (R6 —
+    // Stop-Klick und sendMessage desselben Klicks, über HTTP/2 vertauscht).
+    // Beides deckt ein Wunsch für den nächsten Turn ab, mit Zeitfenster: folgt
+    // gar kein Turn, verfällt er, statt später einen fremden abzubrechen.
+    state.abortRequested = {
+      ausnahmeTurnId: null,
+      verfaelltAt: Date.now() + this.stopNextWindowMs,
+    };
   }
 
   /**
@@ -433,7 +454,13 @@ export class ChatService {
   }
 
   private publish(projectId: string, message: ChatMessageRow, turnActive: boolean): void {
-    for (const subscriber of this.state(projectId).subscribers) {
+    // Bewusst states.get statt state(): ein noch auslaufender Turn eines
+    // GELÖSCHTEN Projekts (forget() hat den State entfernt) darf hier keinen
+    // frischen, leeren State neu anlegen — sonst kehrt das gerade behobene Leck
+    // zurück. Ohne State gibt es keine Subscriber, an die zu senden wäre.
+    const state = this.states.get(projectId);
+    if (!state) return;
+    for (const subscriber of state.subscribers) {
       subscriber({ message, turnActive });
     }
   }
@@ -476,9 +503,10 @@ export class ChatService {
       }
     } finally {
       state.pumpRunning = false;
-      // Sicherheitsnetz: ein Abbruchwunsch, der keinen Turn mehr gefunden hat,
-      // darf nicht auf den nächsten überspringen.
-      state.abortRequested = false;
+      // Kein Abbruchwunsch darf die Pump überleben und einen später gestarteten
+      // Turn treffen: läuft die Pump leer, ist alles verarbeitet und ein noch
+      // offener Wunsch gehört zu keinem laufenden Turn mehr.
+      state.abortRequested = null;
     }
   }
 
@@ -679,10 +707,18 @@ export class ChatService {
     // umhüllte Handle.
     state.currentHandle = handle;
     // Abbruch nachholen, falls Stop/Interrupt schon VOR diesem Zeitpunkt kam
-    // (Race: s. ProjectChatState.abortRequested).
-    if (state.abortRequested) {
-      state.abortRequested = false;
-      handle.abort();
+    // (Race: s. ProjectChatState.abortRequested). Der Wunsch wird IMMER geräumt
+    // — eingelöst oder verworfen —, damit er nicht auf einen späteren Turn
+    // überspringt. Nicht eingelöst wird er, wenn er verfallen ist (stopTurn ohne
+    // folgenden Turn) oder wenn er genau diese turnId ausnimmt (die eigene neue
+    // Nachricht eines Interrupts).
+    const wunsch = state.abortRequested;
+    if (wunsch !== null) {
+      state.abortRequested = null;
+      const verfallen = wunsch.verfaelltAt !== null && Date.now() >= wunsch.verfaelltAt;
+      if (!verfallen && wunsch.ausnahmeTurnId !== turn.turnId) {
+        handle.abort();
+      }
     }
 
     let assistantRow: ChatMessageRow | null = null;
