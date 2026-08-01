@@ -12,6 +12,22 @@ export interface TurnOptions {
 
 export interface TurnHandle {
   events: AsyncIterable<AgentEvent>;
+  /**
+   * Bricht den laufenden Turn ab. Zusagen jeder Implementierung:
+   *
+   * - Der Event-Strom endet danach mit `turn-aborted`. Ohne dieses Ereignis
+   *   wartet der Aufrufer bis in seinen Watchdog-Timeout.
+   * - Die Claude-Sitzung bleibt INTAKT: abgebrochen wird der Turn, nicht der
+   *   Agent. Ein Prozess-Kill hinterliesse eine korrupte Sitzung, die jeder
+   *   folgende `--resume` wieder aufgreift (chatproblems.md #13) — deshalb ist
+   *   der Produktivpfad ein SDK-`interrupt()`.
+   * - Mehrfachaufruf und Aufruf nach Turn-Ende sind folgenlos.
+   *
+   * ⚠️ Wer `abort()` aufruft, entscheidet damit AUCH über den Retry — siehe
+   * `ChatService.runAttempt`: dort liegt hinter `state.currentHandle` ein
+   * umhülltes Handle, dessen `abort()` den Turn als Nutzerabbruch markiert und
+   * damit endgültig beendet.
+   */
   abort(): void;
 }
 

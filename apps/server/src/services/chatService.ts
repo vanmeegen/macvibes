@@ -50,12 +50,23 @@ interface QueuedTurn {
 interface ProjectChatState {
   queue: QueuedTurn[];
   pumpRunning: boolean;
+  /**
+   * Handle des laufenden Turns — das UMHÜLLTE aus `runAttempt`, nicht das des
+   * Runners. Sein `abort()` markiert den Turn als Nutzerabbruch und beendet ihn
+   * damit endgültig (kein Retry). Genau dafür liegt hier der Wrapper: der
+   * Watchdog in `runAttempt` hat das rohe Handle und bricht ohne diese Wirkung
+   * ab.
+   */
   currentHandle: TurnHandle | null;
   /**
    * Stop/Interrupt kam an, BEVOR runAttempt den Handle gesetzt hat (Race: die UI
    * zeigt den Stop-Button optimistisch, oft bevor `sendMessage` überhaupt beim
    * Server ankommt). Ohne dieses Flag liefe `state.currentHandle?.abort()` ins
    * Leere und der Turn liefe unbemerkt komplett durch.
+   *
+   * Wird beim Einlösen wie ein `abort()` auf dem umhüllten Handle behandelt —
+   * also ebenfalls als Nutzerabbruch. Gesetzt wird es nur, wenn tatsächlich
+   * etwas unterwegs ist (s. `stopTurn`), und beim Leerlaufen der Pump geräumt.
    */
   abortRequested: boolean;
   subscribers: Set<(payload: ChatEventPayload) => void>;
@@ -192,6 +203,17 @@ export class ChatService {
    * trägt der ERSTE echte Turn den ganzen claude-First-Run (~9s auf dem
    * gemounteten Volume) — mit Warmup ist er danach schnell. No-Op, wenn schon
    * ein Warmup läuft oder das Projekt bereits eine Session hat (Config warm).
+   *
+   * **Wirft nie.** Der Aufrufer (GraphQL-Resolver) startet den Warmup
+   * fire-and-forget; eine Rejection hätte dort keinen Handler und beendete den
+   * ganzen Serverprozess — eine SQLITE_BUSY beim Öffnen EINES Projekts risse
+   * damit alle anderen Sitzungen und alle laufenden MicroVMs mit. Der Warmup
+   * ist reine Beschleunigung: scheitert er, geht es ohne ihn weiter.
+   *
+   * Der Eintrag in `warmups` wird nach dem Lauf wieder entfernt. Er verhindert
+   * nur einen ZWEITEN gleichzeitigen Warmup — bliebe er liegen, wäre `prewarm`
+   * für dieses Projekt dauerhaft wirkungslos, auch nach erneutem Öffnen mit
+   * einer frischen VM, deren Config wieder kalt ist.
    */
   async prewarm(projectId: string, workspaceDir: string): Promise<void> {
     if (!this.prewarmEnabled) return;
@@ -263,7 +285,22 @@ export class ChatService {
     }
   }
 
-  /** Persistiert die Nutzer-Nachricht sofort und reiht den Turn ein (Queue, R6). */
+  /**
+   * Persistiert die Nutzer-Nachricht sofort und reiht den Turn ein (Queue, R6).
+   *
+   * Mit `interrupt: true` wird zusätzlich der LAUFENDE Turn abgebrochen, damit
+   * die Pump sofort zur neuen Nachricht springt (Mid-Turn-Steering). Zwei
+   * Zusagen, auf die sich Aufrufer verlassen dürfen:
+   *
+   * - Die Queue bleibt erhalten — abgebrochen wird nur der laufende Turn.
+   * - Der abgebrochene Turn wird NICHT wiederholt. Der Retry ist für
+   *   msb-Flakes da; ein vom Nutzer veranlasster Abbruch ist keiner (s.
+   *   `runTurn`).
+   *
+   * Anders als `stopTurn` prüft der Abbruchwunsch hier NICHT, ob überhaupt
+   * etwas unterwegs ist: direkt darüber wurde ein Turn in die Queue gelegt, es
+   * ist also per Konstruktion etwas unterwegs.
+   */
   async sendMessage(input: SendMessageInput): Promise<void> {
     const state = this.state(input.projectId);
     const turnId = crypto.randomUUID();
@@ -298,10 +335,22 @@ export class ChatService {
 
   /**
    * Bricht den laufenden Turn ab und leert die Warteschlange (Stop-Button, R6).
-   * Existiert der Handle noch nicht (Race: die UI zeigt den Stop-Button
-   * optimistisch, oft bevor `sendMessage` beim Server ankommt — s. R6-Tests),
-   * merkt abortRequested das vor; runAttempt holt den Abbruch nach, sobald der
-   * Handle steht.
+   *
+   * Drei Zusagen, die zum Vertrag gehören:
+   *
+   * 1. **Der abgebrochene Turn wird NICHT wiederholt.** Der Retry in `runTurn`
+   *    ist für msb-Flakes gedacht; ein vom Nutzer veranlasster Abbruch ist
+   *    keiner. Sonst liefe genau die Arbeit weiter, die er gerade gestoppt hat
+   *    — inklusive Dateiänderungen und Auto-Commit.
+   * 2. **Steht der Handle noch nicht, wird der Abbruch vorgemerkt.** Race: die
+   *    UI zeigt den Stop-Button optimistisch, oft bevor `sendMessage` beim
+   *    Server ankommt (s. R6-Tests). `runAttempt` holt ihn nach, sobald der
+   *    Handle steht.
+   * 3. **Läuft und wartet gar nichts, ist der Aufruf folgenlos.** Der
+   *    Abbruchwunsch wird dann bewusst NICHT vorgemerkt — sonst bliebe er
+   *    liegen (Doppelklick, veralteter `turnActive`-Stand im Client) und
+   *    beendete Minuten später den nächsten, völlig unbeteiligten Turn.
+   *    Zusätzlich räumt die Pump das Flag beim Leerlaufen ab.
    */
   stopTurn(projectId: string): void {
     const state = this.state(projectId);
@@ -433,6 +482,23 @@ export class ChatService {
     }
   }
 
+  /**
+   * Führt einen Turn aus — mit höchstens EINEM Wiederholungsversuch.
+   *
+   * Die Retry-Politik ist der Kern dieser Methode und gilt als Vertrag
+   * gegenüber `stopTurn` und `sendMessage(interrupt)`:
+   *
+   * - Wiederholt wird nur ein **Flake**: ein Versuch, der weder abgeschlossen
+   *   ist noch ein einziges sinnvolles Lebenszeichen geliefert hat. Das ist der
+   *   Fall, in dem `msb exec` stirbt oder nie Output liefert.
+   * - **Nach einem Nutzerabbruch wird NIE wiederholt** (`benutzerAbbruch` aus
+   *   `runAttempt`). Ein Stop, der den Turn gleich darauf erneut ausführt, wäre
+   *   das Gegenteil dessen, was der Nutzer wollte — der Agent schriebe Dateien
+   *   und committete sie.
+   * - Der Wiederholungsversuch startet bewusst OHNE Session-Resume: hing der
+   *   erste an einer korrupten Sitzung, heilt der frische Start das. Sonst
+   *   resumte jeder Turn dieselbe kaputte Sitzung und hinge endlos.
+   */
   private async runTurn(projectId: string, turn: QueuedTurn): Promise<void> {
     const state = this.state(projectId);
     // msb exec ist gelegentlich flaky: die Exec-Session stirbt oder liefert nie
@@ -505,6 +571,25 @@ export class ChatService {
     );
   }
 
+  /**
+   * Ein einzelner Anlauf eines Turns: Runner starten, Events verarbeiten,
+   * Watchdog fahren.
+   *
+   * Der Rückgabewert ist die Entscheidungsgrundlage für den Retry in
+   * `runTurn`. Besonders `benutzerAbbruch` gehört zum Vertrag: Er unterscheidet
+   * den Abbruch DURCH DEN NUTZER (Stop-Button, Steering) vom Abbruch durch den
+   * WATCHDOG (stiller Hänger). Nur letzterer darf wiederholt werden.
+   *
+   * Umgesetzt ist die Unterscheidung ohne zusätzlichen Zustand: nach aussen —
+   * also über `state.currentHandle` — ist nur ein umhülltes Handle erreichbar,
+   * dessen `abort()` den Nutzerabbruch vermerkt. Der Watchdog weiter unten
+   * greift bewusst auf das ROHE Handle zu.
+   *
+   * ⚠️ Wer hier eine weitere Abbruchstelle einbaut, muss dieselbe Wahl treffen:
+   * `handle.abort()` heisst „Nutzer wollte das, kein Retry", `rohHandle.abort()`
+   * heisst „technischer Abbruch, Retry erlaubt". Ein Griff zum falschen Handle
+   * schaltet den Retry für echte Hänger still ab.
+   */
   private async runAttempt(
     projectId: string,
     turn: QueuedTurn,
@@ -575,11 +660,23 @@ export class ChatService {
     let benutzerAbbruch = false;
     const handle: TurnHandle = {
       events: rohHandle.events,
+      /**
+       * Abbruch DURCH DEN NUTZER (Stop-Button, Steering) — beendet den Turn
+       * endgültig, `runTurn` wiederholt ihn nicht.
+       *
+       * Das ist die einzige Stelle, an der `benutzerAbbruch` gesetzt wird, und
+       * dieses umhüllte Handle ist das einzige, das nach aussen gelangt
+       * (`state.currentHandle`). Der Watchdog weiter unten ruft bewusst
+       * `rohHandle.abort()` — ein stiller Hänger ist genau der Fall, für den
+       * der Retry existiert.
+       */
       abort: () => {
         benutzerAbbruch = true;
         rohHandle.abort();
       },
     };
+    // Ab hier ist der Turn von aussen abbrechbar — und zwar nur über das
+    // umhüllte Handle.
     state.currentHandle = handle;
     // Abbruch nachholen, falls Stop/Interrupt schon VOR diesem Zeitpunkt kam
     // (Race: s. ProjectChatState.abortRequested).
