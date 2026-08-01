@@ -475,6 +475,22 @@ describe('viewerId: eine Kennung pro Tab', () => {
     expect(a.viewerId).not.toBe(b.viewerId);
   });
 
+  it('lässt sich auch OHNE Secure Context konstruieren (LAN-http)', () => {
+    // Regression: viewerId rief crypto.randomUUID() direkt im
+    // Feld-Initialisierer. Über http://LAN (kein Secure Context) ist das
+    // undefined, der Konstruktor warf beim App-Bootstrap und React mountete
+    // nie — weisse Seite, jeder LAN-Nutzer ausgesperrt.
+    vi.stubGlobal('isSecureContext', false);
+    vi.stubGlobal('crypto', {});
+    try {
+      const store = new ProjectsStore(makeAuthStore('alice'));
+      expect(typeof store.viewerId).toBe('string');
+      expect(store.viewerId.length).toBeGreaterThan(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('schickt dieselbe Kennung bei enterProject und leaveProject', async () => {
     const store = new ProjectsStore(makeAuthStore('alice'));
     const variablen: Array<Record<string, unknown>> = [];

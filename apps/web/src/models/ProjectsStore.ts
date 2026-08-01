@@ -2,6 +2,7 @@ import { makeAutoObservable, runInAction } from 'mobx';
 import { gqlRequest } from '../api/graphqlClient';
 import type { AgentModelInfo, Project, Template } from '../api/types';
 import type { AuthStore } from './AuthStore';
+import { randomId } from '../util/randomId';
 
 export type ProjectFilter = 'mine' | 'all';
 
@@ -223,8 +224,13 @@ export class ProjectsStore {
    * Projekt in zwei Tabs, hält der zweite die Sandbox nicht offen, und das
    * Schliessen des ersten stoppt die VM unter dem noch offenen zweiten.
    * Bewusst nicht observable — reine Identität, kein Anzeigezustand.
+   *
+   * `randomId()` statt `crypto.randomUUID()`: Letzteres gibt es nur im Secure
+   * Context, macvibes läuft im LAN aber bewusst auch über einfaches http.
+   * Direkt aufgerufen hätte der Feld-Initialisierer dort beim App-Bootstrap
+   * geworfen und die ganze UI wäre eine weisse Seite geblieben.
    */
-  readonly viewerId: string = crypto.randomUUID();
+  readonly viewerId: string = randomId();
 
   constructor(private readonly authStore: AuthStore) {
     makeAutoObservable(this, { pollTimer: false, viewerId: false }, { autoBind: true });
