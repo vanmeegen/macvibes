@@ -10,16 +10,16 @@ import {
 import { AGENT_MODELS, DEFAULT_AGENT_MODEL, isKnownAgentModel } from '../agent/agentModel';
 import type { Db } from '../db/client';
 import { projects, users, type ProjectRow, type UserRow } from '../db/schema';
-import { DomainError } from './errors';
+import { DomainError } from '../core/errors';
 import {
   createProjectBranch,
   deleteBranch,
   ensureBareRepo,
   forkBranch,
   listBranches,
-} from './gitService';
+} from '../core/gitService';
 import { loadTemplates } from './templatesService';
-import { projectVolumeDir } from './workspaceService';
+import { projectVolumeDir } from '../core/workspaceService';
 
 export interface ProjectsConfig {
   bareRepoPath: string;

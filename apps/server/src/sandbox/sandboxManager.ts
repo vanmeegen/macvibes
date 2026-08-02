@@ -5,7 +5,7 @@ import type {
   SandboxProvider,
   SandboxStatus,
 } from './provider';
-import { DomainError } from '../services/errors';
+import { DomainError } from '../core/errors';
 
 /**
  * Alle Plätze belegt und keiner davon verdrängbar (F20). Erbt von DomainError,

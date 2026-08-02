@@ -1,19 +1,24 @@
-import type { PreviewStatus } from './provider';
+import type { PreviewStatus } from '../preview/status';
 
-export type { PreviewStatus };
+/**
+ * Lebenszyklus-Status eines überwachten Prozesses — bewusst dasselbe
+ * Vokabular wie der Preview-Status (preview/status), damit Provider den
+ * Supervisor-Status unverändert als PreviewStatus melden können.
+ */
+export type ProcessStatus = PreviewStatus;
 
-/** Ein überwachter Dev-Server-Prozess, reduziert auf das Nötige (Test-Naht). */
+/** Ein überwachter Prozess, reduziert auf das Nötige (Test-Naht). */
 export interface SupervisedProcess {
   kill(): void;
   readonly exited: Promise<number>;
 }
 
-export interface PreviewSupervisorDeps {
-  /** Startet den Dev-Server (devCommand aus templates.json) in der Sandbox. */
+export interface ProcessSupervisorDeps {
+  /** Startet den überwachten Prozess (z. B. Dev-Server oder Modell-Router). */
   spawn: () => SupervisedProcess;
-  /** Health-Check: antwortet der Preview-Server auf dem Host-Port? */
+  /** Health-Check: antwortet der Prozess (typisch: HTTP auf seinem Port)? */
   probe: () => Promise<boolean>;
-  onStatusChange?: (status: PreviewStatus) => void;
+  onStatusChange?: (status: ProcessStatus) => void;
   /** Poll-Intervall für den Health-Check. */
   probeIntervalMs?: number;
   /** Wie lange auf den initialen „ready"-Zustand gewartet wird, bevor neu gestartet wird. */
@@ -37,24 +42,27 @@ const DEFAULTS = {
 };
 
 /**
- * Host-seitiger Watchdog für den Preview-/Dev-Server einer Sandbox (R7).
- * Läuft AUSSERHALB der MicroVM: startet den Dev-Server über den definierten
- * Command aus templates.json, überwacht ihn per Health-Check und startet ihn
- * bei Ausfall (Crash oder Hänger) mit Backoff neu. Crash-Loops enden in
- * „failed" statt in endlosen Neustarts. Template-agnostisch — die einzige
- * Schnittstelle ist `spawn`/`probe`.
+ * Generischer host-seitiger Prozess-Watchdog: startet einen Prozess über
+ * `spawn`, überwacht ihn per Health-Check (`probe`) und startet ihn bei
+ * Ausfall (Crash oder Hänger) mit Backoff neu. Crash-Loops enden in
+ * „failed" statt in endlosen Neustarts.
+ *
+ * Verwender: der ProcessSandboxProvider für den Preview-Dev-Server (R7,
+ * template-agnostisch — einzige Schnittstelle ist `spawn`/`probe`) und der
+ * localRouterService für den LiteLLM-Shim. Der Supervisor kennt keinen
+ * davon — er ist bewusst prozess-agnostisch (Basisschicht).
  */
-export class PreviewSupervisor {
+export class ProcessSupervisor {
   private readonly opts: Required<
-    Omit<PreviewSupervisorDeps, 'spawn' | 'probe' | 'onStatusChange'>
+    Omit<ProcessSupervisorDeps, 'spawn' | 'probe' | 'onStatusChange'>
   >;
-  private status: PreviewStatus = 'stopped';
+  private status: ProcessStatus = 'stopped';
   private current: SupervisedProcess | null = null;
   private stopped = false;
   private monitorGen = 0;
   private restartTimes: number[] = [];
 
-  constructor(private readonly deps: PreviewSupervisorDeps) {
+  constructor(private readonly deps: ProcessSupervisorDeps) {
     this.opts = {
       probeIntervalMs: deps.probeIntervalMs ?? DEFAULTS.probeIntervalMs,
       startTimeoutMs: deps.startTimeoutMs ?? DEFAULTS.startTimeoutMs,
@@ -65,17 +73,17 @@ export class PreviewSupervisor {
     };
   }
 
-  getStatus(): PreviewStatus {
+  getStatus(): ProcessStatus {
     return this.status;
   }
 
-  /** Startet den Dev-Server und den Überwachungs-Loop. */
+  /** Startet den Prozess und den Überwachungs-Loop. */
   start(): void {
     if (this.status !== 'stopped') return;
     this.stopped = false;
     // Fehler hier dürfen nie als unhandled rejection den Server killen.
     this.runCycle().catch((error) => {
-      console.error('Preview-Supervisor-Zyklus fehlgeschlagen:', error);
+      console.error('Prozess-Supervisor-Zyklus fehlgeschlagen:', error);
       this.setStatus('failed');
     });
   }
@@ -92,13 +100,13 @@ export class PreviewSupervisor {
     this.setStatus('stopped');
   }
 
-  private setStatus(status: PreviewStatus): void {
+  private setStatus(status: ProcessStatus): void {
     if (this.status === status) return;
     this.status = status;
     this.deps.onStatusChange?.(status);
   }
 
-  /** Ein Lebenszyklus eines Dev-Server-Prozesses: starten, ready-werden, überwachen. */
+  /** Ein Lebenszyklus des überwachten Prozesses: starten, ready-werden, überwachen. */
   private async runCycle(): Promise<void> {
     if (this.stopped) return;
 
@@ -116,7 +124,7 @@ export class PreviewSupervisor {
     try {
       proc = this.deps.spawn();
     } catch (error) {
-      console.error('Preview-Dev-Server konnte nicht gestartet werden:', error);
+      console.error('Überwachter Prozess konnte nicht gestartet werden:', error);
       this.setStatus('failed');
       return;
     }
@@ -133,7 +141,7 @@ export class PreviewSupervisor {
     });
 
     // Startphase: geduldig auf "ready" warten. Der Port darf ruhig noch
-    // schweigen (Dev-Server bootet) — NICHT neu starten, solange die
+    // schweigen (der Prozess bootet) — NICHT neu starten, solange die
     // Startphase läuft. Nur ein Prozess-Crash beendet sie vorzeitig.
     const deadline = Date.now() + this.opts.startTimeoutMs;
     let ready = false;
@@ -196,7 +204,7 @@ export class PreviewSupervisor {
     if (this.stopped || gen !== this.monitorGen) return;
     // Fehler hier dürfen nie als unhandled rejection den Server killen.
     this.runCycle().catch((error) => {
-      console.error('Preview-Supervisor-Zyklus fehlgeschlagen:', error);
+      console.error('Prozess-Supervisor-Zyklus fehlgeschlagen:', error);
       this.setStatus('failed');
     });
   }

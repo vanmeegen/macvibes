@@ -3,7 +3,7 @@ import { desc, eq, lt } from 'drizzle-orm';
 import { passwordSchema, usernameSchema } from '@macvibes/shared';
 import type { Db } from '../db/client';
 import { sessions, users, type UserRow } from '../db/schema';
-import { DomainError } from './errors';
+import { DomainError } from '../core/errors';
 
 const LOGIN_FAILED_MESSAGE = 'Benutzername oder Passwort ist falsch';
 const NOT_APPROVED_MESSAGE =

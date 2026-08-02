@@ -1,8 +1,8 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { ensureWorkspace } from '../services/workspaceService';
+import { ensureWorkspace } from '../core/workspaceService';
 import { httpProbe } from '../preview/httpProbe';
-import { PreviewSupervisor, type SupervisedProcess } from './previewSupervisor';
+import { ProcessSupervisor, type SupervisedProcess } from '../core/processSupervisor';
 import { findFreePort } from './portService';
 import type { PreviewStatus, SandboxContext, SandboxHandle, SandboxProvider } from './provider';
 
@@ -18,7 +18,7 @@ export interface ProcessProviderConfig {
  *
  * Preview-Kontrakt (R7, template-agnostisch): das devCommand aus
  * templates.json wird mit gesetzter PORT-Env gestartet; die Plattform kennt
- * keinerlei Template-Interna. Der PreviewSupervisor startet den Dev-Server
+ * keinerlei Template-Interna. Der ProcessSupervisor startet den Dev-Server
  * bei Absturz neu — gleiches Verhalten wie in der MicroVM.
  */
 export class ProcessSandboxProvider implements SandboxProvider {
@@ -59,7 +59,7 @@ export class ProcessSandboxProvider implements SandboxProvider {
       };
     };
 
-    const supervisor = new PreviewSupervisor({
+    const supervisor = new ProcessSupervisor({
       spawn,
       probe: () => httpProbe(`http://localhost:${port}/`),
     });

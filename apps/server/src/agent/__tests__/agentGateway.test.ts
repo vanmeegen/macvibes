@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import type { Server } from 'bun';
-import { createVmTokenRegistry } from '../../sandbox/vmTokens';
+import { createVmTokenRegistry } from '../../core/vmTokens';
 import { AGENT_GATEWAY_PATH, AgentGateway } from '../agentGateway';
 import type { GatewayNotification, GatewaySocketData } from '../agentGateway';
 

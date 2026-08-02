@@ -5,7 +5,12 @@ import type { ServerConfig } from '../config';
 import type { SandboxManager } from '../sandbox/sandboxManager';
 import type { ChatService } from '../services/chatService';
 import { resolveSession } from '../services/authService';
-import { isSecureRequest, readSessionToken } from './cookies';
+import {
+  clearSessionCookie,
+  isSecureRequest,
+  readSessionToken,
+  writeSessionCookie,
+} from './cookies';
 import { schema } from '../schema';
 import type { GraphQLContext } from '../schema/builder';
 import { allowedOrigins, isCrossSiteRequest } from './originPolicy';
@@ -100,6 +105,14 @@ export function createAppYoga(deps: AppYogaDeps) {
         config,
         currentUser,
         request,
+        // Session-Cookies als Fähigkeiten in den Context (B2): die Resolver
+        // kennen kein http/cookies — NUR hier ist festgelegt, wie das
+        // Session-Cookie an diesem Request gelesen/geschrieben wird.
+        session: {
+          write: (sessionToken, expiresAt) => writeSessionCookie(request, sessionToken, expiresAt),
+          clear: () => clearSessionCookie(request),
+          readToken: () => readSessionToken(request),
+        },
         sandboxManager,
         chatService,
         clientIp: ip ?? null,

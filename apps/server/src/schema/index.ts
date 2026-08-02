@@ -3,7 +3,6 @@ import type { TemplateEntry } from '@macvibes/shared';
 import type { Db } from '../db/client';
 import { projects, type ChatMessageRow, type UserRow } from '../db/schema';
 import type { ChatEventPayload } from '../services/chatService';
-import { clearSessionCookie, readSessionToken, writeSessionCookie } from '../http/cookies';
 import {
   approveUser,
   listUsers,
@@ -15,7 +14,7 @@ import {
 } from '../services/authService';
 import { releaseOnClose } from './releaseOnClose';
 import { revalidateStream } from './revalidateStream';
-import { DomainError } from '../services/errors';
+import { DomainError } from '../core/errors';
 import { createRateLimiter, rateLimitDisabled, type RateLimiter } from '../services/rateLimiter';
 import { AGENT_MODELS, type AgentModelInfo } from '../agent/agentModel';
 import {
@@ -31,7 +30,7 @@ import {
 } from '../services/projectsService';
 import { loadTemplates } from '../services/templatesService';
 import { viewerKey } from '../sandbox/sandboxManager';
-import { workspaceDirFor } from '../services/workspaceService';
+import { workspaceDirFor } from '../core/workspaceService';
 import { builder, type GraphQLContext } from './builder';
 
 const UserRef = builder.objectRef<UserRow>('User');
@@ -318,7 +317,7 @@ builder.subscriptionType({
         const stream = revalidateStream(
           ctx.chatService.subscribe(project.id),
           async () => {
-            const token = await readSessionToken(ctx.request);
+            const token = await ctx.session.readToken();
             if (token === null) return false;
             const aktuell = await resolveSession(ctx.db, ctx.config, token);
             return aktuell !== null && aktuell.id === user.id;
@@ -346,7 +345,7 @@ builder.mutationType({
         // Nur der erste (Admin-)Nutzer ist sofort freigeschaltet und bekommt eine
         // Session. Alle anderen sind pending und müssen zuerst zugelassen werden.
         if (result.session) {
-          await writeSessionCookie(ctx.request, result.session.token, result.session.expiresAt);
+          await ctx.session.write(result.session.token, result.session.expiresAt);
         }
         return result.user;
       },
@@ -384,17 +383,17 @@ builder.mutationType({
           `user:${args.username.toLowerCase()}`,
         ]);
         const result = await login(ctx.db, ctx.config, args.username, args.password);
-        await writeSessionCookie(ctx.request, result.token, result.expiresAt);
+        await ctx.session.write(result.token, result.expiresAt);
         return result.user;
       },
     }),
     logout: t.boolean({
       resolve: async (_root, _args, ctx) => {
-        const token = await readSessionToken(ctx.request);
+        const token = await ctx.session.readToken();
         if (token) {
           await logout(ctx.db, token);
         }
-        await clearSessionCookie(ctx.request);
+        await ctx.session.clear();
         return true;
       },
     }),

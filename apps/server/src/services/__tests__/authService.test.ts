@@ -13,7 +13,7 @@ import {
   purgeExpiredSessions,
   sessionKey,
 } from '../authService';
-import { DomainError } from '../errors';
+import { DomainError } from '../../core/errors';
 import { createTestDb, TEST_AUTH_CONFIG } from './testUtils';
 
 const CONFIG = TEST_AUTH_CONFIG;

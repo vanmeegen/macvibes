@@ -1,5 +1,5 @@
-import { runGitInRepo, type ProjectRepo } from './gitService';
-import { projectRepoFor } from './workspaceService';
+import { runGitInRepo, type ProjectRepo } from '../core/gitService';
+import { projectRepoFor } from '../core/workspaceService';
 import type { ChatService } from './chatService';
 
 export type AutoCommitResult = 'committed' | 'nothing-to-commit';

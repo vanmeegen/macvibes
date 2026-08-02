@@ -7,8 +7,12 @@
  */
 
 import { logSafe } from '../logSafe';
+// Teil des Host↔VM-Vertrags (core/vmContract): die VM setzt denselben Header
+// beim Bau ihrer Agent-Umgebung (agent/vmAgentEnv) — Single Source of Truth
+// dort, hier nur re-exportiert für die Proxy-Verwender.
+import { PROXY_TOKEN_HEADER } from '../core/vmContract';
 
-export const PROXY_TOKEN_HEADER = 'x-macvibes-proxy-token';
+export { PROXY_TOKEN_HEADER };
 
 /** Abo-Token (claude setup-token) werden nur mit diesem Beta-Header akzeptiert. */
 export const OAUTH_BETA = 'oauth-2025-04-20';

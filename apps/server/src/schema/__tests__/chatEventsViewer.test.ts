@@ -19,16 +19,7 @@ import { schema } from '../index';
  */
 
 function fakeRequest(signal?: AbortSignal): Request {
-  const request = new Request('http://mac.local:4000/graphql', signal ? { signal } : {});
-  // readSessionToken erwartet den CookieStore des Yoga-Plugins am Request.
-  Object.assign(request, {
-    cookieStore: {
-      get: async () => undefined,
-      set: async () => {},
-      delete: async () => {},
-    },
-  });
-  return request;
+  return new Request('http://mac.local:4000/graphql', signal ? { signal } : {});
 }
 
 interface Setup {
@@ -75,6 +66,14 @@ async function setupSchemaTest(graceMs = 30, startDelayMs = 0): Promise<Setup> {
       config,
       currentUser: user,
       request: fakeRequest(),
+      // Session-Fähigkeiten als Fakes (B2): kein Token → die getaktete
+      // Revalidierung der Subscription meldet „nicht mehr angemeldet".
+      // Die Tests hier laufen kürzer als das Revalidierungsintervall.
+      session: {
+        write: async () => {},
+        clear: async () => {},
+        readToken: async () => null,
+      },
       sandboxManager: manager,
       chatService,
       clientIp: null,

@@ -5,8 +5,13 @@ import { join } from 'node:path';
 import { FakeAgentRunner } from '../../agent/fakeRunner';
 import { autoCommit, buildCommitMessage, createTurnEndAutoCommit } from '../autoCommitService';
 import { ChatService } from '../chatService';
-import { createProjectBranch, ensureBareRepo, runGit, type ProjectRepo } from '../gitService';
-import { ensureWorkspace, projectRepoFor } from '../workspaceService';
+import {
+  createProjectBranch,
+  ensureBareRepo,
+  runGit,
+  type ProjectRepo,
+} from '../../core/gitService';
+import { ensureWorkspace, projectRepoFor } from '../../core/workspaceService';
 import {
   createTempDir,
   createTemplatesFixture,

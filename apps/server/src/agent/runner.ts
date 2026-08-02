@@ -33,7 +33,9 @@ export interface TurnHandle {
 
 /**
  * Abstraktion über den Coding-Agenten. Implementierungen:
- * ClaudeAgentRunner (Claude Agent SDK) und FakeAgentRunner (Tests/E2E).
+ * DaemonAgentRunner (VM-Daemon über das WS-Gateway — der Produktivpfad),
+ * ClaudeAgentRunner (Claude Agent SDK direkt auf dem Host, Dev ohne msb)
+ * und FakeAgentRunner (Tests/E2E).
  */
 export interface AgentRunner {
   startTurn(options: TurnOptions): TurnHandle;

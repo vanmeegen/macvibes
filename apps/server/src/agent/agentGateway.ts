@@ -1,6 +1,6 @@
 import type { Server, ServerWebSocket, WebSocketHandler } from 'bun';
 import { logSafe } from '../logSafe';
-import type { VmTokenRegistry } from '../sandbox/vmTokens';
+import type { VmTokenRegistry } from '../core/vmTokens';
 import { AGENT_GATEWAY_PATH, parseDaemonToHost } from './daemon/protocol';
 import type { DaemonToHostMessage, HostToDaemonMessage } from './daemon/protocol';
 

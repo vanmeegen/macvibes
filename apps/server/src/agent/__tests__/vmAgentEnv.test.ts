@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { buildVmAgentEnv } from '../vmAgentEnv';
-import { PROXY_TOKEN_HEADER } from '../../http/anthropicProxy';
-import { AGENT_CONFIG_GUEST_DIR } from '../../sandbox/microsandboxProvider';
+import { AGENT_CONFIG_GUEST_DIR, PROXY_TOKEN_HEADER } from '../../core/vmContract';
 
 // Jede Assertion sichert die Reparatur eines im Systemtest gefundenen Bugs ab.
 describe('buildVmAgentEnv — kritische Agent-Umgebung', () => {

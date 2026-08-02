@@ -24,15 +24,15 @@ import { touchSandbox } from './sandbox/msbClient';
 import { ProcessSandboxProvider } from './sandbox/processProvider';
 import { selectBackends, type BackendSelection } from './sandbox/backendSelection';
 import { SandboxManager } from './sandbox/sandboxManager';
-import { createVmTokenRegistry } from './sandbox/vmTokens';
+import { createVmTokenRegistry } from './core/vmTokens';
 import { autoCommit, createTurnEndAutoCommit } from './services/autoCommitService';
 import { ensureAdmin, purgeExpiredSessions, resolveSession } from './services/authService';
 import { ChatService } from './services/chatService';
-import { ensureBareRepo } from './services/gitService';
+import { ensureBareRepo } from './core/gitService';
 import { startMirrorScheduler } from './services/mirrorService';
 import { startLocalRouter } from './services/localRouterService';
 import { ShutdownSequence } from './shutdownSequence';
-import { projectRepoFor } from './services/workspaceService';
+import { projectRepoFor } from './core/workspaceService';
 
 const config = loadConfig();
 const db = createDb(config.dbPath);

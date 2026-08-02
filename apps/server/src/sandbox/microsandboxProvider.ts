@@ -5,7 +5,8 @@ import {
   bunCacheDirFor,
   ensureWorkspace,
   projectVolumeDir,
-} from '../services/workspaceService';
+} from '../core/workspaceService';
+import { AGENT_CONFIG_GUEST_DIR } from '../core/vmContract';
 import { baselineBootstrapScript, baselineExists, baselineSnapshotName } from './baselineService';
 import { httpProbe } from '../preview/httpProbe';
 import {
@@ -123,8 +124,10 @@ const GUEST_WORKDIR = '/work';
 /**
  * Mountpunkt der persistenten Agent-Config in der VM. Claude Code schreibt
  * dorthin (CLAUDE_CONFIG_DIR), damit die Session einen VM-Neustart übersteht (R9).
+ * Teil des Host↔VM-Vertrags (core/vmContract): die VM nutzt denselben Pfad in
+ * ihrer Agent-Umgebung (agent/vmAgentEnv) — Single Source of Truth dort.
  */
-export const AGENT_CONFIG_GUEST_DIR = '/agent-config';
+export { AGENT_CONFIG_GUEST_DIR };
 
 /**
  * Mountpunkt des persistenten Bun-Install-Caches (ADR 0002): hält die per

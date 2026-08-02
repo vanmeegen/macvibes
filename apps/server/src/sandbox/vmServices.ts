@@ -4,7 +4,7 @@
  * `sleep infinity`-Halters läuft PID 1 als echter Supervisor, der Dev-Server
  * und Agent-Daemon startet, überwacht und neu startet — Health-Check,
  * Crash-Loop-Schutz und Restart sind Konfiguration statt Eigenbau
- * (ersetzt den host-seitigen PreviewSupervisor-Watchdog).
+ * (ersetzt den host-seitigen ProcessSupervisor-Watchdog).
  *
  * Die Dateien werden auf dem HOST geschrieben und read-only nach
  * `/opt/macvibes/etc` gemountet; das Daemon-Bundle liegt unter

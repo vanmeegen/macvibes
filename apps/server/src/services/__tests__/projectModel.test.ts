@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { projects } from '../../db/schema';
-import { DomainError } from '../errors';
+import { DomainError } from '../../core/errors';
 import { setProjectAgentModel } from '../projectsService';
 import { createTestDb, createUser } from './testUtils';
 

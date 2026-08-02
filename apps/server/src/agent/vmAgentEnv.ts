@@ -1,5 +1,4 @@
-import { PROXY_TOKEN_HEADER } from '../http/anthropicProxy';
-import { AGENT_CONFIG_GUEST_DIR } from '../sandbox/microsandboxProvider';
+import { AGENT_CONFIG_GUEST_DIR, PROXY_TOKEN_HEADER } from '../core/vmContract';
 
 export interface VmAgentEnvParams {
   /** Port des macvibes-Servers (Host-Proxy). */

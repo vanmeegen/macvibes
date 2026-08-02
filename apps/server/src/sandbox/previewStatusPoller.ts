@@ -24,7 +24,7 @@ export interface PreviewStatusPollerDeps {
 /**
  * Pollt den Preview-Status der VM im Hintergrund und hält ihn synchron
  * abfragbar (SandboxHandle.previewStatus ist sync). Ersetzt beim
- * Daemon-Transport den host-seitigen PreviewSupervisor: Restarts macht der
+ * Daemon-Transport den host-seitigen ProcessSupervisor: Restarts macht der
  * In-VM-Supervisor — hier wird nur noch GELESEN.
  */
 export class PreviewStatusPoller {

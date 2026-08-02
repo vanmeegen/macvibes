@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { DomainError } from '../errors';
-import { ensureBareRepo, listBranches } from '../gitService';
+import { DomainError } from '../../core/errors';
+import { ensureBareRepo, listBranches } from '../../core/gitService';
 import {
   assertCanDeleteProject,
   copyProject,
@@ -12,7 +12,7 @@ import {
   listProjects,
   renameProject,
 } from '../projectsService';
-import { projectVolumeDir } from '../workspaceService';
+import { projectVolumeDir } from '../../core/workspaceService';
 import {
   createTempDir,
   createTemplatesFixture,

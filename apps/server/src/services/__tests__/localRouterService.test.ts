@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import type { SupervisedProcess } from '../../sandbox/previewSupervisor';
+import type { SupervisedProcess } from '../../core/processSupervisor';
 import { startLocalRouter } from '../localRouterService';
 
-/** Steuerbarer Fake-Prozess (wie im previewSupervisor-Test). */
+/** Steuerbarer Fake-Prozess (wie im processSupervisor-Test). */
 function fakeProcess(): SupervisedProcess & { killed: boolean } {
   let resolveExit!: (code: number) => void;
   const exited = new Promise<number>((r) => {

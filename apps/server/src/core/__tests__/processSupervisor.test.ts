@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  PreviewSupervisor,
-  type PreviewStatus,
-  type PreviewSupervisorDeps,
+  ProcessSupervisor,
+  type ProcessStatus,
+  type ProcessSupervisorDeps,
   type SupervisedProcess,
-} from '../previewSupervisor';
+} from '../processSupervisor';
 
 /** Steuerbarer Fake-Prozess: exited lässt sich von außen auflösen (= Crash). */
 function fakeProcess(): SupervisedProcess & { crash: (code?: number) => void; killed: boolean } {
@@ -34,18 +34,18 @@ async function waitFor(cond: () => boolean, timeoutMs = 2000): Promise<void> {
 }
 
 interface Harness {
-  supervisor: PreviewSupervisor;
-  statuses: PreviewStatus[];
+  supervisor: ProcessSupervisor;
+  statuses: ProcessStatus[];
   spawnCount: () => number;
   procs: ReturnType<typeof fakeProcess>[];
   setHealthy: (v: boolean) => void;
 }
 
-function makeHarness(overrides: Partial<PreviewSupervisorDeps> = {}): Harness {
+function makeHarness(overrides: Partial<ProcessSupervisorDeps> = {}): Harness {
   const procs: ReturnType<typeof fakeProcess>[] = [];
-  const statuses: PreviewStatus[] = [];
+  const statuses: ProcessStatus[] = [];
   let healthy = false;
-  const supervisor = new PreviewSupervisor({
+  const supervisor = new ProcessSupervisor({
     spawn: () => {
       const p = fakeProcess();
       procs.push(p);
@@ -72,7 +72,7 @@ function makeHarness(overrides: Partial<PreviewSupervisorDeps> = {}): Harness {
   };
 }
 
-describe('PreviewSupervisor — Startphase (Dev-Server braucht Zeit)', () => {
+describe('ProcessSupervisor — Startphase (Dev-Server braucht Zeit)', () => {
   test('bleibt geduldig auf "starting", solange die Startphase läuft — kein Neustart', async () => {
     const h = makeHarness({ startTimeoutMs: 300 });
     h.supervisor.start();
@@ -102,7 +102,7 @@ describe('PreviewSupervisor — Startphase (Dev-Server braucht Zeit)', () => {
   });
 });
 
-describe('PreviewSupervisor — Laufphase (Crash-Recovery)', () => {
+describe('ProcessSupervisor — Laufphase (Crash-Recovery)', () => {
   test('startet den Dev-Server neu, wenn er nach "ready" abstürzt', async () => {
     const h = makeHarness();
     h.setHealthy(true);
@@ -130,7 +130,7 @@ describe('PreviewSupervisor — Laufphase (Crash-Recovery)', () => {
   });
 });
 
-describe('PreviewSupervisor — Crash-Loop-Schutz & Stop', () => {
+describe('ProcessSupervisor — Crash-Loop-Schutz & Stop', () => {
   test('gibt nach maxRestarts auf und meldet "failed"', async () => {
     const h = makeHarness({ maxRestarts: 2, startTimeoutMs: 30 });
     // Jeder Start crasht sofort.
@@ -164,8 +164,8 @@ describe('Spawn-Fehler dürfen NIE den Server crashen (E2E-Absturz 2026-07-14)',
   // dann ENOENT, und über das fire-and-forget runCycle() riss die unbehandelte
   // Exception den ganzen macvibes-Server mit (Vite: "http proxy error").
   test('wirft spawn direkt beim Start, wird der Status "failed" — keine Exception', async () => {
-    const statuses: PreviewStatus[] = [];
-    const supervisor = new PreviewSupervisor({
+    const statuses: ProcessStatus[] = [];
+    const supervisor = new ProcessSupervisor({
       spawn: () => {
         throw new Error("ENOENT: no such file or directory, posix_spawn 'sh'");
       },
@@ -186,7 +186,7 @@ describe('Spawn-Fehler dürfen NIE den Server crashen (E2E-Absturz 2026-07-14)',
   test('wirft spawn beim NEUSTART (Workspace weg), wird der Status "failed" — keine Exception', async () => {
     let calls = 0;
     const procs: ReturnType<typeof fakeProcess>[] = [];
-    const supervisor = new PreviewSupervisor({
+    const supervisor = new ProcessSupervisor({
       spawn: () => {
         calls += 1;
         if (calls > 1) {

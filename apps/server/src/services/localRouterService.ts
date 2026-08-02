@@ -1,4 +1,4 @@
-import { PreviewSupervisor, type SupervisedProcess } from '../sandbox/previewSupervisor';
+import { ProcessSupervisor, type SupervisedProcess } from '../core/processSupervisor';
 
 /**
  * Lokaler Modell-Router (Anthropic-Shim / LiteLLM) als MITGESTARTETER Prozess:
@@ -7,7 +7,7 @@ import { PreviewSupervisor, type SupervisedProcess } from '../sandbox/previewSup
  * Verhalten:
  * - Läuft auf der Upstream-URL schon etwas Gesundes → NICHT anfassen
  *   (extern betrieben, z. B. manuell gestartet oder Waise eines Vorlaufs).
- * - Sonst: Startkommando spawnen und via PreviewSupervisor überwachen
+ * - Sonst: Startkommando spawnen und via ProcessSupervisor überwachen
  *   (Health-Check, Neustart bei Crash, Crash-Loop-Schutz).
  * - Ohne Startkommando: klare Warnung — Claude-Modelle funktionieren weiter,
  *   nur lokale Modelle nicht.
@@ -82,7 +82,7 @@ export async function startLocalRouter(options: LocalRouterOptions): Promise<Loc
       return { exited: proc.exited, kill: () => proc.kill() };
     });
 
-  const supervisor = new PreviewSupervisor({
+  const supervisor = new ProcessSupervisor({
     spawn,
     probe,
     probeIntervalMs: options.probeIntervalMs ?? 500,

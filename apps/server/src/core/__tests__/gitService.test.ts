@@ -8,7 +8,11 @@ import {
   forkBranch,
   listBranches,
 } from '../gitService';
-import { createTempDir, createTemplatesFixture, removeDir } from './testUtils';
+import {
+  createTempDir,
+  createTemplatesFixture,
+  removeDir,
+} from '../../services/__tests__/testUtils';
 
 const tempDirs: string[] = [];
 

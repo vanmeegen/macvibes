@@ -16,8 +16,8 @@ import {
   createTemplatesFixture,
   removeDir,
 } from '../../services/__tests__/testUtils';
-import { createProjectBranch, ensureBareRepo } from '../../services/gitService';
-import { workspaceDirFor } from '../../services/workspaceService';
+import { createProjectBranch, ensureBareRepo } from '../../core/gitService';
+import { workspaceDirFor } from '../../core/workspaceService';
 import {
   AGENT_CONFIG_GUEST_DIR,
   microsandboxSandboxName,

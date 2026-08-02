@@ -1,4 +1,4 @@
-import { runGit } from './gitService';
+import { runGit } from '../core/gitService';
 
 export type MirrorResult = 'pushed' | 'no-changes' | 'skipped' | 'error';
 

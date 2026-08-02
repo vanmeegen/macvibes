@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { Server } from 'bun';
 import { join } from 'node:path';
-import { createVmTokenRegistry } from '../vmTokens';
+import { createVmTokenRegistry } from '../../core/vmTokens';
 import { AGENT_GATEWAY_PATH, AgentGateway } from '../../agent/agentGateway';
 import type { GatewaySocketData } from '../../agent/agentGateway';
 import { buildDaemonBundle } from '../../agent/daemonBundle';
@@ -16,8 +16,8 @@ import {
   createTemplatesFixture,
   removeDir,
 } from '../../services/__tests__/testUtils';
-import { createProjectBranch, ensureBareRepo } from '../../services/gitService';
-import { workspaceDirFor } from '../../services/workspaceService';
+import { createProjectBranch, ensureBareRepo } from '../../core/gitService';
+import { workspaceDirFor } from '../../core/workspaceService';
 import { baselineSnapshotName, buildTemplateBaseline, removeSnapshot } from '../baselineService';
 import { MicrosandboxSandboxProvider, msbAvailable } from '../microsandboxProvider';
 import { execShell } from '../msbClient';
