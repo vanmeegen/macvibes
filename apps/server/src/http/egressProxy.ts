@@ -8,6 +8,27 @@
  * restriktiven Regeln (nur Gateway) und routet allen übrigen Traffic per
  * HTTP(S)_PROXY über diesen Proxy auf dem Host — ein einziger, authentisierter
  * Egress-Punkt. DNS der Ziele löst der HOST auf (im Gast ist DNS ohnehin tot).
+ *
+ * Zwei strikt getrennte Betriebsarten (state.phase):
+ *
+ * - CONNECT ('tunnel'): opake Bytes, echter bidirektionaler Stream. Beide
+ *   Richtungen behandeln Teilschreibungen (Bun's Socket.write schreibt bei
+ *   vollem Kernel-Puffer WENIGER als übergeben und meldet die Zahl): der
+ *   ungeschriebene Rest bleibt in einem Richtungs-Puffer, `drain` schreibt ihn
+ *   in Reihenfolge weiter, und die Quell-Seite wird per pause()/resume()
+ *   angehalten, solange die Ziel-Seite nicht aufnimmt — so bleibt der Puffer
+ *   klein, statt bis zur Obergrenze zu wachsen.
+ *
+ * - absolute-form ('einzel'): KEIN Tunnel — genau EIN Request pro Verbindung,
+ *   atomar. Kopf-Rest + Body (Länge per Content-Length, 0 ohne Header) werden
+ *   vollständig gepuffert; erst wenn die Zielprüfung positiv ist UND der Body
+ *   komplett ist, geht der umgeschriebene Kopf (origin-form, Proxy-Header
+ *   gestrippt, Connection: close erzwungen) + Body in einem Rutsch an den
+ *   Upstream. Jedes Byte über den einen Request hinaus ist ein zweiter Request
+ *   und beendet die Verbindung — roh weitergereicht käme er in absolute-form
+ *   mitsamt `Proxy-Authorization: Basic base64(mv:<token>)` beim Origin an und
+ *   leakte das VM-Token. Chunked Transfer-Encoding im Request-Body wird mit
+ *   411 abgelehnt: ohne Content-Length gibt es keine sichere Request-Grenze.
  */
 
 import type { Socket, TCPSocketListener } from 'bun';
@@ -31,7 +52,7 @@ export interface EgressProxyOptions {
    * lokalen Fake-Upstream prüfen können, ohne die Policy aufzuweichen.
    */
   checkTarget?: TargetChecker;
-  /** Obergrenze des pending-Puffers pro Verbindung (Default 8 MiB). Test-Naht. */
+  /** Obergrenze der Puffer pro Verbindung (Default 8 MiB). Test-Naht. */
   maxPendingBytes?: number;
 }
 
@@ -87,81 +108,166 @@ export function parseProxyHead(
   return { requestLine, headerLines };
 }
 
+/**
+ * Liest die Content-Length aus den Kopfzeilen. 0, wenn der Header fehlt (z. B.
+ * GET); null bei ungültigem oder widersprüchlichem Wert — das ist Request-
+ * Smuggling-Terrain und wird abgelehnt.
+ */
+export function contentLengthAus(headerLines: string[]): number | null {
+  const werte = headerLines
+    .filter((line) => line.toLowerCase().startsWith('content-length:'))
+    .map((line) => line.slice('content-length:'.length).trim());
+  if (werte.length === 0) return 0;
+  const erster = werte[0] as string;
+  if (!/^\d{1,15}$/.test(erster)) return null;
+  if (werte.some((wert) => wert !== erster)) return null;
+  return Number(erster);
+}
+
 export interface EgressProxyHandle {
   port: number;
   stop: () => void;
 }
 
 /**
- * Obergrenze für den `pending`-Puffer einer Verbindung (H5-analog). Der Puffer
- * hält Bytes, solange der Upstream noch nicht (vollständig) aufnahmebereit ist
- * — während der asynchronen Zielprüfung und bei Backpressure. Ohne Grenze ist
- * er ein Speicher-Hebel für die per Design nicht vertrauenswürdige MicroVM: ein
- * `CONNECT` auf einen langsam auflösenden Hostnamen plus Dauerfeuer triebe den
- * Host-RSS bis zum OOM. 8 MiB deckt legitime grosse Bodies in der kurzen
- * Prüfphase und begrenzt zugleich den Schaden.
+ * Obergrenze für die Richtungs-Puffer einer Verbindung (H5-analog). Ohne
+ * Grenze wären sie ein Speicher-Hebel für die per Design nicht
+ * vertrauenswürdige MicroVM (Dauerfeuer gegen einen langsam auflösenden oder
+ * langsam lesenden Gegenüber → Host-RSS bis zum OOM). Durch pause()/resume()
+ * bleiben die Puffer im Normalfall weit darunter; die Grenze ist der harte
+ * Notanker. 8 MiB deckt zugleich legitime große absolute-form-Bodies.
  */
 const MAX_PENDING_BYTES = 8 * 1024 * 1024;
 
-/** Der Ausschnitt eines Bun-Sockets, den `flushPending` braucht (Test-Naht). */
+/** Der Ausschnitt eines Bun-Sockets, den die Flush-Helfer brauchen (Test-Naht). */
 export interface WritableSocket {
   write(data: Uint8Array): number;
 }
 
-interface ConnState {
-  buf: Buffer;
-  upstream: Socket | null;
-  /** Upstream verbunden UND `pending` vollständig geflusht — direkter Pfad. */
+/**
+ * Schreibt so viel von `puffer` an den Socket, wie dieser annimmt, und gibt
+ * den ungeschriebenen Rest zurück.
+ *
+ * Bun's `Socket.write` schreibt bei vollem Kernel-Puffer WENIGER als übergeben
+ * und meldet die tatsächlich geschriebene Zahl (-1 bei geschlossenem Socket) —
+ * der Rest muss aufgehoben und beim `drain`-Event erneut geschrieben werden.
+ * Ihn zu verwerfen, trunciert den Stream: der Gegenüber bekommt weniger Bytes
+ * als angekündigt und hängt bis zum Timeout bzw. sieht korrupte Daten.
+ */
+export function schreibeMitBackpressure(sock: WritableSocket, puffer: Buffer): Buffer {
+  let rest = puffer;
+  while (rest.length > 0) {
+    const geschrieben = sock.write(rest);
+    // <= 0: Socket zu oder komplett gepuffert — der drain-Handler macht weiter.
+    if (typeof geschrieben !== 'number' || geschrieben <= 0) break;
+    rest = geschrieben >= rest.length ? Buffer.alloc(0) : Buffer.from(rest.subarray(geschrieben));
+  }
+  return rest;
+}
+
+/** Der Teil des Verbindungszustands, den `flushPending` fortschreibt (Test-Naht). */
+export interface FlushZustand {
+  /** client→upstream: noch nicht (vollständig) geschriebene Bytes. */
+  pending: Buffer;
+  /** Upstream verbunden UND `pending` vollständig geflusht. */
   established: boolean;
-  /**
-   * Nur EIN Request wird durchgereicht (absolute-form, plain HTTP). Anders als
-   * CONNECT ist das kein Tunnel: jeder HTTP-Request bräuchte eigenes Umschreiben
-   * (Proxy-Header strippen, origin-form). Ein zweiter Request auf derselben
-   * keep-alive-Verbindung darf deshalb NICHT roh weitergereicht werden — er käme
-   * in absolute-form mitsamt `Proxy-Authorization: Basic base64(mv:<token>)`
-   * beim Origin an und leakte das VM-Token. Nach dem einen Request wird die
-   * Verbindung stattdessen geschlossen.
-   */
-  einzelRequest: boolean;
   /** Zielprüfung (DNS + Policy) läuft — sie ist asynchron. */
   connecting: boolean;
-  /**
-   * Bytes, die zum laufenden Request gehören, aber noch nicht (vollständig) an
-   * den Upstream geschrieben sind: während der Zielprüfung (typischerweise der
-   * POST-Body in einem eigenen TCP-Segment) und der ungeschriebene Rest bei
-   * Backpressure. Als Request-Kopf geparst hätte das zu sporadischen „400 Bad
-   * Request" geführt; verworfen zu truncierten Requests.
-   */
-  pending: Buffer;
 }
 
 /**
  * Schreibt so viel von `pending` an den Upstream, wie der Socket annimmt, und
- * behält den ungeschriebenen Rest.
- *
- * Bun's `Socket.write` schreibt bei vollem Kernel-Puffer WENIGER als übergeben
- * und meldet die tatsächlich geschriebene Zahl — der Rest muss aufgehoben und
- * beim `drain`-Event erneut geschrieben werden. Ihn (wie zuvor) bedingungslos
- * zu verwerfen, trunciert den Request: der Upstream bekommt weniger als seine
- * content-length ankündigt und hängt bis zum Timeout.
+ * behält den ungeschriebenen Rest (s. schreibeMitBackpressure).
  *
  * `established` wird erst gesetzt, wenn `pending` LEER ist. Solange noch ein
  * Rest aussteht, müssen neue Bytes weiter über `pending` laufen — schriebe der
  * data-Handler sie schon direkt an den Upstream, überholten sie den Rest und
  * die Reihenfolge bräche.
  */
-export function flushPending(state: ConnState, up: WritableSocket): void {
-  while (state.pending.length > 0) {
-    const geschrieben = up.write(state.pending);
-    // <= 0: Socket zu oder komplett gepuffert — der drain-Handler macht weiter.
-    if (typeof geschrieben !== 'number' || geschrieben <= 0) break;
-    state.pending =
-      geschrieben >= state.pending.length
-        ? Buffer.alloc(0)
-        : Buffer.from(state.pending.subarray(geschrieben));
-  }
+export function flushPending(state: FlushZustand, up: WritableSocket): void {
+  state.pending = schreibeMitBackpressure(up, state.pending);
   state.connecting = false;
   if (state.pending.length === 0) state.established = true;
+}
+
+/**
+ * Der EINE absolute-form-Request einer Verbindung. Es gibt bewusst keinen
+ * zweiten: die Request-Grenze ist über Content-Length exakt bekannt, alles
+ * darüber hinaus beendet die Verbindung (Token-Leak-Schutz, s. Moduldoku).
+ */
+interface EinzelRequest {
+  /** Bereits umgeschriebener Kopf (origin-form, Proxy-Header gestrippt). */
+  kopf: Buffer;
+  /** Body-Länge laut Content-Length (0 ohne Header, z. B. GET). */
+  bodySoll: number;
+  /** Bislang gepufferter Body — wächst nie über `bodySoll`. */
+  body: Buffer;
+  /** Kopf + Body sind an den Upstream übergeben (via pending/flushPending). */
+  gesendet: boolean;
+}
+
+/**
+ * Lebensphase einer Client-Verbindung. 'zu' ist terminal: die Verbindung ist
+ * abgelehnt oder erledigt; bis der Close greift, noch eintreffende Bytes
+ * werden verworfen — sie dürfen insbesondere NICHT erneut als Request-Kopf
+ * geparst werden.
+ */
+export type Phase = 'kopf' | 'tunnel' | 'einzel' | 'zu';
+
+/** Der Ausschnitt des Verbindungszustands, den `macheTerminal` räumt (Test-Naht). */
+export interface TerminalZustand {
+  phase: Phase;
+  /** Sammelpuffer für den Request-Kopf (nur Phase 'kopf'). */
+  buf: Buffer;
+  /** client→upstream: noch nicht (vollständig) geschriebene Bytes. */
+  pending: Buffer;
+  /** Nur Phase 'einzel': der eine atomare absolute-form-Request. */
+  einzel: object | null;
+  connecting: boolean;
+  clientZu: boolean;
+}
+
+/**
+ * Versetzt eine Verbindung terminal in Phase 'zu' und räumt ALLES, was in
+ * Richtung Upstream noch wirken könnte. JEDER Abbruchpfad muss hierüber laufen:
+ *
+ * - Phase 'zu' + leerer `buf` (Defekt 4): `socket.end()` beendet nur die
+ *   Schreibseite — je nach Bun-Version liefert die Leseseite danach weiter
+ *   data-Events. Bliebe die Phase 'kopf', wüchse `buf` unbegrenzt weiter
+ *   (Speicherhebel der untrusted VM), und ein nachgereichter Terminator würde
+ *   doch noch geparst und geproxied (Einweg-Tunnel trotz "beendeter"
+ *   Verbindung).
+ * - `einzel = null` + `clientZu = true` (Defekt 5): feuert der asynchrone
+ *   Upstream-open-Callback im Fenster vor dem close des Client-Sockets, darf
+ *   `open() → sendeEinzel()` den gepufferten Erst-Request (z. B. POST mit
+ *   Seiteneffekten) NICHT mehr an den Origin senden — beide Guards greifen.
+ * - `pending` leer + `connecting = false`: kein Flush schreibt mehr Restbytes.
+ *
+ * `antwortPending` (upstream→client) bleibt unberührt: eine schon empfangene
+ * Antwort darf der Client-drain-Handler noch fertig ausliefern.
+ */
+export function macheTerminal(state: TerminalZustand): void {
+  state.phase = 'zu';
+  state.buf = Buffer.alloc(0);
+  state.pending = Buffer.alloc(0);
+  state.einzel = null;
+  state.connecting = false;
+  state.clientZu = true;
+}
+
+interface ConnState extends FlushZustand {
+  /** Sammelpuffer für den Request-Kopf (nur Phase 'kopf'). */
+  buf: Buffer;
+  upstream: Socket | null;
+  phase: Phase;
+  /** upstream→client: bei Backpressure noch nicht geschriebene Antwort-Bytes. */
+  antwortPending: Buffer;
+  /** Nur Phase 'einzel': der eine atomare absolute-form-Request. */
+  einzel: EinzelRequest | null;
+  /** Der Client hat geschlossen — Upstream nach dem letzten Flush beenden. */
+  clientZu: boolean;
+  /** Der Upstream hat geschlossen — Client nach dem letzten Flush beenden. */
+  upstreamZu: boolean;
 }
 
 export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle {
@@ -177,14 +283,62 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
     }
   };
   const checkTargetFn = options.checkTarget ?? createTargetChecker();
+  const grenze = options.maxPendingBytes ?? MAX_PENDING_BYTES;
+
+  /**
+   * Beendet Client UND Upstream; alles Weitere wird verworfen (Phase 'zu').
+   * macheTerminal räumt dabei auch `einzel`/`clientZu` (Defekt 5): sonst
+   * sendete der Upstream-open-Callback im Fenster vor dem Client-close einen
+   * noch nicht gesendeten Erst-Request doch noch an den Origin.
+   */
+  const beendeBeide = (client: Socket<ConnState>): void => {
+    macheTerminal(client.data);
+    client.data.upstream?.end();
+    client.end();
+  };
+
+  /**
+   * Schreibt Bytes Richtung Client — mit Teilschreibungs-Behandlung. Bleibt
+   * ein Rest, wird der Upstream pausiert; der drain-Handler des Clients
+   * schreibt weiter und resumed.
+   */
+  const anClient = (client: Socket<ConnState>, chunk: Uint8Array): void => {
+    const state = client.data;
+    if (state.antwortPending.length + chunk.length > grenze) {
+      console.warn(`EgressProxy: Antwort-Puffer über ${grenze} B — Verbindung getrennt.`);
+      beendeBeide(client);
+      return;
+    }
+    state.antwortPending =
+      state.antwortPending.length === 0
+        ? Buffer.from(chunk)
+        : Buffer.concat([state.antwortPending, chunk]);
+    state.antwortPending = schreibeMitBackpressure(client, state.antwortPending);
+    if (state.antwortPending.length > 0) state.upstream?.pause();
+  };
+
+  /**
+   * Schickt den atomaren absolute-form-Request los, sobald BEIDE Bedingungen
+   * erfüllt sind: Zielprüfung positiv (Upstream offen) UND Body vollständig
+   * gepuffert. Vorher geht kein einziges Byte an den Origin.
+   */
+  const sendeEinzel = (client: Socket<ConnState>): void => {
+    const state = client.data;
+    const einzel = state.einzel;
+    const up = state.upstream;
+    if (einzel === null || up === null || einzel.gesendet) return;
+    if (einzel.body.length < einzel.bodySoll) return;
+    einzel.gesendet = true;
+    state.pending = Buffer.concat([einzel.kopf, einzel.body]);
+    flushPending(state, up);
+  };
 
   const refuse = (client: Socket<ConnState>, reason: string): void => {
     console.warn(`EgressProxy: Ziel abgelehnt — ${reason}`);
-    // Puffer freigeben und das connecting-Flag löschen: die Verbindung wird
-    // geschlossen, aber bis der Close greift, könnten sonst weiter Bytes
-    // auflaufen (der Upstream kommt ja nie, flushPending läuft nie).
-    client.data.pending = Buffer.alloc(0);
-    client.data.connecting = false;
+    // Terminal: Puffer freigeben und alles Weitere verwerfen. Ohne die
+    // Phasen-Umschaltung fielen Restbytes, die zwischen refuse und dem
+    // tatsächlichen Close noch eintreffen, erneut in das Kopf-Parsing.
+    macheTerminal(client.data);
     client.write(
       `HTTP/1.1 403 Forbidden\r\nConnection: close\r\ncontent-length: 0\r\nx-macvibes-reason: ${reason.replace(/[\r\n]/g, ' ')}\r\n\r\n`,
     );
@@ -213,36 +367,52 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
     port: number,
     onOpen: (upstream: Socket) => void,
   ): void => {
+    const state = client.data;
     Bun.connect({
       hostname: host,
       port,
       socket: {
         open(up) {
-          client.data.upstream = up;
+          if (state.clientZu) {
+            // Der Client ist während der Zielprüfung schon weg.
+            up.end();
+            return;
+          }
+          state.upstream = up;
           onOpen(up);
         },
         drain(up) {
           // Kernel-Puffer hat wieder Platz — ausstehende pending-Bytes weiter
           // an den Upstream schreiben (Backpressure, s. flushPending).
-          if (client.data.pending.length > 0) flushPending(client.data, up);
+          if (state.pending.length > 0) flushPending(state, up);
+          if (state.pending.length === 0) {
+            if (state.clientZu) up.end();
+            else client.resume();
+          }
         },
         data(_up, chunk) {
-          client.write(chunk);
+          anClient(client, chunk);
         },
         close() {
-          client.end();
+          state.upstreamZu = true;
+          // Der Upstream ist weg → die Verbindung ist terminal: ohne Phase 'zu'
+          // sammelte der data-Handler weiter Bytes für einen toten Upstream
+          // (bzw. parste sie in Phase 'kopf'). antwortPending bleibt: einen
+          // Antwort-Rest erst ausliefern (Client-drain), dann schließen.
+          macheTerminal(state);
+          if (state.antwortPending.length === 0) client.end();
         },
         error(_up, error) {
           console.error(`EgressProxy: Upstream-Fehler ${host}:${port}:`, error.message);
+          state.upstreamZu = true;
+          macheTerminal(state);
           client.end();
         },
       },
     }).catch((error: unknown) => {
       console.error(`EgressProxy: Connect zu ${host}:${port} fehlgeschlagen:`, error);
-      // Wie bei refuse: kein Upstream, also läuft flushPending nie — Puffer
-      // freigeben, damit bis zum Close nichts mehr aufläuft.
-      client.data.pending = Buffer.alloc(0);
-      client.data.connecting = false;
+      // Kein Upstream, also läuft kein Flush mehr — terminal, Rest verwerfen.
+      macheTerminal(state);
       client.write('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
       client.end();
     });
@@ -256,48 +426,76 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
         socket.data = {
           buf: Buffer.alloc(0),
           upstream: null,
+          phase: 'kopf',
           established: false,
-          einzelRequest: false,
           connecting: false,
           pending: Buffer.alloc(0),
+          antwortPending: Buffer.alloc(0),
+          einzel: null,
+          clientZu: false,
+          upstreamZu: false,
         };
       },
       data(socket, chunk) {
         const state = socket.data;
-        // Tunnel steht und pending ist leer: Bytes 1:1 durchreichen.
-        if (state.established && state.upstream) {
-          // absolute-form ist kein Tunnel: ein zweiter Request auf dieser
-          // Verbindung würde das VM-Token an den Origin leaken. Verbindung
-          // schliessen statt roh weiterzureichen — ein korrekter Client öffnet
-          // dann eine neue, die frisch geparst und umgeschrieben wird.
-          if (state.einzelRequest) {
-            socket.end();
+        switch (state.phase) {
+          case 'zu':
+            // Abgelehnt/erledigt: end() ist raus, aber die Leseseite lebt bis
+            // zum vollständigen Close. Restbytes stumpf verwerfen — sie dürfen
+            // NICHT als neuer Request geparst werden.
+            return;
+          case 'tunnel': {
+            // CONNECT: opake Bytes Richtung Upstream, mit Backpressure. Die
+            // Grenze ist der Notanker; normal hält pause() den Puffer klein.
+            if (state.pending.length + chunk.length > grenze) {
+              console.warn(`EgressProxy: pending-Puffer über ${grenze} B — Verbindung getrennt.`);
+              beendeBeide(socket);
+              return;
+            }
+            state.pending =
+              state.pending.length === 0
+                ? Buffer.from(chunk)
+                : Buffer.concat([state.pending, chunk]);
+            if (state.upstream !== null) flushPending(state, state.upstream);
+            // Quelle anhalten, bis der Upstream offen ist bzw. aufgeholt hat
+            // (open/drain flushen weiter und resumen dann).
+            if (state.pending.length > 0) socket.pause();
             return;
           }
-          state.upstream.write(chunk);
-          return;
-        }
-        // Bytes gehören zum laufenden Request, der Upstream ist aber noch nicht
-        // (vollständig) aufnahmebereit: während der Zielprüfung (kein Upstream)
-        // oder solange ein pending-Rest bei Backpressure aussteht. Aufheben —
-        // mit Obergrenze, sonst ist der Puffer ein OOM-Hebel für die untrusted
-        // VM.
-        if (state.connecting || state.upstream !== null) {
-          const grenze = options.maxPendingBytes ?? MAX_PENDING_BYTES;
-          if (state.pending.length + chunk.length > grenze) {
-            console.warn(`EgressProxy: pending-Puffer über ${grenze} B — Verbindung getrennt.`);
-            socket.end();
+          case 'einzel': {
+            const einzel = state.einzel as EinzelRequest;
+            const fehlt = einzel.bodySoll - einzel.body.length;
+            if (einzel.gesendet || chunk.length > fehlt) {
+              // Bytes über den EINEN Request hinaus = zweiter Request.
+              // absolute-form ist kein Tunnel: roh weitergereicht käme er
+              // mitsamt Proxy-Authorization beim Origin an (Token-Leak).
+              // Verbindung beenden — ein noch nicht gesendeter Erst-Request
+              // wird dann auch nicht mehr gesendet.
+              console.warn(
+                'EgressProxy: Bytes über den absolute-form-Request hinaus — Verbindung getrennt.',
+              );
+              beendeBeide(socket);
+              return;
+            }
+            einzel.body = Buffer.concat([einzel.body, chunk]);
+            sendeEinzel(socket);
             return;
           }
-          state.pending = Buffer.concat([state.pending, chunk]);
-          // Upstream schon da (Backpressure-Phase): sofort nachschieben.
-          if (state.upstream !== null) flushPending(state, state.upstream);
-          return;
+          case 'kopf':
+            break;
         }
+
         state.buf = Buffer.concat([state.buf, chunk]);
         const headerEnd = state.buf.indexOf('\r\n\r\n');
         if (headerEnd === -1) {
-          if (state.buf.length > 32_768) socket.end(); // Header-Bombe
+          if (state.buf.length > 32_768) {
+            // Header-Bombe (Defekt 4): NICHT nur die Schreibseite beenden —
+            // ohne Phase 'zu' wüchse buf mit jedem weiteren Segment unbegrenzt
+            // (Speicherhebel der untrusted VM), und ein nachgereichter
+            // Terminator würde doch noch geparst und geproxied.
+            macheTerminal(state);
+            socket.end();
+          }
           return;
         }
         const head = state.buf.subarray(0, headerEnd).toString();
@@ -306,6 +504,7 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
 
         const parsed = parseProxyHead(head);
         if (parsed === null) {
+          macheTerminal(state);
           socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
           socket.end();
           return;
@@ -317,6 +516,7 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
             ?.slice('proxy-authorization:'.length)
             .trim() ?? '';
         if (options.verifyToken(tokenFromAuth(auth)) === null) {
+          macheTerminal(state);
           socket.write(
             'HTTP/1.1 407 Proxy Authentication Required\r\n' +
               'Proxy-Authenticate: Basic realm="macvibes"\r\nConnection: close\r\n\r\n',
@@ -331,56 +531,120 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
           const sep = target.lastIndexOf(':');
           const host = sep > 0 ? target.slice(0, sep) : target;
           const port = sep > 0 ? Number(target.slice(sep + 1)) : 443;
+          state.phase = 'tunnel';
           state.connecting = true;
+          // Bytes nach dem Kopf gehören in den Tunnel — in Reihenfolge VOR
+          // allem, was während der Zielprüfung nachkommt (data-Handler hängt
+          // an pending an).
+          state.pending = Buffer.from(rest);
           connectChecked(socket, host, port, (up) => {
-            socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-            // Alles über pending schreiben, in Reihenfolge: erst der Rest aus
-            // demselben Segment, dann was während der Prüfung nachkam.
-            // flushPending achtet auf Backpressure und setzt established, sobald
-            // pending leer ist.
-            state.pending = rest.length > 0 ? Buffer.concat([rest, state.pending]) : state.pending;
+            anClient(socket, Buffer.from('HTTP/1.1 200 Connection Established\r\n\r\n'));
             flushPending(state, up);
+            // Falls der Client während der Prüfung pausiert wurde und schon
+            // alles geflusht ist, wieder lesen; sonst resumed der drain-Handler.
+            if (state.pending.length === 0) socket.resume();
           });
           return;
         }
         if (/^https?:\/\//i.test(target)) {
-          // absolute-form (http_proxy): auf origin-form umschreiben, proxy-Header strippen.
+          // absolute-form (http_proxy): auf origin-form umschreiben,
+          // Proxy-Header strippen, als EINEN atomaren Request behandeln.
           let url: URL;
           try {
             url = new URL(target);
           } catch {
-            socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
+            macheTerminal(state);
+            socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
             socket.end();
             return;
           }
           const port = url.port ? Number(url.port) : url.protocol === 'https:' ? 443 : 80;
-          // Proxy-Header UND vorhandene Connection-Header strippen; wir erzwingen
-          // Connection: close, weil die Verbindung nach diesem einen Request
-          // nicht als keep-alive wiederverwendet werden darf (s. einzelRequest).
+          if (headerLines.some((l) => l.toLowerCase().startsWith('transfer-encoding:'))) {
+            // Chunked-Bodies sind über diesen Proxy exotisch und ohne
+            // Content-Length nicht sicher zu framen (Request-Grenze!) —
+            // sauber ablehnen statt falsch behandeln.
+            macheTerminal(state);
+            socket.write(
+              'HTTP/1.1 411 Length Required\r\nConnection: close\r\n' +
+                'x-macvibes-reason: transfer-encoding wird nicht unterstuetzt, content-length setzen\r\n\r\n',
+            );
+            socket.end();
+            return;
+          }
+          const bodySoll = contentLengthAus(headerLines);
+          if (bodySoll === null) {
+            macheTerminal(state);
+            socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+            socket.end();
+            return;
+          }
+          if (bodySoll > grenze) {
+            macheTerminal(state);
+            socket.write('HTTP/1.1 413 Content Too Large\r\nConnection: close\r\n\r\n');
+            socket.end();
+            return;
+          }
+          if (rest.length > bodySoll) {
+            // Pipelining schon im ersten Segment: Bytes über den einen Request
+            // hinaus werden NIE weitergereicht (Token-Leak) — Verbindung zu.
+            console.warn(
+              'EgressProxy: Bytes über den absolute-form-Request hinaus — Verbindung getrennt.',
+            );
+            macheTerminal(state);
+            socket.end();
+            return;
+          }
+          // Proxy-Header UND vorhandene Connection-Header strippen; wir
+          // erzwingen Connection: close, weil die Verbindung nach diesem einen
+          // Request nicht als keep-alive wiederverwendet werden darf.
           const forwarded = headerLines.filter(
             (l) => l !== '' && !/^proxy-/i.test(l) && !/^connection:/i.test(l),
           );
           const newHead =
             `${method} ${url.pathname}${url.search} HTTP/1.1\r\n` +
             `${[...forwarded, 'Connection: close'].join('\r\n')}\r\n\r\n`;
-          state.einzelRequest = true;
+          state.phase = 'einzel';
+          state.einzel = {
+            kopf: Buffer.from(newHead),
+            bodySoll,
+            body: Buffer.from(rest),
+            gesendet: false,
+          };
           state.connecting = true;
-          connectChecked(socket, url.hostname, port, (up) => {
-            // newHead + rest + pending in Reihenfolge über den Puffer, damit
-            // Backpressure und Reihenfolge korrekt behandelt werden.
-            state.pending = Buffer.concat([Buffer.from(newHead), rest, state.pending]);
-            flushPending(state, up);
+          connectChecked(socket, url.hostname, port, () => {
+            sendeEinzel(socket);
           });
           return;
         }
+        macheTerminal(state);
         socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
         socket.end();
       },
+      drain(socket) {
+        // Der Client nimmt wieder auf: Antwort-Rest weiterschreiben, danach
+        // entweder sauber schließen (Upstream ist fertig) oder den pausierten
+        // Upstream weiterlesen lassen.
+        const state = socket.data;
+        if (state.antwortPending.length > 0) {
+          state.antwortPending = schreibeMitBackpressure(socket, state.antwortPending);
+        }
+        if (state.antwortPending.length === 0) {
+          if (state.upstreamZu) socket.end();
+          else state.upstream?.resume();
+        }
+      },
       close(socket) {
-        socket.data.upstream?.end();
+        const state = socket.data;
+        state.clientZu = true;
+        // Einen pending-Rest schreibt der Upstream-drain-Handler noch fertig
+        // und beendet dann; ohne Rest sofort beenden.
+        if (state.upstream !== null && state.pending.length === 0) state.upstream.end();
       },
       error(socket, error) {
         console.error('EgressProxy: Client-Socket-Fehler:', error.message);
+        // Terminal (setzt auch clientZu): ein noch nicht gesendeter
+        // Erst-Request darf nach einem Client-Fehler nicht mehr raus.
+        macheTerminal(socket.data);
         socket.data.upstream?.end();
       },
     },
