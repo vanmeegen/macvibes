@@ -12,13 +12,28 @@ Bun-Workspaces-Monorepo:
 
 - **`apps/server`** — `Bun.serve` + GraphQL Yoga + Pothos, Drizzle auf
   `bun:sqlite`. Kern:
+  - `core/` — Basisschicht ohne Abhängigkeiten nach oben: `errors`
+    (DomainError), `workspaceService` (Volume-/Workspace-Layout),
+    `gitService` (git-Wrapper), `processSupervisor` (generischer
+    Prozess-Watchdog für Dev-Server und LiteLLM-Shim), `vmTokens` und
+    `vmContract` (Host↔VM-Vertragskonstanten).
+  - `preview/` — geteiltes Preview-Status-Vokabular zwischen Host und
+    VM-Daemon (`status`, `monitStatus`, `httpProbe`); bewusst importfrei
+    (Fan-Out 0), weil es ins VM-Bundle gebündelt wird.
   - `sandbox/` — `SandboxManager` (Lifecycle: Grace/Idle/LRU), `SandboxProvider`
     (Interface) mit `ProcessSandboxProvider` (Host, für Dev/Tests) und
     `MicrosandboxSandboxProvider` (echte MicroVMs). `baselineService` friert
     Template-Snapshots ein, `portService` mappt Preview-Ports.
     `vmServices` erzeugt die In-VM-Supervisor-Konfiguration (tini + monit),
-    `monitStatus`/`previewStatusPoller` lesen den Preview-Status aus der
-    monit-HTTP-API. (`previewSupervisor` lebt nur noch im `ProcessSandboxProvider`.)
+    `monitStatus` (in `preview/`) und `previewStatusPoller` lesen den
+    Preview-Status aus der monit-HTTP-API. (Der frühere `previewSupervisor`
+    ist der generische `core/processSupervisor` und läuft nur noch im
+    `ProcessSandboxProvider` und im `localRouterService`.)
+
+  Die Schichtung (core/preview/db als Basis, darüber sandbox+agent, dann
+  services, schema, http) erzwingt ein **Architektur-Gate** im Lint
+  (`eslint-plugin-boundaries`, Regelmatrix mit Begründungen in
+  `eslint.config.js`): Schichtverletzungen brechen `bun run ci`.
 
   **Sandbox-/Preview-Schnittstelle (sauber gekapselt):** PID 1 der MicroVM ist
   ein **In-VM-Supervisor** (`tini -s` als Reaper + `monit`, Konfiguration aus
@@ -63,12 +78,13 @@ unmonitor` ≙ `failed`). Der Host **liest** den Status nur: über die
     `agentGateway` die Host-Gegenstelle, `claudeStreamJson`
     (`agentEventsFromMessage`) mappt SDK-Messages auf `AgentEvent`s.
   - `services/` — `chatService` (Turn-Queue, Streaming, Historie, Steering),
-    `projectsService`, `gitService` (Orphan-Branch pro Projekt im Bare-Repo),
-    `workspaceService`, `authService`, `autoCommitService`, `mirrorService`.
+    `projectsService`, `authService`, `autoCommitService`, `mirrorService`.
+    (`gitService` — Orphan-Branch pro Projekt im Bare-Repo — und
+    `workspaceService` liegen in `core/`.)
   - `http/anthropicProxy` — Credential-Proxy: die VM sieht nie einen Token.
 
 - **`apps/web`** — React 18 + MobX + MUI, Vite. Presentation-Model-Pattern.
-- **`packages/shared`** — Zod-Schemas, Branch-Slugify (Zod v4).
+- **`packages/shared`** — Zod-Schemas, Branch-Slugify (Zod v4); die Schemas validieren serverseitig autoritativ, das Web importiert sie derzeit nicht.
 - **`templates/`** — Projekt-Vorlagen (NICHT Teil der Workspaces), dynamisch
   aus `templates.json` gelesen. `pwa` ist Bun-nativ (kein Vite), `fullstack`
   spiegelt den macvibes-Stack.

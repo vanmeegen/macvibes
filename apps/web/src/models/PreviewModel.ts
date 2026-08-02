@@ -1,4 +1,4 @@
-/** Zustände, die der Watchdog (PreviewSupervisor) im Backend meldet. */
+/** Zustände, die der Watchdog (core/processSupervisor bzw. monit) im Backend meldet. */
 export type PreviewStatus = 'starting' | 'ready' | 'restarting' | 'failed' | 'stopped';
 
 export interface PreviewView {
