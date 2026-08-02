@@ -134,22 +134,39 @@ describe('ShutdownSequence: hängender Schritt macht den Prozess nicht unbeendba
     expect(eintraege).toEqual(['sandboxes', 'exit']);
   });
 
-  test('ein zweites Signal während eines hängenden Abgangs beendet sofort', async () => {
+  test('ein zweites Signal schneidet einen laufenden Schritt NICHT ab', async () => {
+    // Ein zweiter Ctrl-C darf keinen Notausstieg auslösen: er würde einen gerade
+    // laufenden Auto-Commit (Release, während jemand in der Sandbox arbeitet)
+    // mitten abschneiden. Das zweite Signal wartet den laufenden Abgang ab;
+    // gegen echte Hänger schützt die Frist pro Schritt.
     const codes: number[] = [];
+    let schrittFertig = false;
+    let freigeben: () => void = () => {};
     const sequenz = new ShutdownSequence({
       exit: (code) => void codes.push(code),
       log: () => {},
-      stepTimeoutMs: 10_000, // lang, damit der erste Lauf beim Test noch hängt
+      stepTimeoutMs: 10_000,
     });
-    sequenz.register('haengt', () => new Promise<void>(() => {}));
+    sequenz.register('Auto-Commit', async () => {
+      await new Promise<void>((r) => {
+        freigeben = r;
+      });
+      schrittFertig = true;
+    });
 
-    // Erstes Signal: startet den (hängenden) Abgang, wartet NICHT darauf.
     void sequenz.handle('SIGINT');
     await Bun.sleep(10);
-    // Zweites Ctrl-C: der Nutzer will jetzt raus.
-    await sequenz.handle('SIGINT');
+    void sequenz.handle('SIGINT'); // zweites Ctrl-C, während der Schritt läuft
 
-    // Sofortiges Beenden mit einem Code != 0 (der Abgang war nicht sauber).
-    expect(codes).toContain(1);
+    // Kein sofortiges exit, solange der Schritt läuft.
+    await Bun.sleep(10);
+    expect(codes).toEqual([]);
+    expect(schrittFertig).toBe(false);
+
+    // Erst wenn der Schritt (Auto-Commit) fertig ist, endet der Prozess — genau einmal.
+    freigeben();
+    await Bun.sleep(10);
+    expect(schrittFertig).toBe(true);
+    expect(codes).toEqual([0]);
   });
 });

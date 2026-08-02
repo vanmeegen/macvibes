@@ -60,17 +60,15 @@ export class ShutdownSequence {
   /**
    * Läuft alle Schritte ab und beendet den Prozess.
    *
-   * Beim ERSTEN Signal startet der geordnete Abgang. Ein ZWEITES Signal
-   * während dieser noch läuft (der Nutzer drückt erneut Ctrl-C, weil etwas
-   * hängt) beendet den Prozess SOFORT mit Code 1 — der Notausstieg, falls ein
-   * Schritt trotz Frist nicht durchkommt.
+   * Ein ZWEITES Signal wartet bewusst den laufenden Abgang ab, statt sofort zu
+   * beenden. Ein Notausstieg (hartes exit beim zweiten Ctrl-C) würde einen
+   * gerade laufenden Auto-Commit mitten abschneiden — und genau der ist bei
+   * einem Release, während noch jemand in einer Sandbox arbeitet, der wichtige
+   * Fall. Gegen echte Hänger schützt die Frist PRO SCHRITT (`stepTimeoutMs`):
+   * ein klemmender Schritt wird übersprungen, der Prozess endet trotzdem.
    */
   async handle(signal: string): Promise<void> {
-    if (this.running !== null) {
-      this.log(`${signal} erneut empfangen — sofortiges Beenden.`);
-      this.exit(1);
-      return;
-    }
+    if (this.running !== null) return this.running;
     this.running = this.runAll(signal);
     return this.running;
   }
