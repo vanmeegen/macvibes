@@ -13,6 +13,7 @@ import {
   rejectUser,
   resolveSession,
 } from '../services/authService';
+import { releaseOnClose } from './releaseOnClose';
 import { revalidateStream } from './revalidateStream';
 import { DomainError } from '../services/errors';
 import { createRateLimiter, rateLimitDisabled, type RateLimiter } from '../services/rateLimiter';
@@ -256,13 +257,66 @@ builder.subscriptionType({
       args: {
         projectId: t.arg.id({ required: true }),
       },
-      subscribe: (_root, args, ctx) => {
+      subscribe: async (_root, args, ctx) => {
         const user = requireUser(ctx);
+        // Betrachter = aktive Subscription (H11): Die Subscription ist der
+        // einzige Kanal, der GENAU so lange lebt wie der Tab. Endet sie — Tab
+        // zu, Reload, Crash, Netzabriss —, beendet Yoga den Iterator, und
+        // `releaseOnClose` meldet den Betrachter ZUVERLÄSSIG ab. Die früheren
+        // enter/leave-Mutationen hatten dieses Signal nicht: ohne leave blieb
+        // der Schlüssel für immer im Refcount, die VM stoppte nie.
+        const project = await getProjectAny(ctx, String(args.projectId));
+        // Schlüssel SERVERSEITIG erzeugen: pro Subscription eindeutig (keine
+        // Kollisionen, #12) und von außen nicht erratbar — niemand kann einen
+        // fremden Betrachter austragen.
+        const viewer = viewerKey(user.id, crypto.randomUUID());
+        // Auch die Subscription selbst startet die Sandbox (nicht nur der
+        // Eager-Start via enterProject): reconnectet der Client nach einem
+        // Netzabriss, lebt die Preview weiter. Schlägt der Start fehl
+        // (Kapazität, msb), scheitert die Subscription sichtbar — EventSource
+        // versucht es von selbst erneut.
+        await ctx.sandboxManager.enter(
+          {
+            projectId: project.id,
+            branchName: project.branchName,
+            workspaceDir: workspaceDirFor(ctx.config.macvibesHome, project.id),
+            templateDir: project.templateDir,
+            devCommand: project.devCommand,
+            previewPort: project.previewPort,
+          },
+          viewer,
+        );
+        // Brach der Client WÄHREND des (bei kaltem Boot sekundenlangen) enter()
+        // ab, existiert noch kein Iterator, auf dem Yoga `.return()` rufen
+        // könnte — `releaseOnClose` griffe nie, der Betrachter bliebe für
+        // immer gezählt. Deshalb hier prüfen und sofort wieder austragen.
+        // Bewusst ein Fehler statt eines leeren Iterators: so entsteht gar
+        // kein Stream (kein chatService-Subscriber, nichts zu disposen), und
+        // ob Yoga einen erst nach dem Abort fertiggestellten Iterator noch
+        // schließt, muss uns nicht kümmern. Beim Client kommt der Fehler
+        // ohnehin nicht mehr an — die Verbindung ist weg.
+        if (ctx.request.signal.aborted) {
+          ctx.sandboxManager.leave(project.id, viewer);
+          throw new DomainError('Verbindung während des Sandbox-Starts abgebrochen');
+        }
+        // Restfenster (Abort zwischen der Prüfung oben und der Übergabe des
+        // Iterators an Yoga) defensiv schließen: der Abort-Listener trägt den
+        // Betrachter aus. Eine Doppel-Freigabe mit releaseOnClose ist
+        // ausgeschlossen, denn `leave` ist mengenbasiert und pro Schlüssel
+        // idempotent (Set.delete) — der jeweils zweite Aufruf ist ein No-op.
+        // Der Listener feuert auch beim regulären Verbindungsende nach einem
+        // sauberen Subscription-Abschluss noch einmal; auch das ist aus
+        // demselben Grund folgenlos.
+        ctx.request.signal.addEventListener(
+          'abort',
+          () => ctx.sandboxManager.leave(project.id, viewer),
+          { once: true },
+        );
         // Eine Subscription ist EIN langlebiger Request: `requireUser` liefe
         // sonst nur beim Aufbau, und der Stream lebte nach Logout, Ablauf oder
         // Admin-rejectUser weiter (H6). Deshalb getaktete Nachprüfung.
-        return revalidateStream(
-          ctx.chatService.subscribe(String(args.projectId)),
+        const stream = revalidateStream(
+          ctx.chatService.subscribe(project.id),
           async () => {
             const token = await readSessionToken(ctx.request);
             if (token === null) return false;
@@ -271,6 +325,7 @@ builder.subscriptionType({
           },
           SUBSCRIPTION_REVALIDATE_MS,
         );
+        return releaseOnClose(stream, () => ctx.sandboxManager.leave(project.id, viewer));
       },
       resolve: (payload: ChatEventPayload) => payload,
     }),
@@ -403,17 +458,18 @@ builder.mutationType({
       resolve: (_root, args, ctx) =>
         renameProject(ctx.db, requireUser(ctx), String(args.id), args.name),
     }),
+    /**
+     * Eager-Start der Sandbox beim Öffnen der Chat-Page — damit die Preview
+     * schon lädt, bevor die chatEvents-Subscription steht. Zählt bewusst
+     * KEINEN Betrachter (H11): der Refcount hängt an der Lebensdauer der
+     * Subscription, deren Ende der Server auch bei Reload/Crash/Netzabriss
+     * sieht. Ein leaveProject gibt es deshalb nicht mehr — folgt dem
+     * Eager-Start keine Subscription, stoppt Grace die Sandbox von selbst.
+     */
     enterProject: t.field({
       type: ProjectRef,
       args: {
         id: t.arg.id({ required: true }),
-        /**
-         * Kennung der aufrufenden Verbindung (ein Wert pro Tab). Ohne sie
-         * zaehlt der Refcount nur den Nutzer — dann haelt ein zweiter Tab die
-         * Sandbox nicht offen (H11). Optional, damit aeltere Clients weiter
-         * funktionieren.
-         */
-        viewerId: t.arg.string({ required: false }),
       },
       resolve: async (_root, args, ctx) => {
         // Auch Nur-Lese-Besucher starten die Sandbox — sonst gäbe es für
@@ -421,50 +477,37 @@ builder.mutationType({
         const user = requireUser(ctx);
         const project = await getProjectAny(ctx, String(args.id));
         const workspaceDir = workspaceDirFor(ctx.config.macvibesHome, project.id);
-        await ctx.sandboxManager.enter(
-          {
-            projectId: project.id,
-            branchName: project.branchName,
-            workspaceDir,
-            templateDir: project.templateDir,
-            devCommand: project.devCommand,
-            previewPort: project.previewPort,
-          },
-          viewerKey(user.id, args.viewerId ?? null),
-        );
+        await ctx.sandboxManager.ensureRunning({
+          projectId: project.id,
+          branchName: project.branchName,
+          workspaceDir,
+          templateDir: project.templateDir,
+          devCommand: project.devCommand,
+          previewPort: project.previewPort,
+        });
         if (project.ownerId === user.id) {
-          // Config-Warmup anstoßen (fire-and-forget), während der User tippt —
-          // der erste echte Turn trägt dann nicht mehr den claude-First-Run.
-          // Nur für den Owner: Besucher dürfen weder den Agent-Daemon belegen
-          // noch die letzte Aktivität des Projekts verfälschen.
-          // Kein nacktes `void` (F18): ohne Rejection-Handler beendet ein
-          // Fehler hier den ganzen Serverprozess. prewarm fängt inzwischen
-          // selbst ab — der Handler bleibt als zweite Sicherung.
-          ctx.chatService.prewarm(project.id, workspaceDir).catch((error: unknown) => {
-            console.error(`Config-Warmup für ${project.id} fehlgeschlagen:`, error);
-          });
+          // Re-Entry-Resume (#34): Starb ein Turn beim Host-Neustart/Release,
+          // bevor eine Antwort persistiert wurde, ist die letzte Chat-Zeile eine
+          // unbeantwortete User-Nachricht. Beim Wieder-Öffnen genau diesen
+          // Prompt automatisch erneut ausführen — für den User dasselbe
+          // Ergebnis, ohne erneutes Tippen. Nur für den Owner: Besucher dürfen
+          // weder den Agent-Daemon belegen noch Turns anstoßen.
+          const resumed = await ctx.chatService.resumeUnansweredTurn(project.id, workspaceDir);
+          if (!resumed) {
+            // Nur wenn NICHT wiederaufgenommen: stiller Config-Warmup
+            // (fire-and-forget), während der User tippt — der erste echte Turn
+            // trägt dann nicht mehr den claude-First-Run. Ein echter
+            // wiederaufgenommener Turn wärmt die Config selbst.
+            // Kein nacktes `void` (F18): ohne Rejection-Handler beendet ein
+            // Fehler hier den ganzen Serverprozess. prewarm fängt inzwischen
+            // selbst ab — der Handler bleibt als zweite Sicherung.
+            ctx.chatService.prewarm(project.id, workspaceDir).catch((error: unknown) => {
+              console.error(`Config-Warmup für ${project.id} fehlgeschlagen:`, error);
+            });
+          }
           await touchProject(ctx.db, project.id);
         }
         return project;
-      },
-    }),
-    leaveProject: t.boolean({
-      args: {
-        id: t.arg.id({ required: true }),
-        /** Dieselbe Kennung wie beim enterProject dieses Tabs (H11). */
-        viewerId: t.arg.string({ required: false }),
-      },
-      resolve: async (_root, args, ctx) => {
-        // Ownership bleibt bewusst außen vor (R10: Besucher dürfen fremde
-        // Sandboxes starten und müssen sie deshalb auch freigeben können). Die
-        // Absicherung sitzt im SandboxManager: `leave` zählt nur den eigenen
-        // Betrachter ab, Grace greift erst beim letzten (H11). Sonst könnte ein
-        // Fremder die VM des Eigentümers stoppen und dabei einen Auto-Commit in
-        // dessen Branch auslösen — dieselbe Regel wie bei deleteProject.
-        const user = requireUser(ctx);
-        await getProjectAny(ctx, String(args.id));
-        ctx.sandboxManager.leave(String(args.id), viewerKey(user.id, args.viewerId ?? null));
-        return true;
       },
     }),
     /**
@@ -499,18 +542,17 @@ builder.mutationType({
           throw new DomainError('Nachricht darf nicht leer sein');
         }
         const workspaceDir = workspaceDirFor(ctx.config.macvibesHome, project.id);
-        // Chatten setzt eine laufende Sandbox voraus (R6).
-        await ctx.sandboxManager.enter(
-          {
-            projectId: project.id,
-            branchName: project.branchName,
-            workspaceDir,
-            templateDir: project.templateDir,
-            devCommand: project.devCommand,
-            previewPort: project.previewPort,
-          },
-          user.id,
-        );
+        // Chatten setzt eine laufende Sandbox voraus (R6). Kein Betrachter-
+        // Eintrag (H11): der Owner zählt über seine chatEvents-Subscription;
+        // ein Turn ohne Subscription bleibt über isBusy vor Grace geschützt.
+        await ctx.sandboxManager.ensureRunning({
+          projectId: project.id,
+          branchName: project.branchName,
+          workspaceDir,
+          templateDir: project.templateDir,
+          devCommand: project.devCommand,
+          previewPort: project.previewPort,
+        });
         await ctx.chatService.sendMessage({
           projectId: project.id,
           workspaceDir,

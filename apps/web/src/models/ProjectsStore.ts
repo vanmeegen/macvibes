@@ -2,7 +2,6 @@ import { makeAutoObservable, runInAction } from 'mobx';
 import { gqlRequest } from '../api/graphqlClient';
 import type { AgentModelInfo, Project, Template } from '../api/types';
 import type { AuthStore } from './AuthStore';
-import { randomId } from '../util/randomId';
 
 export type ProjectFilter = 'mine' | 'all';
 
@@ -82,17 +81,11 @@ const RENAME_PROJECT_MUTATION = /* GraphQL */ `
 `;
 
 const ENTER_PROJECT_MUTATION = /* GraphQL */ `
-  mutation EnterProject($id: ID!, $viewerId: String) {
-    enterProject(id: $id, viewerId: $viewerId) {
+  mutation EnterProject($id: ID!) {
+    enterProject(id: $id) {
       id
       sandboxStatus
     }
-  }
-`;
-
-const LEAVE_PROJECT_MUTATION = /* GraphQL */ `
-  mutation LeaveProject($id: ID!, $viewerId: String) {
-    leaveProject(id: $id, viewerId: $viewerId)
   }
 `;
 
@@ -217,23 +210,9 @@ export class ProjectsStore {
   renameError: string | null = null;
   /** Interval-Handle fürs Status-Polling — bewusst nicht observable. */
   pollTimer: ReturnType<typeof setInterval> | null = null;
-  /**
-   * Kennung DIESES Tabs für den Betrachter-Refcount des Servers (H11).
-   *
-   * Ohne sie zählt der Server nur die Nutzer-ID: öffnet dieselbe Person das
-   * Projekt in zwei Tabs, hält der zweite die Sandbox nicht offen, und das
-   * Schliessen des ersten stoppt die VM unter dem noch offenen zweiten.
-   * Bewusst nicht observable — reine Identität, kein Anzeigezustand.
-   *
-   * `randomId()` statt `crypto.randomUUID()`: Letzteres gibt es nur im Secure
-   * Context, macvibes läuft im LAN aber bewusst auch über einfaches http.
-   * Direkt aufgerufen hätte der Feld-Initialisierer dort beim App-Bootstrap
-   * geworfen und die ganze UI wäre eine weisse Seite geblieben.
-   */
-  readonly viewerId: string = randomId();
 
   constructor(private readonly authStore: AuthStore) {
-    makeAutoObservable(this, { pollTimer: false, viewerId: false }, { autoBind: true });
+    makeAutoObservable(this, { pollTimer: false }, { autoBind: true });
   }
 
   get visibleProjects(): Project[] {
@@ -472,13 +451,17 @@ export class ProjectsStore {
     }
   }
 
-  /** Startet die Sandbox des Projekts (nur Owner, serverseitig geprüft). */
+  /**
+   * Eager-Start der Sandbox beim Öffnen der Chat-Page (auch für Besucher, R10)
+   * — die Preview lädt so schon, bevor die chatEvents-Subscription steht.
+   * Kein Gegenstück zum Verlassen (H11): der Betrachter-Refcount des Servers
+   * hängt an der Lebensdauer der Subscription (ChatStore.connect/disconnect);
+   * ihr Ende — auch bei Reload, Crash oder Netzabriss — meldet den Betrachter
+   * serverseitig ab.
+   */
   async enterProject(id: string): Promise<void> {
     try {
-      await gqlRequest<{ enterProject: { id: string } }>(ENTER_PROJECT_MUTATION, {
-        id,
-        viewerId: this.viewerId,
-      });
+      await gqlRequest<{ enterProject: { id: string } }>(ENTER_PROJECT_MUTATION, { id });
       await this.refresh();
     } catch (err) {
       console.error('ProjectsStore.enterProject fehlgeschlagen', err);
@@ -514,19 +497,6 @@ export class ProjectsStore {
         this.error = toErrorMessage(err);
       });
       return false;
-    }
-  }
-
-  /** Meldet das Verlassen der Chat-Page — die Grace-Period beginnt (R9). */
-  async leaveProject(id: string): Promise<void> {
-    try {
-      await gqlRequest<{ leaveProject: boolean }>(LEAVE_PROJECT_MUTATION, {
-        id,
-        viewerId: this.viewerId,
-      });
-    } catch (err) {
-      // Beim Verlassen der Seite nicht mehr anzeigbar — aber nie verschlucken.
-      console.error('ProjectsStore.leaveProject fehlgeschlagen', err);
     }
   }
 

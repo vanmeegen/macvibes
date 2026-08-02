@@ -463,35 +463,15 @@ describe('Modellwahl pro Projekt (Dropdown im Chat)', () => {
 });
 
 /**
- * Der Betrachter-Refcount des Servers (H11) war nach Nutzer-ID verschluesselt.
- * Zwei Tabs derselben Person zaehlten als einer: das Schliessen des ersten
- * stoppte die VM unter dem noch offenen zweiten. Der Store schickt deshalb eine
- * Kennung pro Tab mit.
+ * H11, dritter Anlauf: Der Betrachter-Refcount des Servers haengt jetzt an der
+ * LEBENSDAUER der chatEvents-Subscription (ChatStore). Der Client schickt
+ * KEINE viewerId mehr mit, und es gibt kein leaveProject: das verlaessliche
+ * "Betrachter ist gegangen"-Signal ist das Ende der Subscription (Tab zu,
+ * Reload, Netzabriss) — eine Mutation, die bei Reload/Crash nie kommt, war es
+ * nie.
  */
-describe('viewerId: eine Kennung pro Tab', () => {
-  it('unterscheidet zwei Store-Instanzen (= zwei Tabs)', () => {
-    const a = new ProjectsStore(makeAuthStore('alice'));
-    const b = new ProjectsStore(makeAuthStore('alice'));
-    expect(a.viewerId).not.toBe(b.viewerId);
-  });
-
-  it('lässt sich auch OHNE Secure Context konstruieren (LAN-http)', () => {
-    // Regression: viewerId rief crypto.randomUUID() direkt im
-    // Feld-Initialisierer. Über http://LAN (kein Secure Context) ist das
-    // undefined, der Konstruktor warf beim App-Bootstrap und React mountete
-    // nie — weisse Seite, jeder LAN-Nutzer ausgesperrt.
-    vi.stubGlobal('isSecureContext', false);
-    vi.stubGlobal('crypto', {});
-    try {
-      const store = new ProjectsStore(makeAuthStore('alice'));
-      expect(typeof store.viewerId).toBe('string');
-      expect(store.viewerId.length).toBeGreaterThan(0);
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it('schickt dieselbe Kennung bei enterProject und leaveProject', async () => {
+describe('enterProject: Eager-Start ohne Betrachter-Kennung', () => {
+  it('schickt nur die Projekt-ID — keine viewerId', async () => {
     const store = new ProjectsStore(makeAuthStore('alice'));
     const variablen: Array<Record<string, unknown>> = [];
     vi.mocked(gqlRequest).mockImplementation((_query: string, vars?: Record<string, unknown>) => {
@@ -500,11 +480,13 @@ describe('viewerId: eine Kennung pro Tab', () => {
     });
 
     await store.enterProject('p1');
-    await store.leaveProject('p1');
 
-    const mitViewer = variablen.filter((v) => 'viewerId' in v);
-    expect(mitViewer.length).toBe(2);
-    expect(mitViewer[0]?.viewerId).toBe(store.viewerId);
-    expect(mitViewer[1]?.viewerId).toBe(store.viewerId);
+    expect(variablen.some((v) => 'viewerId' in v)).toBe(false);
+    expect(variablen[0]).toEqual({ id: 'p1' });
+  });
+
+  it('der Store kennt kein leaveProject mehr — Abmelden ist Subscription-Sache', () => {
+    const store = new ProjectsStore(makeAuthStore('alice'));
+    expect('leaveProject' in store).toBe(false);
   });
 });

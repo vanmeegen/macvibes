@@ -138,9 +138,10 @@ describe('enter', () => {
 
 describe('Betrachter-Refcount (H11): nur der letzte Betrachter stellt Grace scharf', () => {
   test('ein Fremder kann die Sandbox nicht stoppen, während der Eigentümer zusieht', async () => {
-    // Der Angriff: leaveProject ist ownership-frei (R10). Ohne Refcount stellte
-    // ein einzelner fremder Aufruf den Grace-Timer scharf und stoppte damit die
-    // VM des Eigentümers — samt Auto-Commit in dessen Branch.
+    // Der Angriff: leave ist ownership-frei (R10, auch Besucher-Subscriptions
+    // zaehlen). Ohne Refcount stellte ein einzelnes fremdes leave den
+    // Grace-Timer scharf und stoppte damit die VM des Eigentümers — samt
+    // Auto-Commit in dessen Branch.
     const { provider, manager, beforeStopLog } = setup({ graceMs: 20 });
     await manager.enter(ctx('p1'), 'eigentuemer');
     await manager.enter(ctx('p1'), 'fremder');
@@ -633,19 +634,13 @@ describe('forget: geloeschte Projekte nicht ewig mitschleppen', () => {
  * die VM stirbt unter dem noch offenen zweiten Tab, die Preview kippt auf
  * „nicht bereit", und der naechste Prompt zahlt einen Kaltstart.
  */
-describe('viewerKey: eine Identitaet pro Verbindung, nicht pro Nutzer', () => {
-  test('trennt zwei Tabs desselben Nutzers', () => {
+describe('viewerKey: eine Identitaet pro Subscription, nicht pro Nutzer', () => {
+  test('trennt zwei Subscriptions desselben Nutzers', () => {
     expect(viewerKey('u1', 'tab-a')).not.toBe(viewerKey('u1', 'tab-b'));
   });
 
   test('bleibt fuer dieselbe Verbindung stabil', () => {
     expect(viewerKey('u1', 'tab-a')).toBe(viewerKey('u1', 'tab-a'));
-  });
-
-  test('faellt ohne Verbindungskennung auf die Nutzer-ID zurueck', () => {
-    // Aeltere Clients schicken nichts mit — dann gilt das alte Verhalten.
-    expect(viewerKey('u1', null)).toBe('u1');
-    expect(viewerKey('u1', '')).toBe('u1');
   });
 
   test('zwei Tabs halten die Sandbox offen, bis beide gegangen sind', async () => {
@@ -797,44 +792,216 @@ describe('SandboxManager-Lebenszyklus: Rennen aus dem zweiten Review', () => {
 });
 
 /**
- * #7: Der Betrachterschluessel ist pro Tab (viewerId, seit dem H11-Fix), und
- * die UI erzeugt ihn pro Seitenladung neu. Bei Reload/Crash/Netzabriss (kein
- * leaveProject) bleibt der alte Schluessel fuer immer im Set. Aktiv missbraucht:
- * enterProject in einer Schleife mit zufaelligen viewerIds laesst das Set
- * unbegrenzt wachsen (Speicher) und pinnt die fremde Sandbox dauerhaft offen.
- * Eine Obergrenze pro Projekt begrenzt das.
+ * #2/#7, dritter Anlauf: Der Refcount wird von der LEBENSDAUER der
+ * chatEvents-Subscription getrieben — enter beim Aufbau, leave im finally des
+ * Iterators. Damit ist die Set-Groesse durch die tatsaechlich lebenden
+ * Subscriptions begrenzt, und die fruehere LRU-Obergrenze (MAX_VIEWERS) ist
+ * nicht nur unnoetig, sondern war SCHAEDLICH: verdraengte sie einen noch
+ * lebenden Betrachter, wurde dessen leave zum No-op — der Refcount fiel nie
+ * auf 0 und die VM stoppte NIE.
  */
-describe('viewers-Obergrenze (#7): Set waechst nicht unbegrenzt', () => {
-  test('haelt die Betrachterzahl unter der Grenze und verdraengt die aeltesten', async () => {
-    const { manager } = setup({ graceMs: 10_000 });
-    // Weit mehr Betrachter als die Grenze eintreten lassen (Schleifen-Missbrauch).
-    for (let i = 0; i < 500; i += 1) {
-      await manager.enter(ctx('p1'), `zufall-${i}`);
-    }
-    // Das Set darf nicht mit allen 500 Schluesseln wachsen.
-    expect(manager.viewerCount('p1')).toBeLessThanOrEqual(64);
-    // Die Sandbox laeuft trotzdem (Betrachter sind vorhanden).
-    expect(manager.status('p1')).toBe('running');
-  });
-
-  test('ein echter Betrachter, der bleibt, haelt die Sandbox weiter offen', async () => {
+describe('Refcount = lebende Subscriptions (H11): keine LRU-Verdraengung', () => {
+  test('ein lebender Betrachter wird nie verdraengt, auch nicht von vielen anderen', async () => {
     const { manager, provider } = setup({ graceMs: 20 });
-    await manager.enter(ctx('p1'), 'echter-tab');
-    // Viele tote viewerIds fluten das Set (verdraengen die aeltesten, evtl. auch
-    // den echten). Danach verlassen alle bis auf den echten Tab NICHT explizit —
-    // der echte leavt, und Grace greift nur, wenn das Set dann leer ist.
+    await manager.enter(ctx('p1'), 'lebender-tab');
+    // Viele kurzlebige Betrachter kommen und gehen wieder (Subscriptions, die
+    // sauber schliessen). Mit der LRU flog 'lebender-tab' aus dem Set: nach dem
+    // letzten kurzlebigen leave war das Set leer, Grace feuerte, und die VM
+    // starb unter dem noch offenen Tab.
     for (let i = 0; i < 200; i += 1) {
-      await manager.enter(ctx('p1'), `flut-${i}`);
+      await manager.enter(ctx('p1'), `kurz-${i}`);
     }
-    // Alle bekannten Fluter + echten Tab leaven: das Set leert sich und Grace greift.
-    manager.leave('p1', 'echter-tab');
     for (let i = 0; i < 200; i += 1) {
-      manager.leave('p1', `flut-${i}`);
+      manager.leave('p1', `kurz-${i}`);
     }
     await Bun.sleep(120);
-    // Wenn das Set leer ist, ist die Sandbox gestoppt.
-    if (manager.viewerCount('p1') === 0) {
-      expect(provider.stopCalls).toContain('p1');
+    expect(manager.status('p1')).toBe('running');
+    expect(provider.stopCalls).toEqual([]);
+
+    // Erst wenn auch der lebende Betrachter geht, greift Grace.
+    manager.leave('p1', 'lebender-tab');
+    await Bun.sleep(120);
+    expect(manager.status('p1')).toBe('stopped');
+    expect(provider.stopCalls).toEqual(['p1']);
+  });
+
+  test('die Set-Groesse entspricht exakt den lebenden Betrachtern', async () => {
+    const { manager } = setup({ graceMs: 10_000 });
+    for (let i = 0; i < 500; i += 1) {
+      await manager.enter(ctx('p1'), `sub-${i}`);
     }
+    // KEINE Verdraengung: alle 500 leben (ihre Subscriptions sind offen) und
+    // zaehlen. Das Wachstum ist durch offene Verbindungen begrenzt, nicht
+    // durch eine Obergrenze im Manager.
+    expect(manager.viewerCount('p1')).toBe(500);
+    for (let i = 0; i < 500; i += 1) {
+      manager.leave('p1', `sub-${i}`);
+    }
+    expect(manager.viewerCount('p1')).toBe(0);
+  });
+});
+
+/**
+ * Defekt 2 (H11): Die Betrachter-Eintraege gehoeren zur Lebensdauer der
+ * SUBSCRIPTION, nicht der VM. Eine offene Subscription ueberlebt einen
+ * VM-Stopp (der SSE-Stream reisst dabei nicht ab) und traegt sich danach nie
+ * erneut ein: enter() laeuft genau einmal beim Aufbau, ensureRunning zaehlt
+ * bewusst nicht. Leerte stop() das Set, stoppte ein spaeterer Neustart die VM
+ * per Grace UNTER dem noch offenen, zuschauenden Tab.
+ */
+describe('Betrachter ueberleben einen VM-Stopp (H11, Defekt 2)', () => {
+  test('nach Idle-Stopp + ensureRunning ist Grace NICHT scharf, solange der Betrachter lebt', async () => {
+    const { manager, provider } = setup({ graceMs: 20, idleMs: 10_000 });
+    await manager.enter(ctx('p1'), 'tab-1');
+    // 30-min-Idle-Stopp bei offenem Tab — die Subscription lebt weiter.
+    await manager.stop('p1');
+    expect(manager.status('p1')).toBe('stopped');
+    expect(manager.viewerCount('p1')).toBe(1);
+
+    // User schickt eine Nachricht → sendMessage startet die VM via ensureRunning.
+    await manager.ensureRunning(ctx('p1'));
+    await Bun.sleep(120);
+    // Ohne Fix: viewers wurde bei stop() geleert, ensureRunning sah 0
+    // Betrachter, Grace wurde scharf und stoppte die VM unter dem offenen Tab.
+    expect(manager.status('p1')).toBe('running');
+    expect(provider.stopCalls).toEqual(['p1']); // nur der Idle-Stopp
+
+    // Erst das garantierte leave der Subscription (releaseOnClose) gibt frei.
+    manager.leave('p1', 'tab-1');
+    await Bun.sleep(120);
+    expect(manager.status('p1')).toBe('stopped');
+    expect(provider.stopCalls).toEqual(['p1', 'p1']);
+  });
+
+  test('geht der Betrachter, WAEHREND die VM gestoppt ist, zaehlt er beim Neustart nicht mehr', async () => {
+    const { manager } = setup({ graceMs: 20 });
+    await manager.enter(ctx('p1'), 'tab-1');
+    await manager.stop('p1');
+
+    // Tab schliesst bei gestoppter VM: das leave muss den Eintrag TROTZDEM
+    // austragen — sonst zaehlte ein toter Betrachter beim Neustart weiter und
+    // die VM liefe bis zum Idle-Stopp, obwohl niemand mehr zusieht.
+    manager.leave('p1', 'tab-1');
+    expect(manager.viewerCount('p1')).toBe(0);
+
+    await manager.ensureRunning(ctx('p1'));
+    await Bun.sleep(120);
+    // Invariante nach Neustart: 0 Betrachter ⇒ Grace laeuft und stoppt.
+    expect(manager.status('p1')).toBe('stopped');
+  });
+
+  test('auch ein enter() nach dem Stopp uebernimmt die ueberlebenden Betrachter', async () => {
+    const { manager } = setup({ graceMs: 20 });
+    await manager.enter(ctx('p1'), 'tab-1');
+    await manager.stop('p1');
+
+    // Ein zweiter Tab oeffnet nach dem Stopp: beide Betrachter zaehlen.
+    await manager.enter(ctx('p1'), 'tab-2');
+    expect(manager.viewerCount('p1')).toBe(2);
+
+    manager.leave('p1', 'tab-2');
+    await Bun.sleep(120);
+    // tab-1 lebt noch — kein Stopp.
+    expect(manager.status('p1')).toBe('running');
+
+    manager.leave('p1', 'tab-1');
+    await Bun.sleep(120);
+    expect(manager.status('p1')).toBe('stopped');
+  });
+
+  test('ein gescheiterter enter() hinterlaesst keinen Betrachter-Eintrag', async () => {
+    // Scheitert der Start, kommt die Subscription nie zustande — ihr
+    // garantiertes leave (releaseOnClose) wird also nie installiert. Da die
+    // Betrachter jetzt VM-Stopps ueberleben, muss enter() seinen Eintrag
+    // SELBST zuruecknehmen, sonst zaehlte ein toter Betrachter beim naechsten
+    // Start weiter und die VM liefe ohne Zuschauer bis zum Idle-Stopp.
+    let scheitern = true;
+    const provider: SandboxProvider = {
+      async start(): Promise<SandboxHandle> {
+        if (scheitern) throw new Error('msb antwortet nicht');
+        return { previewHostPort: 1, previewStatus: () => 'ready' as const, stop: async () => {} };
+      },
+    };
+    const manager = new SandboxManager({ provider, graceMs: 20, idleMs: 10_000, maxSandboxes: 8 });
+
+    await expect(manager.enter(ctx('p1'), 'tab-1')).rejects.toThrow('msb antwortet nicht');
+    expect(manager.viewerCount('p1')).toBe(0);
+
+    // Der naechste Start (ohne Betrachter) muss deshalb per Grace stoppen.
+    scheitern = false;
+    await manager.ensureRunning(ctx('p1'));
+    await Bun.sleep(120);
+    expect(manager.status('p1')).toBe('stopped');
+  });
+
+  test('auch ein enter(), das sich an einen scheiternden Start haengt, traegt sich wieder aus', async () => {
+    let startFreigeben = (): void => {};
+    const startLaeuft = new Promise<void>((resolve) => {
+      startFreigeben = resolve;
+    });
+    const provider: SandboxProvider = {
+      async start(): Promise<SandboxHandle> {
+        await startLaeuft;
+        throw new Error('msb antwortet nicht');
+      },
+    };
+    const manager = new SandboxManager({ provider, graceMs: 20, idleMs: 10_000, maxSandboxes: 8 });
+
+    const erster = manager.enter(ctx('p1'), 'tab-1');
+    await Bun.sleep(10);
+    const zweiter = manager.enter(ctx('p1'), 'tab-2');
+    await Bun.sleep(10);
+    startFreigeben();
+
+    // Beide gemeinsam einsammeln — sonst steht die Rejection des zweiten
+    // waehrend des ersten awaits kurz ohne Handler da (Unhandled Rejection).
+    const ergebnisse = await Promise.allSettled([erster, zweiter]);
+    expect(ergebnisse.map((e) => e.status)).toEqual(['rejected', 'rejected']);
+    expect(manager.viewerCount('p1')).toBe(0);
+  });
+});
+
+/**
+ * enterProject/sendMessage duerfen die Sandbox weiterhin EAGER starten (die
+ * Preview soll laden, bevor die Subscription offen ist) — aber OHNE einen
+ * Betrachter zu zaehlen: der Refcount gehoert allein der Subscription, deren
+ * Ende das einzige verlaessliche "Betrachter ist gegangen"-Signal ist.
+ */
+describe('ensureRunning: Eager-Start ohne Betrachter (enterProject/sendMessage)', () => {
+  test('startet die Sandbox, zaehlt aber keinen Betrachter', async () => {
+    const { manager, provider } = setup({ graceMs: 10_000 });
+    await manager.ensureRunning(ctx('p1'));
+    expect(manager.status('p1')).toBe('running');
+    expect(provider.startCalls).toEqual(['p1']);
+    expect(manager.viewerCount('p1')).toBe(0);
+  });
+
+  test('ohne nachfolgende Subscription stoppt Grace die Sandbox wieder', async () => {
+    // Der Missbrauchsfall aus #2: enterProject in einer Schleife auf ein
+    // fremdes Projekt darf die VM nicht dauerhaft offen pinnen — ohne lebende
+    // Subscription faellt sie nach der Grace-Period zurueck in den Stopp.
+    const { manager, provider } = setup({ graceMs: 20 });
+    await manager.ensureRunning(ctx('p1'));
+    await Bun.sleep(120);
+    expect(manager.status('p1')).toBe('stopped');
+    expect(provider.stopCalls).toEqual(['p1']);
+  });
+
+  test('eine Subscription innerhalb der Grace-Period haelt die Sandbox am Leben', async () => {
+    const { manager, provider } = setup({ graceMs: 40 });
+    await manager.ensureRunning(ctx('p1'));
+    await manager.enter(ctx('p1'), 'sub-1');
+    await Bun.sleep(150);
+    expect(manager.status('p1')).toBe('running');
+    expect(provider.stopCalls).toEqual([]);
+  });
+
+  test('stoert vorhandene Betrachter nicht', async () => {
+    const { manager, provider } = setup({ graceMs: 20 });
+    await manager.enter(ctx('p1'), 'sub-1');
+    await manager.ensureRunning(ctx('p1'));
+    await Bun.sleep(120);
+    expect(manager.status('p1')).toBe('running');
+    expect(provider.stopCalls).toEqual([]);
   });
 });

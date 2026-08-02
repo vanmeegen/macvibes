@@ -164,18 +164,20 @@ export const ChatPage = observer(function ChatPage({
     return () => projectsStore.stopPolling();
   }, [projectsStore]);
 
-  // Öffnen startet die Sandbox, Verlassen startet die Grace-Period (R9) —
-  // auch für Nur-Lese-Besucher, sonst gäbe es bei fremden Projekten keine
-  // Live-Preview (R10). Chatten bleibt Owner-only.
+  // Öffnen startet die Sandbox eager (Preview lädt, bevor die Subscription
+  // steht) — auch für Nur-Lese-Besucher, sonst gäbe es bei fremden Projekten
+  // keine Live-Preview (R10). Chatten bleibt Owner-only. KEIN leave beim
+  // Verlassen (H11): der Betrachter-Refcount hängt an der chatEvents-
+  // Subscription (Effekt darunter) — ihr Ende sieht der Server auch bei
+  // Reload, Crash und Netzabriss, eine Mutation nicht.
   useEffect(() => {
     if (projectId === null) return;
     void projectsStore.enterProject(projectId);
-    return () => {
-      void projectsStore.leaveProject(projectId);
-    };
   }, [projectsStore, projectId]);
 
-  // Chat-Historie + Live-Stream (alle angemeldeten Besucher, R10).
+  // Chat-Historie + Live-Stream (alle angemeldeten Besucher, R10). disconnect
+  // schließt die Subscription — serverseitig das Signal, dass dieser
+  // Betrachter gegangen ist und die Grace-Period beginnen darf (R9).
   useEffect(() => {
     if (projectId === null) return;
     void chatStore.connect(projectId);

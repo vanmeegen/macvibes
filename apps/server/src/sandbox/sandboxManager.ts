@@ -64,24 +64,26 @@ interface SandboxEntry {
   /** Wann zuletzt die Idle-Frist der VM zurückgesetzt wurde (ADR 0003). */
   lastVmTouchAt: number;
   /**
-   * Wer schaut gerade zu (H11), Betrachter → letzter Eintritt (für LRU).
-   * `leaveProject` ist bewusst ownership-frei, damit Besucher fremde Sandboxes
-   * wieder freigeben können (R10) — ohne Refcount stellte damit aber ein
-   * einzelner fremder Aufruf den Grace-Timer scharf und stoppte die VM des
-   * Eigentümers. Grace greift deshalb erst, wenn der LETZTE Betrachter gegangen
-   * ist.
+   * Wer schaut gerade zu (H11). Ein Betrachter = eine aktive
+   * chatEvents-Subscription: `enter` beim Aufbau, `leave` beim Ende des
+   * Iterators — auch bei Tab-Schliessen, Reload, Crash und Netzabriss, denn
+   * der GraphQL-Server beendet den Iterator dann selbst. `leave` ist bewusst
+   * ownership-frei (R10, Besucher zählen mit); die Absicherung: Grace greift
+   * erst, wenn der LETZTE Betrachter gegangen ist, und die Schlüssel sind
+   * serverseitig erzeugt — ein Fremder kann keinen fremden Betrachter austragen.
    *
-   * Begrenzt (MAX_VIEWERS): der Schlüssel ist pro Tab und wird pro Seitenladung
-   * neu erzeugt; bei Reload/Crash bleibt der alte für immer stehen, und ein
-   * enterProject in einer Schleife mit zufälligen Schlüsseln liesse das Set
-   * unbegrenzt wachsen. Bei Überschreitung werden die ältesten Einträge
-   * verdrängt — das sind mutmasslich tote Betrachter.
+   * KEINE Obergrenze/LRU: die Set-Größe ist durch die tatsächlich lebenden
+   * Subscriptions (offene Verbindungen) begrenzt. Eine LRU wäre schlimmer als
+   * das frühere Leck — verdrängt sie einen noch lebenden Betrachter, wird
+   * dessen `leave` zum No-op, der Refcount fällt nie auf 0, die VM stoppt nie.
+   *
+   * Die Einträge folgen der Lebensdauer der SUBSCRIPTION, nicht der VM: sie
+   * überleben einen VM-Stopp (stop() leert das Set nicht) und werden allein
+   * durch das garantierte `leave` am Subscription-Ende ausgetragen — auch
+   * dann, wenn die VM zu diesem Zeitpunkt gestoppt ist.
    */
-  viewers: Map<string, number>;
+  viewers: Set<string>;
 }
-
-/** Höchstzahl gleichzeitiger Betrachter pro Projekt (gegen unbegrenztes Wachstum). */
-const MAX_VIEWERS = 64;
 
 /** Mindestabstand zwischen zwei VM-Berührungen (ADR 0003). */
 const DEFAULT_VM_TOUCH_INTERVAL_MS = 60_000;
@@ -89,15 +91,17 @@ const DEFAULT_VM_TOUCH_INTERVAL_MS = 60_000;
 /**
  * Schlüssel eines Betrachters im Refcount (H11).
  *
- * Enthält die VERBINDUNG (Tab), nicht nur den Nutzer. Vorher zählte allein die
- * Nutzer-ID: öffnete dieselbe Person dasselbe Projekt zweimal, fügte der
- * zweite Eintritt nichts hinzu, und das Schliessen des ersten Tabs stellte den
- * Grace-Timer scharf — die VM starb unter dem noch offenen zweiten Tab.
+ * Enthält die VERBINDUNG, nicht nur den Nutzer: öffnete dieselbe Person
+ * dasselbe Projekt zweimal, fügte der zweite Eintritt sonst nichts hinzu, und
+ * das Ende der ersten Verbindung stellte den Grace-Timer scharf — die VM starb
+ * unter der noch offenen zweiten.
  *
- * Ohne Verbindungskennung (ältere Clients) gilt weiterhin das alte Verhalten.
+ * Die Verbindungskennung erzeugt der SERVER pro chatEvents-Subscription
+ * (crypto.randomUUID): eindeutig ohne Kollisionsrisiko (#12) und von außen
+ * nicht erratbar.
  */
-export function viewerKey(userId: string, connectionId: string | null): string {
-  return connectionId === null || connectionId === '' ? userId : `${userId}:${connectionId}`;
+export function viewerKey(userId: string, connectionId: string): string {
+  return `${userId}:${connectionId}`;
 }
 
 export class SandboxManager {
@@ -106,10 +110,30 @@ export class SandboxManager {
   constructor(private readonly options: SandboxManagerOptions) {}
 
   /**
-   * Sandbox betreten. `viewer` identifiziert den Betrachter (Nutzer-ID) und ist
-   * Pflicht, damit `leave` weiß, wer wieder gegangen ist (H11).
+   * Sandbox betreten. `viewer` identifiziert den Betrachter (eine aktive
+   * chatEvents-Subscription, H11) und ist Pflicht, damit `leave` weiß, wer
+   * wieder gegangen ist.
    */
-  async enter(context: SandboxContext, viewer: string): Promise<void> {
+  enter(context: SandboxContext, viewer: string): Promise<void> {
+    // KEIN async/await-Wrapper: der reichte die Promise einen Microtask später
+    // weiter und verschöbe die fein austarierten Lebenszyklus-Rennen (#9).
+    return this.acquire(context, viewer);
+  }
+
+  /**
+   * Sandbox eager starten, OHNE einen Betrachter zu zählen (enterProject,
+   * sendMessage). Der Refcount gehört allein der chatEvents-Subscription:
+   * nur deren Ende ist ein verlässliches "Betrachter ist gegangen"-Signal —
+   * eine Mutation kommt bei Reload/Crash/Netzabriss nie. Folgt dem Eager-Start
+   * innerhalb der Grace-Period keine Subscription, stoppt die Sandbox wieder:
+   * ein enterProject-Dauerfeuer (#2) pinnt nichts dauerhaft offen.
+   */
+  ensureRunning(context: SandboxContext): Promise<void> {
+    return this.acquire(context, null);
+  }
+
+  /** Gemeinsamer Kern von enter (mit Betrachter) und ensureRunning (ohne). */
+  private async acquire(context: SandboxContext, viewer: string | null): Promise<void> {
     let existing = this.entries.get(context.projectId);
     // Ein laufender Stopp muss ZUERST fertig werden (F17): sonst startet hier
     // eine neue VM unter demselben msb-Namen, während stop() noch auf den
@@ -121,19 +145,43 @@ export class SandboxManager {
     if (existing && existing.status === 'starting' && existing.startPromise) {
       // Start läuft schon — darauf warten, damit der Agent nicht auf eine noch
       // nicht exec-bereite VM losfeuert ("no agent endpoint found", Race-Fix).
-      this.addViewer(existing, viewer);
-      this.clearGrace(existing);
-      await existing.startPromise;
+      if (viewer !== null) {
+        existing.viewers.add(viewer);
+        this.clearGrace(existing);
+      }
+      try {
+        await existing.startPromise;
+      } catch (error) {
+        // Gescheiterter enter(): die Subscription kommt nie zustande, ihr
+        // garantiertes leave (releaseOnClose) wird nie installiert. Da die
+        // Betrachter VM-Stopps überleben, den eben gesetzten Eintrag selbst
+        // zurücknehmen — sonst bliebe er als Stale-Eintrag für immer stehen.
+        if (viewer !== null) existing.viewers.delete(viewer);
+        throw error;
+      }
       this.touch(existing);
       return;
     }
     if (existing && existing.status === 'running') {
-      this.addViewer(existing, viewer);
-      this.clearGrace(existing);
+      if (viewer !== null) {
+        existing.viewers.add(viewer);
+        this.clearGrace(existing);
+      } else if (existing.viewers.size === 0) {
+        // Eager-Start ohne Betrachter auf laufender VM: Grace (neu) aufziehen,
+        // damit die Invariante "keine Betrachter ⇒ Grace läuft" bestehen bleibt.
+        this.armGrace(existing);
+      }
       this.touch(existing);
       return;
     }
 
+    // Betrachter des gestoppten Vorgaenger-Eintrags UEBERNEHMEN (H11): die
+    // Eintraege gehoeren zur Lebensdauer der Subscription, nicht der VM. Eine
+    // offene Subscription ueberlebt einen VM-Stopp (der SSE-Stream reisst
+    // dabei nicht ab) und traegt sich nie erneut ein — begaenne der Neustart
+    // bei 0, waere Grace scharf und stoppte die VM unter dem offenen Tab.
+    const viewers = existing?.viewers ?? new Set<string>();
+    if (viewer !== null) viewers.add(viewer);
     const entry: SandboxEntry = {
       context,
       status: 'stopped',
@@ -144,7 +192,7 @@ export class SandboxManager {
       startPromise: null,
       stopPromise: null,
       lastVmTouchAt: 0,
-      viewers: new Map([[viewer, Date.now()]]),
+      viewers,
     };
     this.entries.set(context.projectId, entry);
     // Status und startPromise SYNCHRON setzen, bevor irgendein await folgt:
@@ -170,48 +218,49 @@ export class SandboxManager {
       if (entry.stopPromise === null) {
         this.setStatus(entry, 'running');
         this.touch(entry);
+        // Eager-Start ohne (inzwischen) verbliebenen Betrachter: Grace sofort
+        // scharf — kommt keine Subscription nach, stoppt die VM wieder (H11).
+        if (entry.viewers.size === 0) this.armGrace(entry);
       }
     })();
     entry.startPromise = startWork;
     try {
       await startWork;
+    } catch (error) {
+      // Wie im starting-Pfad oben: ein gescheiterter enter() muss seinen
+      // Betrachter-Eintrag selbst zurücknehmen (kein garantiertes leave, weil
+      // die Subscription nie zustande kommt).
+      if (viewer !== null) entry.viewers.delete(viewer);
+      throw error;
     } finally {
       entry.startPromise = null;
     }
   }
 
   /**
-   * Sandbox freigeben. Grace wird erst scharf, wenn der letzte Betrachter
-   * gegangen ist (H11) — ein `leave` eines Fremden, während der Eigentümer noch
-   * zusieht, bleibt damit wirkungslos. Ein `leave` für einen Betrachter, der nie
-   * eingetreten ist, ändert gar nichts.
+   * Sandbox freigeben — beim Ende der chatEvents-Subscription des Betrachters.
+   * Grace wird erst scharf, wenn der letzte Betrachter gegangen ist (H11) — ein
+   * `leave` eines Fremden, während der Eigentümer noch zusieht, bleibt damit
+   * wirkungslos. Ein `leave` für einen Betrachter, der nie eingetreten ist,
+   * ändert gar nichts.
    */
   leave(projectId: string, viewer: string): void {
     const entry = this.entries.get(projectId);
-    if (!entry || (entry.status !== 'running' && entry.status !== 'starting')) return;
+    if (!entry) return;
+    // Den Eintrag IMMER austragen, auch bei gestoppter VM: die Betrachter-
+    // Eintraege ueberleben einen VM-Stopp (H11), also muss auch das leave
+    // einer Subscription, die waehrend des Stopps endet, den Stand bereinigen —
+    // sonst zaehlte ein toter Betrachter beim naechsten Start weiter und
+    // hielte die VM ohne Zuschauer bis zum Idle-Stopp am Leben.
     if (!entry.viewers.delete(viewer)) return;
+    // Grace nur scharf stellen, wenn ueberhaupt etwas laeuft, das zu stoppen
+    // waere — und nur, wenn der LETZTE Betrachter gegangen ist.
+    if (entry.status !== 'running' && entry.status !== 'starting') return;
     if (entry.viewers.size > 0) return;
     this.armGrace(entry);
   }
 
-  /**
-   * Betrachter aufnehmen und die Obergrenze durchsetzen. Über MAX_VIEWERS
-   * werden die ältesten Einträge verdrängt (LRU) — bei Reload/Crash ohne
-   * `leave` sind das mutmasslich tote Betrachter, und ein Schleifen-Missbrauch
-   * kann das Set so nicht unbegrenzt aufblähen.
-   */
-  private addViewer(entry: SandboxEntry, viewer: string): void {
-    entry.viewers.set(viewer, Date.now());
-    if (entry.viewers.size <= MAX_VIEWERS) return;
-    // Map bewahrt Einfügereihenfolge; ein erneuter set() aktualisiert den Wert,
-    // rückt den Schlüssel aber NICHT ans Ende — deshalb nach seenAt sortieren.
-    const nachAlter = [...entry.viewers.entries()].sort((a, b) => a[1] - b[1]);
-    for (const [key] of nachAlter.slice(0, entry.viewers.size - MAX_VIEWERS)) {
-      entry.viewers.delete(key);
-    }
-  }
-
-  /** Zahl der aktuell gezählten Betrachter (H11-Refcount). */
+  /** Zahl der aktuell gezählten Betrachter (H11-Refcount, lebende Subscriptions). */
   viewerCount(projectId: string): number {
     return this.entries.get(projectId)?.viewers.size ?? 0;
   }
@@ -304,9 +353,15 @@ export class SandboxManager {
         await entry.handle?.stop();
       } finally {
         entry.handle = null;
-        // Betrachterstand fällt mit der VM: ein alter Eintrag würde sonst den
-        // nächsten Start blockieren, weil sein leave nie mehr käme (H11).
-        entry.viewers.clear();
+        // `viewers` bleibt BEWUSST stehen (H11): die Betrachter-Einträge
+        // gehören zur Lebensdauer der SUBSCRIPTION, nicht der VM. Eine offene
+        // Subscription überlebt den VM-Stopp (der SSE-Stream reißt dabei nicht
+        // ab) und trägt sich nie erneut ein — leerte stop() das Set, sähe ein
+        // späterer Neustart (ensureRunning nach sendMessage) 0 Betrachter,
+        // Grace würde scharf und stoppte die VM unter dem offenen Tab.
+        // Stale-Einträge entstehen dadurch nicht: das garantierte leave am
+        // Ende jeder Subscription (releaseOnClose) räumt jeden Eintrag
+        // zuverlässig aus, auch während die VM gestoppt ist.
         this.setStatus(entry, 'stopped');
       }
     })();
@@ -347,6 +402,12 @@ export class SandboxManager {
     }
     this.clearGrace(entry);
     this.clearIdle(entry);
+    // HIER ist das Leeren richtig (anders als in stop(), wo die Betrachter den
+    // VM-Stopp überleben müssen): forget läuft nur bei Projektlöschung, und
+    // dort sind die Einträge wertlos — deleteProject ruft chatService.forget,
+    // das die Subscriber-Registrierung leert (die Iteratoren enden erst mit dem
+    // Client-Disconnect, liefern aber nichts mehr). Ihr garantiertes leave
+    // (releaseOnClose) findet danach keinen Eintrag mehr und ist ein No-op.
     entry.viewers.clear();
     this.entries.delete(projectId);
   }
