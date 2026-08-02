@@ -10,6 +10,11 @@ export interface GatewayApi {
   subscribe(sandbox: string, listener: GatewayListener): () => void;
   /** Verwirft eine (mutmaßlich halbtote) Verbindung — Reconnect heilt. */
   invalidate(sandbox: string): void;
+  /**
+   * Baut eine LEBENDIGE Verbindung geordnet ab (Close-Handshake): gepufferte
+   * Frames werden noch geflusht, die Registrierung ist sofort frei.
+   */
+  closeGracefully(sandbox: string): void;
 }
 
 export interface DaemonAgentRunnerConfig {
@@ -87,11 +92,15 @@ export class DaemonAgentRunner implements AgentRunner {
         // chatService trifft dann einen sauberen Daemon.
         acked = true;
         const neustartAngefordert = gateway.send(sandbox, { kind: 'shutdown' });
-        // Die veraltete Verbindung verwerfen (wie im ack-Timeout-Pfad): der
-        // sich beendende Daemon liest nicht mehr, aber sein Socket bliebe sonst
-        // registriert. Ohne das kehrte waitForConnection des Retrys sofort auf
-        // ihn zurück und der Retry liefe wieder in die tote Verbindung.
-        gateway.invalidate(sandbox);
+        // Die veraltete Verbindung GEORDNET abbauen — anders als im
+        // ack-Timeout-Pfad (invalidate/terminate für eine mutmaßlich tote
+        // Verbindung) ist sie hier lebendig (der Daemon hat gerade
+        // turn-rejected gesendet). Der Close-Handshake flusht die eben
+        // gesendete shutdown-Frame noch; terminate() würde sie verwerfen und
+        // der Daemon bliebe verklemmt. Danach ist die Registrierung frei,
+        // waitForConnection des chatService-Retrys wartet echt auf den
+        // frischen Daemon statt sofort auf den sterbenden zurückzukehren.
+        gateway.closeGracefully(sandbox);
         pushAll(
           neustartAngefordert
             ? [{ type: 'turn-aborted' }]

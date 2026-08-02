@@ -10,10 +10,15 @@ class FakeGateway {
   connected = true;
   sendSucceeds = true;
   invalidated: string[] = [];
+  closedGracefully: string[] = [];
   private readonly listeners = new Map<string, Set<GatewayListener>>();
 
   invalidate(sandbox: string): void {
     this.invalidated.push(sandbox);
+  }
+
+  closeGracefully(sandbox: string): void {
+    this.closedGracefully.push(sandbox);
   }
 
   async waitForConnection(sandbox: string, timeoutMs: number): Promise<void> {
@@ -260,10 +265,15 @@ describe('Verklemmter Daemon: Neustart anfordern', () => {
 
     const events = await gesammelt;
     expect(gw.sent.some((m) => m.kind === 'shutdown')).toBe(true);
-    // Die veraltete Verbindung des sich beendenden Daemons MUSS verworfen
-    // werden — sonst kehrt waitForConnection des chatService-Retrys sofort auf
-    // sie zurück und sendet in einen Socket, den niemand mehr liest.
-    expect(gw.invalidated).toContain('sb-p1');
+    // Die veraltete Verbindung des sich beendenden Daemons MUSS aus der
+    // Registrierung — sonst kehrt waitForConnection des chatService-Retrys
+    // sofort auf sie zurück und sendet in einen Socket, den niemand mehr
+    // liest. Aber GEORDNET (close mit Handshake, flusht die shutdown-Frame),
+    // NICHT abrupt (terminate/invalidate): terminate() verwirft die noch
+    // gepufferte shutdown-Frame, der In-VM-Supervisor bekäme den Neustart nie
+    // und der Daemon bliebe verklemmt.
+    expect(gw.closedGracefully).toContain('sb-p1');
+    expect(gw.invalidated).toEqual([]);
     // Der Turn endet — der Retry des chatService trifft den frischen Daemon.
     expect(events.at(-1)).toEqual({ type: 'turn-aborted' });
   });

@@ -209,6 +209,66 @@ describe('AgentGateway', () => {
 });
 
 /**
+ * Geordneter Verbindungsabbau für den Daemon-Neustart: nach einem
+ * turn-rejected ist die Verbindung LEBENDIG (der Daemon hat gerade gesendet).
+ * Der Runner schickt `shutdown` und muss die Verbindung danach loswerden —
+ * aber mit Close-Handshake (flusht die gepufferte shutdown-Frame), nicht per
+ * terminate() wie `invalidate` (das ist für mutmaßlich TOTE Verbindungen und
+ * verwirft ungesendete Frames — der Supervisor bekäme den Neustart nie).
+ */
+describe('AgentGateway.closeGracefully', () => {
+  test('nimmt die Verbindung aus der Registrierung und flusht eine zuvor gesendete Frame', async () => {
+    const h = makeHarness();
+    const ws = await openSocket(h.url('sb-1'));
+    const incoming: string[] = [];
+    ws.addEventListener('message', (e) => incoming.push(String(e.data)));
+    await h.gateway.waitForConnection('sb-1', 2000);
+
+    expect(h.gateway.send('sb-1', { kind: 'shutdown' })).toBe(true);
+    h.gateway.closeGracefully('sb-1');
+
+    // Sofort deregistriert: waitForConnection eines Retrys wartet echt.
+    expect(h.gateway.isConnected('sb-1')).toBe(false);
+    // Der Close-Handshake erreicht den Client — und die vorher gesendete
+    // shutdown-Frame kommt trotz Close noch an (kein terminate-Verwurf).
+    await waitForClose(ws);
+    expect(incoming.map((raw) => JSON.parse(raw) as unknown)).toContainEqual({ kind: 'shutdown' });
+  });
+
+  test('feuert kein falsches disconnected; ein Reconnect registriert danach sauber', async () => {
+    const h = makeHarness();
+    const received: GatewayNotification[] = [];
+    h.gateway.subscribe('sb-1', (n) => received.push(n));
+    const first = await openSocket(h.url('sb-1'));
+    await h.gateway.waitForConnection('sb-1', 2000);
+
+    h.gateway.closeGracefully('sb-1');
+    await waitForClose(first);
+    expect(h.gateway.isConnected('sb-1')).toBe(false);
+    // Der Runner beendet den Turn selbst (turn-aborted) — ein zusätzliches
+    // disconnected wäre ein zweiter, falscher Abbruch (wie bei invalidate).
+    expect(received.filter((n) => n.kind === 'disconnected')).toEqual([]);
+
+    // Der neu gestartete Daemon wählt sich frisch ein — genau darauf wartet
+    // der chatService-Retry.
+    const waiting = h.gateway.waitForConnection('sb-1', 2000);
+    const second = await openSocket(h.url('sb-1'));
+    await waiting;
+    expect(h.gateway.isConnected('sb-1')).toBe(true);
+    const incoming: string[] = [];
+    second.addEventListener('message', (e) => incoming.push(String(e.data)));
+    h.gateway.send('sb-1', { kind: 'interrupt', turnId: 't-neu' });
+    await Bun.sleep(50);
+    expect(incoming).toHaveLength(1);
+  });
+
+  test('ohne registrierte Verbindung ein No-Op', () => {
+    const h = makeHarness();
+    expect(() => h.gateway.closeGracefully('sb-unbekannt')).not.toThrow();
+  });
+});
+
+/**
  * F4: Vorher prüfte das Gateway nur das prozessweite Shared Secret — das jede
  * VM besitzt — und übernahm den frei wählbaren sandbox-Parameter als
  * Identität. Eine VM konnte sich damit als fremdes Projekt anmelden, dessen

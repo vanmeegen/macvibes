@@ -121,6 +121,25 @@ export class AgentGateway {
     ws.terminate();
   }
 
+  /**
+   * Baut die registrierte Verbindung einer Sandbox GEORDNET ab — der Weg für
+   * eine LEBENDIGE Verbindung (z. B. Daemon-Neustart nach turn-rejected):
+   * `close()` macht den Close-Handshake und flusht zuvor gesendete, ggf. noch
+   * gepufferte Frames (etwa das shutdown-Kommando), bevor die Close-Frame
+   * rausgeht — `terminate()` (invalidate) würde sie verwerfen und der In-VM-
+   * Supervisor bekäme den Neustart nie. Die Registrierung wird sofort
+   * geräumt, damit waitForConnection echt auf den Reconnect wartet.
+   */
+  closeGracefully(sandbox: string): void {
+    const ws = this.connections.get(sandbox);
+    if (ws === undefined) return;
+    // ERST deregistrieren: onClose feuert für eine nicht (mehr) registrierte
+    // Verbindung kein "disconnected" — der bewusste Abbau ist kein Ausfall.
+    this.connections.delete(sandbox);
+    console.log(`Agent-Gateway: Verbindung von ${sandbox} geordnet abgebaut (Neustart)`);
+    ws.close(4001, 'Neustart angefordert');
+  }
+
   /** Abonniert Nachrichten/Disconnects einer Sandbox; Rückgabe: Abbestellen. */
   subscribe(sandbox: string, listener: GatewayListener): () => void {
     const set = this.listeners.get(sandbox) ?? new Set();
