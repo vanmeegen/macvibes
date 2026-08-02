@@ -321,6 +321,112 @@ describe('ChatStore', () => {
       expect(variables).toEqual({ projectId: 'p1' });
     });
   });
+
+  describe('stop — sequenziert hinter einen laufenden Send (Server: „Stop ins Leere" ist No-op)', () => {
+    it('schickt StopTurn erst ab, wenn der laufende SendMessage-Roundtrip fertig ist', async () => {
+      // SendMessage hängt am Gate — der Roundtrip ist in-flight.
+      let resolveSend: (v: unknown) => void = () => {};
+      gqlRequestMock.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSend = resolve;
+          }),
+      );
+      const store = new ChatStore();
+      store.projectId = 'p1';
+      store.setDraft('Bau mir was');
+      const sending = store.send();
+
+      gqlRequestMock.mockResolvedValueOnce({ stopTurn: true });
+      const stopping = store.stop();
+
+      // Microtasks abarbeiten lassen — StopTurn darf trotzdem NICHT raus sein,
+      // solange SendMessage den Server noch nicht erreicht hat.
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(gqlRequestMock).toHaveBeenCalledTimes(1);
+      expect(gqlRequestMock.mock.calls[0]?.[0]).toContain('SendMessage');
+
+      // Gate öffnen: Send kommt an, DANACH geht StopTurn raus.
+      resolveSend({ sendMessage: true });
+      await sending;
+      await stopping;
+      expect(gqlRequestMock).toHaveBeenCalledTimes(2);
+      expect(gqlRequestMock.mock.calls[1]?.[0]).toContain('StopTurn');
+    });
+
+    it('schickt StopTurn sofort, wenn kein Send in-flight ist (Regression)', () => {
+      gqlRequestMock.mockResolvedValue({ stopTurn: true });
+      const store = new ChatStore();
+      store.projectId = 'p1';
+      // Nicht awaiten: die Mutation muss bereits synchron abgeschickt sein.
+      void store.stop();
+      expect(gqlRequestMock).toHaveBeenCalledTimes(1);
+      expect(gqlRequestMock.mock.calls[0]?.[0]).toContain('StopTurn');
+    });
+
+    it('wirft nicht und schickt StopTurn trotzdem, wenn der laufende Send scheitert', async () => {
+      // Ein gescheiterter Send macht den Stop gegenstandslos — aber er darf
+      // weder crashen noch verschluckt werden: der Server macht daraus
+      // schlimmstenfalls ein No-op.
+      let rejectSend: (err: unknown) => void = () => {};
+      gqlRequestMock.mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectSend = reject;
+          }),
+      );
+      const store = new ChatStore();
+      store.projectId = 'p1';
+      store.setDraft('Wichtig');
+      const sending = store.send();
+
+      gqlRequestMock.mockResolvedValueOnce({ stopTurn: true });
+      const stopping = store.stop();
+
+      rejectSend(new Error('Netz weg'));
+      await sending;
+      await expect(stopping).resolves.toBeUndefined();
+
+      const stopCalls = gqlRequestMock.mock.calls.filter(([query]) => query.includes('StopTurn'));
+      expect(stopCalls).toHaveLength(1);
+    });
+
+    it('wartet bei mehreren schnellen Sends auf den ZULETZT gestarteten', async () => {
+      const sendResolvers: Array<(v: unknown) => void> = [];
+      gqlRequestMock.mockImplementation((query) => {
+        if (query.includes('SendMessage')) {
+          return new Promise((resolve) => {
+            sendResolvers.push(resolve);
+          });
+        }
+        return Promise.resolve({ stopTurn: true });
+      });
+      const store = new ChatStore();
+      store.projectId = 'p1';
+      store.setDraft('erste');
+      const send1 = store.send();
+      store.setDraft('zweite');
+      const send2 = store.send();
+
+      const stopping = store.stop();
+
+      // Nur der ERSTE Send wird fertig — der zweite ist noch in-flight,
+      // StopTurn muss weiter warten.
+      sendResolvers[0]?.({ sendMessage: true });
+      await send1;
+      await Promise.resolve();
+      expect(gqlRequestMock.mock.calls.filter(([q]) => q.includes('StopTurn'))).toHaveLength(0);
+
+      sendResolvers[1]?.({ sendMessage: true });
+      await send2;
+      await stopping;
+      const calls = gqlRequestMock.mock.calls.map(([q]) =>
+        q.includes('StopTurn') ? 'stop' : 'send',
+      );
+      expect(calls).toEqual(['send', 'send', 'stop']);
+    });
+  });
 });
 
 describe('Chat ausblendbar (Preview im Vollbild)', () => {

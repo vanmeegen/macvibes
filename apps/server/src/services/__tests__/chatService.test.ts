@@ -6,7 +6,12 @@ import type { AgentEvent } from '../../agent/events';
 import type { AgentRunner, TurnHandle, TurnOptions } from '../../agent/runner';
 import type { Db } from '../../db/client';
 import { projects, type UserRow } from '../../db/schema';
-import { ChatService, MAX_MESSAGE_CHARS, type ChatEventPayload } from '../chatService';
+import {
+  ChatService,
+  MAX_MESSAGE_CHARS,
+  type ChatEventPayload,
+  type ChatServiceOptions,
+} from '../chatService';
 import { createTestDb, createUser } from './testUtils';
 
 async function waitFor(
@@ -68,10 +73,10 @@ async function setup(
   return { db, service, projectId, turnEnds, activity };
 }
 
-/** Wie `setup`, aber mit frei gesetzten ChatService-Optionen (z. B. Fenster). */
+/** Wie `setup`, aber mit frei gesetzten ChatService-Optionen. */
 async function setupChat(
   runner: AgentRunner,
-  options: { stopNextWindowMs?: number } = {},
+  options: ChatServiceOptions = {},
 ): Promise<TestSetup> {
   const db = createTestDb();
   const owner = await createUser(db, 'marco');
@@ -984,64 +989,364 @@ describe('Abbruch ist kein Flake — kein stiller zweiter Durchlauf', () => {
     const messages = await service.listMessages(projectId);
     expect(messages.find((m) => m.role === 'system')?.content).toContain('abgebrochen');
   });
+});
 
-  test('ein Stop, dem KEIN Turn im Fenster folgt, bricht einen späteren nicht ab', async () => {
-    // stopTurn merkt den Abbruch vor, wenn noch kein Handle steht. Lief aber gar
-    // nichts (Doppelklick, veralteter turnActive-Stand im Client) und folgt auch
-    // keine Nachricht im Fenster, muss der Wunsch verfallen — sonst wird der
-    // nächste, völlig unbeteiligte Turn abgebrochen. Fenster hier winzig (10 ms).
+/**
+ * Runner, bei dem jeder gestartete Turn einzeln steuerbar ist: `fertigstellen`
+ * lässt ihn normal enden (Echo + turn-completed), ein `abort()` seines Handles
+ * liefert NUR `turn-aborted` — wie ein Abbruch, der ernst genommen wird.
+ */
+function steuerbarerRunner(): {
+  runner: AgentRunner;
+  starts: string[];
+  laeufe: { fertigstellen: () => void; abgebrochen: () => boolean }[];
+} {
+  const starts: string[] = [];
+  const laeufe: { fertigstellen: () => void; abgebrochen: () => boolean }[] = [];
+  const runner: AgentRunner = {
+    startTurn(options: TurnOptions): TurnHandle {
+      starts.push(options.prompt);
+      let fertig: () => void = () => {};
+      let abbruch: () => void = () => {};
+      let abgebrochen = false;
+      const fertigDa = new Promise<void>((resolve) => {
+        fertig = resolve;
+      });
+      const abbruchDa = new Promise<void>((resolve) => {
+        abbruch = resolve;
+      });
+      laeufe.push({ fertigstellen: () => fertig(), abgebrochen: () => abgebrochen });
+      const nummer = laeufe.length;
+      const prompt = options.prompt;
+      const events = (async function* (): AsyncGenerator<AgentEvent> {
+        const ausgang = await Promise.race([
+          abbruchDa.then(() => 'abbruch' as const),
+          fertigDa.then(() => 'fertig' as const),
+        ]);
+        if (ausgang === 'abbruch') {
+          yield { type: 'turn-aborted' };
+          return;
+        }
+        yield { type: 'text-delta', text: `Echo: ${prompt}` };
+        yield { type: 'turn-completed', sessionId: `sess-${nummer}` };
+      })();
+      return {
+        events,
+        abort: () => {
+          abgebrochen = true;
+          abbruch();
+        },
+      };
+    },
+  };
+  return { runner, starts, laeufe };
+}
+
+/**
+ * Db-Hülle, die den `insertMessage`-Insert gezielt anhalten kann: erst wenn
+ * das `tor` auflöst, kehrt das await in `insertMessage` zurück. Damit lassen
+ * sich die Races im Fenster „User-Zeile wird geschrieben" DETERMINISTISCH
+ * erzwingen, statt sie per sleep zu erraten. Die echte Insert-Ausführung läuft
+ * vorher vollständig — nur die Rückgabe an den ChatService wird verzögert.
+ */
+function dbMitInsertTor(
+  db: Db,
+  greift: (werte: Record<string, unknown>) => boolean,
+  tor: () => Promise<void>,
+): Db {
+  const echterInsert = db.insert.bind(db) as (tabelle: unknown) => {
+    values: (werte: unknown) => { returning: () => Promise<unknown> };
+  };
+  return new Proxy(db, {
+    get(ziel, eigenschaft, empfaenger): unknown {
+      if (eigenschaft !== 'insert') return Reflect.get(ziel, eigenschaft, empfaenger);
+      return (tabelle: unknown) => ({
+        values: (werte: Record<string, unknown>) => ({
+          returning: async (): Promise<unknown> => {
+            const zeilen = await echterInsert(tabelle).values(werte).returning();
+            if (greift(werte)) await tor();
+            return zeilen;
+          },
+        }),
+      });
+    },
+  }) as Db;
+}
+
+/**
+ * Das Gegenwartsmodell: „Stop heißt Stop — Gegenwart, kein aufgeschobener
+ * Wunsch." Ein Abbruch wirkt SYNCHRON auf den Turn, der JETZT aktiv ist
+ * (läuft mit Handle ODER startet gerade), und erzeugt keine Verpflichtung,
+ * die in die Zukunft reist. Die Matrix deckt die drei historischen Fehler
+ * ab: #5 (verlorene frühere Queue-Nachricht), #6 (Stop ins Leere bricht die
+ * nächste Nachricht ab), #7 (Interrupt bricht die eigene Nachricht ab).
+ */
+describe('Gegenwartsmodell: Stop/Interrupt treffen nur den JETZT aktiven Turn', () => {
+  test('(1) Stop während laufendem Turn: abgebrochen, kein Retry, Abbruch sichtbar', async () => {
     const starts: string[] = [];
-    const { service, projectId } = await setupChat(abbrechbarerRunner(starts), {
-      stopNextWindowMs: 10,
-    });
+    const { service, projectId, turnEnds } = await setupChat(abbrechbarerRunner(starts, 10_000));
+    await service.sendMessage(sendInput(projectId, 'lange Aufgabe'));
+    await waitFor(() => starts.length === 1);
+
+    service.stopTurn(projectId);
+    await waitFor(() => !service.isTurnActive(projectId), 15_000);
+
+    expect(starts).toEqual(['lange Aufgabe']); // kein zweiter Versuch
+    expect(turnEnds).toEqual([]); // kein onTurnEnd → kein Auto-Commit
+    const messages = await service.listMessages(projectId);
+    expect(messages.find((m) => m.role === 'system')?.content).toContain('abgebrochen');
+  });
+
+  test('(2) Stop ins Leere ist ein No-op — eine danach gesendete Nachricht läuft normal (#6)', async () => {
+    // Vorher setzte ein Stop ohne laufenden Turn ein Zeitfenster, das die
+    // NÄCHSTE, unabhängige Nachricht abbrach (#6). Produktentscheid
+    // „Gegenwart": nichts läuft = nichts zu stoppen = nichts passiert — auch
+    // für eine UNMITTELBAR danach eintreffende Nachricht (die alte
+    // R6-Reihenfolge-Race wird bewusst nicht mehr rückwirkend gestoppt).
+    const starts: string[] = [];
+    const { service, projectId } = await setupChat(abbrechbarerRunner(starts, 20));
 
     service.stopTurn(projectId); // nichts läuft, nichts in der Queue
-    await Bun.sleep(40); // Fenster verstreichen lassen
-
     await service.sendMessage(sendInput(projectId, 'ganz normaler Prompt'));
     await waitFor(() => !service.isTurnActive(projectId), 15_000);
 
     expect(starts).toEqual(['ganz normaler Prompt']);
     const messages = await service.listMessages(projectId);
     expect(messages.find((m) => m.content.includes('zweiter Versuch'))).toBeUndefined();
-    expect(messages.find((m) => m.role === 'system')?.content).toBeUndefined();
+    expect(messages.find((m) => m.role === 'system')).toBeUndefined();
+    expect(messages.some((m) => m.role === 'assistant' && m.content === 'fertig')).toBe(true);
   });
 
-  test('#5 ein Stop VOR der Nachricht (R6-Race) bricht sie trotzdem ab', async () => {
-    // Die UI zeigt den Stop-Button optimistisch; über HTTP/2 kann stopTurn vor
-    // sendMessage abgearbeitet werden. Vorher verpuffte der Stop dann und der
-    // Agent führte den gestoppten Prompt vollständig aus.
-    const starts: string[] = [];
-    const { service, projectId, turnEnds } = await setupChat(abbrechbarerRunner(starts, 10_000), {
-      stopNextWindowMs: 5_000,
-    });
+  test('(3) Stop im Startfenster (Handle fehlt noch) trifft genau den startenden Turn — und nur ihn', async () => {
+    // Deterministische Race: der echte Turn ist schon AKTIV (die Pump hat ihn
+    // aus der Queue genommen), hängt aber im await auf den Config-Warmup —
+    // sein Handle steht noch nicht. Der Stop muss sich an GENAU diesen Turn
+    // pinnen und wird eingelöst, sobald das Handle steht.
+    let releaseWarmup: () => void = () => {};
+    let warmupGestartet = false;
+    const echt = steuerbarerRunner();
+    const runner: AgentRunner = {
+      startTurn(options: TurnOptions): TurnHandle {
+        if (options.prompt.includes('bereit')) {
+          // Der stille Config-Warmup — blockiert, bis der Test ihn freigibt.
+          warmupGestartet = true;
+          const events = (async function* (): AsyncGenerator<AgentEvent> {
+            await new Promise<void>((resolve) => {
+              releaseWarmup = resolve;
+            });
+            yield { type: 'turn-completed', sessionId: null };
+          })();
+          return { events, abort: () => {} };
+        }
+        return echt.runner.startTurn(options);
+      },
+    };
+    const { service, projectId, turnEnds } = await setupChat(runner);
 
-    service.stopTurn(projectId); // Stop kommt ZUERST an
-    await service.sendMessage(sendInput(projectId, 'bitte doch stoppen'));
+    await service.prewarm(projectId, '/tmp/ws');
+    await waitFor(() => warmupGestartet);
+    await service.sendMessage(sendInput(projectId, 'echte Aufgabe'));
+    expect(echt.starts).toHaveLength(0); // Turn aktiv, aber Handle steht noch nicht
 
+    service.stopTurn(projectId);
+    releaseWarmup();
     await waitFor(() => !service.isTurnActive(projectId), 15_000);
 
-    // Der Turn wurde gestartet, aber sofort abgebrochen — nicht ausgeführt.
-    expect(starts).toEqual(['bitte doch stoppen']);
-    expect(turnEnds).toEqual([]); // kein onTurnEnd -> kein Auto-Commit
+    // Der startende Turn wurde beim Handle-Setzen abgebrochen — kein Retry.
+    expect(echt.starts).toHaveLength(1);
+    expect(echt.laeufe[0]?.abgebrochen()).toBe(true);
+    expect(turnEnds).toEqual([]);
     const messages = await service.listMessages(projectId);
     expect(messages.find((m) => m.role === 'system')?.content).toContain('abgebrochen');
+
+    // Und NUR ihn: eine spätere, unabhängige Nachricht läuft normal.
+    await service.sendMessage(sendInput(projectId, 'späterer Prompt'));
+    await waitFor(() => echt.starts.length === 2);
+    echt.laeufe[1]?.fertigstellen();
+    await waitFor(() => !service.isTurnActive(projectId));
+    expect(echt.laeufe[1]?.abgebrochen()).toBe(false);
   });
 
-  test('#6 eine Steering-Nachricht ohne laufenden Turn geht NICHT verloren', async () => {
-    // sendMessage(interrupt) kam an, als der vorherige Turn gerade geendet hatte
-    // (currentHandle bereits null). Vorher setzte das den Abbruchwunsch, den die
-    // eigene neue Nachricht dann einlöste -> die Nachricht wurde nie bearbeitet,
-    // im Chat stand nur „Turn abgebrochen".
-    const starts: string[] = [];
-    const { service, projectId } = await setupChat(abbrechbarerRunner(starts));
+  test('(4) Interrupt bricht den laufenden Turn ab und bearbeitet die neue Nachricht', async () => {
+    const ctrl = steuerbarerRunner();
+    const { service, projectId, turnEnds } = await setupChat(ctrl.runner);
+    await service.sendMessage(sendInput(projectId, 'alte Aufgabe'));
+    await waitFor(() => ctrl.starts.length === 1);
 
-    // Kein laufender Turn. Eine Steering-Nachricht schicken.
+    await service.sendMessage({ ...sendInput(projectId, 'neue Aufgabe'), interrupt: true });
+
+    await waitFor(() => ctrl.laeufe[0]?.abgebrochen() === true);
+    await waitFor(() => ctrl.starts.length === 2);
+    expect(ctrl.starts[1]).toContain('neue Aufgabe');
+    ctrl.laeufe[1]?.fertigstellen();
+    await waitFor(() => !service.isTurnActive(projectId));
+
+    expect(ctrl.laeufe[1]?.abgebrochen()).toBe(false);
+    expect(turnEnds).toEqual(['neue Aufgabe']);
+    const messages = await service.listMessages(projectId);
+    expect(messages.some((m) => m.role === 'system' && m.content.includes('abgebrochen'))).toBe(
+      true,
+    );
+    expect(messages.some((m) => m.role === 'assistant' && m.content.includes('neue Aufgabe'))).toBe(
+      true,
+    );
+  });
+
+  test('(5) Interrupt im Leerlauf: die neue Nachricht läuft normal und wird nicht abgebrochen', async () => {
+    const ctrl = steuerbarerRunner();
+    const { service, projectId, turnEnds } = await setupChat(ctrl.runner);
+
     await service.sendMessage({ ...sendInput(projectId, 'neue Richtung'), interrupt: true });
-    await waitFor(() => !service.isTurnActive(projectId), 15_000);
+    await waitFor(() => ctrl.starts.length === 1);
+    ctrl.laeufe[0]?.fertigstellen();
+    await waitFor(() => !service.isTurnActive(projectId));
 
-    // Die Nachricht wird bearbeitet (Runner sieht sie), nicht abgebrochen.
-    expect(starts).toEqual(['neue Richtung']);
+    expect(ctrl.starts).toEqual(['neue Richtung']);
+    expect(ctrl.laeufe[0]?.abgebrochen()).toBe(false);
+    expect(turnEnds).toEqual(['neue Richtung']);
+    expect(
+      (await service.listMessages(projectId)).find((m) => m.role === 'system'),
+    ).toBeUndefined();
+  });
+
+  test('(6) Interrupt trifft nie die eigene Nachricht — auch wenn die Pump sie schon gestartet hat (#7)', async () => {
+    // DIE Race hinter Fehler #7: sendMessage(interrupt) hängt im
+    // insertMessage-await; währenddessen endet der vorige Turn und die Pump
+    // startet die NEUE Nachricht — currentHandle zeigt schon auf sie, wenn der
+    // interrupt-Zweig weiterläuft. Deterministisch erzwungen über ein Tor im
+    // Insert der neuen User-Zeile.
+    const db = createTestDb();
+    const owner = await createUser(db, 'marco');
+    const projectId = await createProjectRow(db, owner);
+    const ctrl = steuerbarerRunner();
+    let tor: (() => Promise<void>) | null = null;
+    const gatedDb = dbMitInsertTor(
+      db,
+      (werte) => werte['role'] === 'user' && werte['content'] === 'neue Aufgabe',
+      async () => {
+        await tor?.();
+      },
+    );
+    const service = new ChatService(gatedDb, ctrl.runner, {}, {});
+
+    await service.sendMessage(sendInput(projectId, 'alte Aufgabe'));
+    await waitFor(() => ctrl.starts.length === 1);
+
+    tor = async () => {
+      ctrl.laeufe[0]?.fertigstellen(); // der vorige Turn endet GENAU JETZT …
+      await waitFor(() => ctrl.starts.length === 2); // … und die Pump startet die neue
+    };
+    await service.sendMessage({ ...sendInput(projectId, 'neue Aufgabe'), interrupt: true });
+
+    // Die eigene neue Nachricht darf NIEMALS Ziel des Abbruchs sein.
+    expect(ctrl.laeufe[1]?.abgebrochen()).toBe(false);
+    ctrl.laeufe[1]?.fertigstellen();
+    await waitFor(() => !service.isTurnActive(projectId));
+    const messages = await service.listMessages(projectId);
+    expect(messages.some((m) => m.role === 'assistant' && m.content.includes('neue Aufgabe'))).toBe(
+      true,
+    );
+    expect(messages.some((m) => m.content.includes('abgebrochen'))).toBe(false);
+  });
+
+  test('(7) Interrupt mit Queue [Z, Y]: die früher eingereihte Nachricht Z geht NICHT verloren (#5)', async () => {
+    // Exakt der historische Fehler #5: Z ist eingereiht, aber noch nicht
+    // gestartet (ihr Insert hängt noch), da kommt Y mit interrupt. Der alte,
+    // aufgeschobene Wunsch („brich den nächsten Turn ab, außer Y") traf dann
+    // Z — die Nachricht ging verloren. Im Gegenwartsmodell läuft nichts →
+    // der Interrupt ist ein No-op, Z und Y laufen beide normal.
+    const db = createTestDb();
+    const owner = await createUser(db, 'marco');
+    const projectId = await createProjectRow(db, owner);
+    const ctrl = steuerbarerRunner();
+    let oeffneZ: () => void = () => {};
+    const zTor = new Promise<void>((resolve) => {
+      oeffneZ = resolve;
+    });
+    const gatedDb = dbMitInsertTor(
+      db,
+      (werte) => werte['role'] === 'user' && werte['content'] === 'Z wartet',
+      () => zTor,
+    );
+    const turnEnds: string[] = [];
+    const service = new ChatService(
+      gatedDb,
+      ctrl.runner,
+      {
+        onTurnEnd: async (_id, prompt) => {
+          turnEnds.push(prompt);
+        },
+      },
+      {},
+    );
+
+    const zGesendet = service.sendMessage(sendInput(projectId, 'Z wartet')); // Queue: [Z]
+    const yGesendet = service.sendMessage({
+      ...sendInput(projectId, 'Y steuert'),
+      interrupt: true,
+    }); // Queue: [Z, Y]
+    oeffneZ();
+    await Promise.all([zGesendet, yGesendet]);
+
+    await waitFor(() => ctrl.starts.length === 1);
+    expect(ctrl.starts[0]).toContain('Z wartet'); // Z läuft — nicht verloren
+    expect(ctrl.laeufe[0]?.abgebrochen()).toBe(false);
+    ctrl.laeufe[0]?.fertigstellen();
+    await waitFor(() => ctrl.starts.length === 2);
+    expect(ctrl.starts[1]).toContain('Y steuert');
+    ctrl.laeufe[1]?.fertigstellen();
+    await waitFor(() => !service.isTurnActive(projectId));
+
+    expect(ctrl.laeufe[0]?.abgebrochen()).toBe(false);
+    expect(ctrl.laeufe[1]?.abgebrochen()).toBe(false);
+    expect(turnEnds).toEqual(['Z wartet', 'Y steuert']);
+    expect(
+      (await service.listMessages(projectId)).some((m) => m.content.includes('abgebrochen')),
+    ).toBe(false);
+  });
+
+  test('(8) Doppelter Stop ist idempotent und berührt keinen späteren Turn', async () => {
+    const ctrl = steuerbarerRunner();
+    const { service, projectId } = await setupChat(ctrl.runner);
+    await service.sendMessage(sendInput(projectId, 'läuft gerade'));
+    await waitFor(() => ctrl.starts.length === 1);
+
+    service.stopTurn(projectId);
+    await waitFor(() => !service.isTurnActive(projectId));
+    service.stopTurn(projectId); // Doppelklick / veralteter turnActive-Stand: No-op
+
+    await service.sendMessage(sendInput(projectId, 'unbeteiligter Turn danach'));
+    await waitFor(() => ctrl.starts.length === 2);
+    ctrl.laeufe[1]?.fertigstellen();
+    await waitFor(() => !service.isTurnActive(projectId));
+
+    expect(ctrl.laeufe[1]?.abgebrochen()).toBe(false);
+    const messages = await service.listMessages(projectId);
+    const abbrueche = messages.filter(
+      (m) => m.role === 'system' && m.content.includes('abgebrochen'),
+    );
+    expect(abbrueche).toHaveLength(1); // nur der erste Stop hat gewirkt
+  });
+
+  test('(9) Stop während eines Flake-Versuchs: kein Retry rettet den gestoppten Turn', async () => {
+    // abbrechbarerRunner liefert nach dem Abbruch NUR `turn-aborted` — kein
+    // „sinnvolles" Event. Ohne das benutzerAbbruch-Signal würde runTurn das
+    // als msb-Flake werten und denselben Prompt ein zweites Mal starten —
+    // diesmal ohne Stop; der Agent führte die gestoppte Arbeit vollständig aus.
+    const starts: string[] = [];
+    const { service, projectId, turnEnds } = await setupChat(abbrechbarerRunner(starts, 10_000));
+    await service.sendMessage(sendInput(projectId, 'gestoppte Arbeit'));
+    await waitFor(() => starts.length === 1);
+
+    service.stopTurn(projectId);
+    await waitFor(() => !service.isTurnActive(projectId), 15_000);
+    await Bun.sleep(100); // Gelegenheit für einen fälschlichen zweiten Versuch
+
+    expect(starts).toEqual(['gestoppte Arbeit']);
+    expect(turnEnds).toEqual([]);
+    const messages = await service.listMessages(projectId);
+    expect(messages.find((m) => m.content.includes('zweiter Versuch'))).toBeUndefined();
+    expect(messages.find((m) => m.role === 'system')?.content).toContain('abgebrochen');
   });
 });
 
@@ -1297,5 +1602,219 @@ describe('forget: Zustand geloeschter Projekte freigeben', () => {
     // Ohne Abbruch liefe der Turn weiter und schriebe in ein Projekt, das es
     // nicht mehr gibt — inklusive Auto-Commit in dessen Branch.
     expect(abgebrochen).toBe(true);
+  });
+
+  test('Retry nach forget() legt den Projektzustand NICHT neu an (Leck)', async () => {
+    // Fenster: Versuch 1 flaked (kein einziges Event → Retry stünde an);
+    // ZWISCHEN den Versuchen wird das Projekt per forget() gelöscht. Der
+    // zweite Versuch holte den State über das lazy-anlegende state() zurück —
+    // ein leerer Eintrag, der für die Prozesslebensdauer liegen bliebe, und
+    // der Agent liefe für ein Projekt, das es nicht mehr gibt.
+    const db = createTestDb();
+    const owner = await createUser(db, 'marco');
+    const projectId = await createProjectRow(db, owner);
+    let starts = 0;
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        starts += 1;
+        const erster = starts === 1;
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          if (erster) {
+            // Transport-Flake: stirbt sofort, ohne je ein Event zu liefern.
+            yield { type: 'turn-aborted' };
+            return;
+          }
+          yield { type: 'text-delta', text: 'dürfte nie laufen' };
+          yield { type: 'turn-completed', sessionId: 's' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    // Tor auf der „zweiter Versuch"-Systemzeile (der einzige system-Insert in
+    // diesem Ablauf): forget() landet damit DETERMINISTISCH zwischen den
+    // beiden Versuchen, statt das Fenster per sleep zu erraten.
+    let forgetJetzt: () => void = () => {};
+    const gatedDb = dbMitInsertTor(
+      db,
+      (werte) => werte['role'] === 'system',
+      async () => {
+        forgetJetzt();
+      },
+    );
+    const service = new ChatService(gatedDb, runner, {}, {});
+    forgetJetzt = () => {
+      service.forget(projectId);
+    };
+
+    await service.sendMessage(sendInput(projectId, 'flaket gleich'));
+    await waitFor(() => starts >= 1);
+    await Bun.sleep(100); // Gelegenheit für den fälschlichen zweiten Versuch
+
+    expect(starts).toBe(1); // kein Retry für ein gelöschtes Projekt
+    expect(service.trackedProjects()).toBe(0); // kein neu angelegter State (das Leck)
+  });
+});
+
+describe('Re-Entry-Resume (resumeUnansweredTurn)', () => {
+  /** Runner, der jede Turn-Option festhält und den Turn sofort sauber beendet. */
+  function fangenderRunner(): { runner: AgentRunner; gesehen: TurnOptions[] } {
+    const gesehen: TurnOptions[] = [];
+    const runner: AgentRunner = {
+      startTurn(options: TurnOptions): TurnHandle {
+        gesehen.push(options);
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          yield { type: 'text-delta', text: 'wieder da' };
+          yield { type: 'turn-completed', sessionId: 's' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    return { runner, gesehen };
+  }
+
+  test('unbeantwortete letzte User-Zeile → Turn läuft mit ORIGINALER turnId, keine zweite User-Zeile', async () => {
+    const cap = fangenderRunner();
+    const { service, projectId } = await setupChat(cap.runner);
+    await service.postMessage(projectId, 'user', 'Bau ein Memory-Spiel');
+    const userRow = (await service.listMessages(projectId))[0];
+    expect(userRow).toBeDefined();
+
+    const resumed = await service.resumeUnansweredTurn(projectId, '/tmp/fake-workspace');
+
+    expect(resumed).toBe(true);
+    await waitFor(() => !service.isTurnActive(projectId));
+    const messages = await service.listMessages(projectId);
+    // KEINE zweite User-Zeile — sonst entstünde bei jedem Host-Neustart ein
+    // Duplikat der User-Bubble.
+    expect(messages.filter((m) => m.role === 'user')).toHaveLength(1);
+    // Die Antwort gruppiert sich über die ORIGINALE turnId unter derselben Bubble.
+    const assistant = messages.find((m) => m.role === 'assistant');
+    expect(assistant?.content).toBe('wieder da');
+    expect(assistant?.turnId).toBe(userRow?.turnId ?? '');
+    expect(cap.gesehen).toHaveLength(1);
+    expect(cap.gesehen[0]?.prompt).toContain('Bau ein Memory-Spiel');
+    expect(cap.gesehen[0]?.workspaceDir).toBe('/tmp/fake-workspace');
+  });
+
+  test('letzte Zeile ist eine assistant-Antwort → false, kein Turn, keine neuen Zeilen', async () => {
+    const cap = fangenderRunner();
+    const { service, projectId } = await setupChat(cap.runner);
+    await service.postMessage(projectId, 'user', 'Bau was');
+    await service.postMessage(projectId, 'assistant', 'Fertig gebaut.');
+    const vorher = (await service.listMessages(projectId)).length;
+
+    expect(await service.resumeUnansweredTurn(projectId, '/tmp/fake-workspace')).toBe(false);
+
+    await Bun.sleep(30);
+    expect(service.isTurnActive(projectId)).toBe(false);
+    expect(cap.gesehen).toHaveLength(0);
+    expect((await service.listMessages(projectId)).length).toBe(vorher);
+  });
+
+  test('letzte Zeile ist die „Turn abgebrochen"-Systemzeile (Nutzer-Stop) → false', async () => {
+    const cap = fangenderRunner();
+    const { service, projectId } = await setupChat(cap.runner);
+    await service.postMessage(projectId, 'user', 'Bau was');
+    await service.postMessage(projectId, 'system', 'Turn abgebrochen');
+
+    expect(await service.resumeUnansweredTurn(projectId, '/tmp/fake-workspace')).toBe(false);
+
+    await Bun.sleep(30);
+    expect(cap.gesehen).toHaveLength(0);
+  });
+
+  test('leere Historie → false', async () => {
+    const cap = fangenderRunner();
+    const { service, projectId } = await setupChat(cap.runner);
+
+    expect(await service.resumeUnansweredTurn(projectId, '/tmp/fake-workspace')).toBe(false);
+
+    await Bun.sleep(30);
+    expect(cap.gesehen).toHaveLength(0);
+    expect((await service.listMessages(projectId)).length).toBe(0);
+  });
+
+  test('läuft bereits ein Turn → false, kein zweites Enqueue (Guard)', async () => {
+    let release: () => void = () => {};
+    let starts = 0;
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        starts += 1;
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          await new Promise<void>((r) => {
+            release = r;
+          });
+          yield { type: 'turn-completed', sessionId: 's' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { service, projectId } = await setupChat(runner);
+    await service.sendMessage(sendInput(projectId, 'läuft gerade'));
+    await waitFor(() => starts === 1);
+
+    // Die letzte Zeile IST eine (noch unbeantwortete) User-Zeile — trotzdem
+    // kein Resume: im selben Prozess läuft der Turn ja noch.
+    expect(await service.resumeUnansweredTurn(projectId, '/tmp/fake-workspace')).toBe(false);
+
+    release();
+    await waitFor(() => !service.isTurnActive(projectId));
+    expect(starts).toBe(1);
+  });
+
+  test('Race: zwei gleichzeitige Aufrufe (zwei Tabs / StrictMode-Doppel-Effekt) reihen den Turn nur EINMAL ein', async () => {
+    // Check-then-act über ein await: der Doppellauf-Guard lief VOR dem
+    // listMessages-await, gepusht wurde danach. Zwei gleichzeitige
+    // enterProject-Aufrufe (zwei Tabs; im Dev-Modus der React-StrictMode-
+    // Doppel-Effekt) passierten BEIDE den Guard, warteten beide auf die DB
+    // und reihten beide denselben Turn (originale turnId) ein — doppelte
+    // Agent-Arbeit, doppelte Antwort-Zeilen, zwei Auto-Commits.
+    let starts = 0;
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        starts += 1;
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          yield { type: 'text-delta', text: 'wieder da' };
+          yield { type: 'turn-completed', sessionId: 's' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { service, projectId } = await setupChat(runner);
+    await service.postMessage(projectId, 'user', 'Bau ein Memory-Spiel');
+
+    // Beide Aufrufe passieren ihren synchronen Vorab-Guard, BEVOR der jeweils
+    // andere seinen Push erreicht — exakt das Fenster des Races. Das erste
+    // await (listMessages) suspendiert deterministisch beide.
+    const ergebnisse = await Promise.all([
+      service.resumeUnansweredTurn(projectId, '/tmp/fake-workspace'),
+      service.resumeUnansweredTurn(projectId, '/tmp/fake-workspace'),
+    ]);
+
+    // Genau EINER der Aufrufe gewinnt.
+    expect(ergebnisse.filter((r) => r)).toHaveLength(1);
+    await waitFor(() => !service.isTurnActive(projectId));
+    await Bun.sleep(50); // Gelegenheit für einen fälschlichen zweiten Lauf
+    expect(starts).toBe(1); // der Runner startet den Turn genau EINMAL
+    const messages = await service.listMessages(projectId);
+    // Keine doppelten Antwort-Zeilen unter derselben Bubble.
+    expect(messages.filter((m) => m.role === 'assistant')).toHaveLength(1);
+  });
+
+  test('Idempotenz: zweiter Aufruf direkt nach erfolgreichem Resume → false', async () => {
+    const cap = fangenderRunner();
+    const { service, projectId } = await setupChat(cap.runner);
+    await service.postMessage(projectId, 'user', 'Bau ein Quiz');
+
+    expect(await service.resumeUnansweredTurn(projectId, '/tmp/fake-workspace')).toBe(true);
+    // Sofort danach ist der wiederaufgenommene Turn aktiv (Queue/Pump) —
+    // der Guard verhindert den Doppellauf.
+    expect(await service.resumeUnansweredTurn(projectId, '/tmp/fake-workspace')).toBe(false);
+
+    await waitFor(() => !service.isTurnActive(projectId));
+    expect(cap.gesehen).toHaveLength(1);
+    expect((await service.listMessages(projectId)).filter((m) => m.role === 'user')).toHaveLength(
+      1,
+    );
   });
 });

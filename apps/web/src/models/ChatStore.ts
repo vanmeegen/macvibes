@@ -99,6 +99,18 @@ export class ChatStore {
   connectEpoch = 0;
 
   /**
+   * Laufender sendMessage-Roundtrip — bewusst nicht observable. Der Server
+   * behandelt einen Stop ins Leere (nichts aktiv/eingereiht) als bewusstes
+   * No-op („Stop heißt Stop": stopTurn wirkt nur auf den JETZT aktiven Turn);
+   * das Race „stopTurn überholt sendMessage" ist damit erklärte
+   * CLIENT-Verantwortung. stop() wartet deshalb einen laufenden Send ab,
+   * bevor es die StopTurn-Mutation abschickt (E2E-belegt: SendMessage
+   * 09:39:39.621, StopTurn .654 → stopTurn überholte serverseitig den
+   * queue.push, Turn lief ungebremst durch).
+   */
+  sendInFlight: Promise<void> | null = null;
+
+  /**
    * steerOnSend: unterbricht eine Nachricht während eines laufenden Turns den
    * Turn (altes Mid-Turn-Steering)? Default: aus — bei langsamen lokalen
    * Modellen killt ein schnelles „weiter" sonst den Turn, bevor er ein Tool
@@ -107,7 +119,7 @@ export class ChatStore {
   constructor(private readonly steerOnSend: boolean = readSteerOnSendEnv()) {
     makeAutoObservable(
       this,
-      { eventSource: false, reconcileTimer: false, connectEpoch: false },
+      { eventSource: false, reconcileTimer: false, connectEpoch: false, sendInFlight: false },
       { autoBind: true },
     );
   }
@@ -266,29 +278,47 @@ export class ChatStore {
     });
     this.turnActive = true;
 
+    // Roundtrip als in-flight merken, damit stop() ihn abwarten kann
+    // (s. Doku an sendInFlight: Server-No-op bei „Stop ins Leere").
+    const roundtrip = (async (): Promise<void> => {
+      try {
+        await gqlRequest<{ sendMessage: boolean }>(SEND_MESSAGE_MUTATION, {
+          projectId,
+          text,
+          interrupt,
+        });
+      } catch (err) {
+        console.error('ChatStore.send fehlgeschlagen', err);
+        runInAction(() => {
+          this.error = toErrorMessage(err);
+          // Optimistische Bubble zurücknehmen und Entwurf wiederherstellen (R6).
+          this.messages = this.messages.filter((m) => m.id !== optimisticId);
+          if (!this.messages.some((m) => m.id.startsWith(OPTIMISTIC_PREFIX))) {
+            this.turnActive = false;
+          }
+          this.draft = text;
+        });
+      }
+    })();
+    this.sendInFlight = roundtrip;
     try {
-      await gqlRequest<{ sendMessage: boolean }>(SEND_MESSAGE_MUTATION, {
-        projectId,
-        text,
-        interrupt,
-      });
-    } catch (err) {
-      console.error('ChatStore.send fehlgeschlagen', err);
-      runInAction(() => {
-        this.error = toErrorMessage(err);
-        // Optimistische Bubble zurücknehmen und Entwurf wiederherstellen (R6).
-        this.messages = this.messages.filter((m) => m.id !== optimisticId);
-        if (!this.messages.some((m) => m.id.startsWith(OPTIMISTIC_PREFIX))) {
-          this.turnActive = false;
-        }
-        this.draft = text;
-      });
+      await roundtrip;
+    } finally {
+      // Nur zurücksetzen, wenn kein neuerer Send inzwischen übernommen hat —
+      // stop() soll immer auf den ZULETZT gestarteten Send warten.
+      if (this.sendInFlight === roundtrip) this.sendInFlight = null;
     }
   }
 
   async stop(): Promise<void> {
     const projectId = this.projectId;
     if (projectId === null) return;
+    // Einen laufenden Send abwarten, BEVOR StopTurn rausgeht — sonst überholt
+    // stopTurn den sendMessage-Resolver serverseitig, trifft ins Leere (No-op)
+    // und der Turn läuft ungebremst durch (s. Doku an sendInFlight). Ein
+    // GESCHEITERTER Send darf den Stop weder verhindern noch werfen — dann ist
+    // der Stop gegenstandslos und der Server macht daraus ein No-op.
+    if (this.sendInFlight) await this.sendInFlight.catch(() => {});
     try {
       await gqlRequest<{ stopTurn: boolean }>(STOP_TURN_MUTATION, { projectId });
     } catch (err) {
