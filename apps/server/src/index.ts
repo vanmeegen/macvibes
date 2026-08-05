@@ -7,7 +7,7 @@ import { startPreviewGateway } from './http/previewGateway';
 import { createAppYoga } from './http/createAppYoga';
 import { serveWebUi } from './http/staticFiles';
 import { existsSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AGENT_GATEWAY_PATH, AgentGateway } from './agent/agentGateway';
 import { ClaudeAgentRunner } from './agent/claudeRunner';
@@ -24,6 +24,7 @@ import { touchSandbox } from './sandbox/msbClient';
 import { ProcessSandboxProvider } from './sandbox/processProvider';
 import { selectBackends, type BackendSelection } from './sandbox/backendSelection';
 import { SandboxManager } from './sandbox/sandboxManager';
+import { supportsPosixModes } from './core/fsCapabilities';
 import { createVmTokenRegistry } from './core/vmTokens';
 import { autoCommit, createTurnEndAutoCommit } from './services/autoCommitService';
 import { ensureAdmin, purgeExpiredSessions, resolveSession } from './services/authService';
@@ -114,6 +115,17 @@ shutdownSequence.register('lokaler Modell-Router', async () => {
 function warnIfEnvFileReadable(envPath: string): void {
   if (!existsSync(envPath)) return;
   try {
+    // Feature-Detection (P5): ohne durchsetzbare POSIX-Modes wäre der
+    // Mode-Check immer „lesbar" und der chmod-Rat sinnlos — stattdessen
+    // EINE ehrliche Warnung über die dokumentierte Abschwächung.
+    if (!supportsPosixModes(dirname(envPath))) {
+      console.warn(
+        `WARNUNG: Das Dateisystem von ${envPath} setzt keine POSIX-Dateirechte ` +
+          `durch — die Datei (enthält den Claude-Token) ist für andere lokale ` +
+          `Konten dieses Rechners lesbar (F26 abgeschwächt).`,
+      );
+      return;
+    }
     if ((statSync(envPath).mode & 0o077) !== 0) {
       console.warn(
         `WARNUNG: ${envPath} ist auch für andere lokale Konten lesbar und enthält ` +

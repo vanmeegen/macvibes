@@ -25,7 +25,19 @@ export async function createTempDir(prefix: string): Promise<string> {
 }
 
 export async function removeDir(path: string): Promise<void> {
-  await rm(path, { recursive: true, force: true });
+  // Windows gibt Datei-Handles (SQLite-WAL, frisch beendete Kindprozesse)
+  // erst verzögert frei — EBUSY/EPERM hier kurz wiederholen statt den Test
+  // am Aufräumen scheitern zu lassen. Auf POSIX greift der erste Versuch.
+  for (let versuch = 0; ; versuch += 1) {
+    try {
+      await rm(path, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if ((code !== 'EBUSY' && code !== 'EPERM') || versuch >= 20) throw error;
+      await Bun.sleep(100);
+    }
+  }
 }
 
 /**
