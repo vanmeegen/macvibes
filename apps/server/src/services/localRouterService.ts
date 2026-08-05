@@ -1,3 +1,4 @@
+import { spawnShellCommand } from '../core/exec';
 import { ProcessSupervisor, type SupervisedProcess } from '../core/processSupervisor';
 
 /**
@@ -72,15 +73,10 @@ export async function startLocalRouter(options: LocalRouterOptions): Promise<Loc
   const command = options.command;
   const spawn =
     options.spawn ??
-    ((): SupervisedProcess => {
+    ((): SupervisedProcess =>
       // Output in eine Log-Datei, nicht ins Server-Log (LiteLLM ist gesprächig).
-      const redirect = options.logFile ? ` >> ${JSON.stringify(options.logFile)} 2>&1` : '';
-      const proc = Bun.spawn(['sh', '-c', `exec ${command}${redirect}`], {
-        stdout: 'ignore',
-        stderr: 'ignore',
-      });
-      return { exited: proc.exited, kill: () => proc.kill() };
-    });
+      // Plattformneutral (bun exec + tree-kill statt sh -c + Shell-Redirect).
+      spawnShellCommand(command, { logFile: options.logFile }));
 
   const supervisor = new ProcessSupervisor({
     spawn,

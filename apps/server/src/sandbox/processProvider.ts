@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { spawnShellCommand } from '../core/exec';
 import { ensureWorkspace } from '../core/workspaceService';
 import { httpProbe } from '../preview/httpProbe';
 import { ProcessSupervisor, type SupervisedProcess } from '../core/processSupervisor';
@@ -44,24 +45,21 @@ export class ProcessSandboxProvider implements SandboxProvider {
         .exited;
     }
 
-    const spawn = (): SupervisedProcess => {
-      const proc = Bun.spawn(['sh', '-c', `exec ${context.devCommand}`], {
+    const spawn = (): SupervisedProcess =>
+      // Plattformneutral (bun exec + tree-kill): kill() beendet den ganzen
+      // Prozessbaum — Dev-Server samt Kindern, auf macOS wie Windows.
+      spawnShellCommand(context.devCommand, {
         cwd: workspaceDir,
         env: { ...process.env, PORT: String(port) },
         stdout: 'ignore',
         stderr: 'inherit',
       });
-      return {
-        kill: () => {
-          if (proc.exitCode === null) proc.kill('SIGTERM');
-        },
-        exited: proc.exited.then((code) => code ?? 0),
-      };
-    };
 
     const supervisor = new ProcessSupervisor({
       spawn,
-      probe: () => httpProbe(`http://localhost:${port}/`),
+      // 127.0.0.1 statt localhost: Windows löst localhost bevorzugt ::1 auf,
+      // Dev-Server binden IPv4 — die Probe wäre dort nie „ready".
+      probe: () => httpProbe(`http://127.0.0.1:${port}/`),
     });
     supervisor.start();
 
