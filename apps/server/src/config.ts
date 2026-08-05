@@ -74,7 +74,7 @@ export interface ServerConfig {
     /**
      * Startkommando für den Shim (Autostart durch macvibes). Env
      * MACVIBES_LOCAL_ROUTER_CMD; Default: das mitgelieferte
-     * apps/server/local-router/run.sh. null = kein Autostart.
+     * apps/server/local-router/run.ts. null = kein Autostart.
      */
     routerCommand: string | null;
   };
