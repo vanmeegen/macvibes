@@ -32,7 +32,10 @@ async function setup(): Promise<{ home: string; bare: string }> {
 
 describe('bunCacheDirFor (persistenter Bun-Cache pro Projekt, ADR 0002)', () => {
   test('liegt im Projekt-Volume neben workspace und agent-config', () => {
-    expect(bunCacheDirFor('/home/x/macvibes', 'p1')).toBe('/home/x/macvibes/volumes/p1/bun-cache');
+    // join statt String-Literal: der Host-Pfad-Trenner ist plattformabhängig.
+    expect(bunCacheDirFor('/home/x/macvibes', 'p1')).toBe(
+      join('/home/x/macvibes', 'volumes', 'p1', 'bun-cache'),
+    );
   });
 });
 

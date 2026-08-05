@@ -136,12 +136,14 @@ function parseModelRoutes(
 }
 
 /**
- * Startskript des mitgelieferten Routers (apps/server/local-router/run.sh) —
+ * Startskript des mitgelieferten Routers (apps/server/local-router/run.ts) —
  * Teil des Repos, legt seine venv beim ersten Start selbst an (~/macvibes).
+ * Single-Quotes fürs Kommando: die Bun-Shell (core/exec) nimmt sie wörtlich,
+ * auch bei Pfaden mit Leerzeichen oder Backslashes.
  */
 function detectLocalRouterCommand(): string | null {
-  const script = resolve(fileURLToPath(new URL('../local-router/run.sh', import.meta.url)));
-  return existsSync(script) ? script : null;
+  const script = resolve(fileURLToPath(new URL('../local-router/run.ts', import.meta.url)));
+  return existsSync(script) ? `'${process.execPath}' '${script}'` : null;
 }
 
 export function loadConfig(): ServerConfig {

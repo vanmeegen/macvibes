@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import treeKill from 'tree-kill';
 
 /**
  * Testet die echten Templates end-to-end: startet ihren echten Dev-Server
@@ -49,7 +50,6 @@ function startDevServer(
   const proc = spawn('bun', ['run', 'dev'], {
     cwd,
     env: { ...process.env, PORT: String(port), ...extraEnv },
-    detached: true,
     stdio: 'ignore',
   });
   return { proc, port };
@@ -57,12 +57,9 @@ function startDevServer(
 
 async function stopDevServer(server: DevServer | null): Promise<void> {
   if (!server?.proc.pid) return;
-  try {
-    // Ganze Prozessgruppe beenden (Dev-Server startet Kindprozesse).
-    process.kill(-server.proc.pid, 'SIGTERM');
-  } catch {
-    // schon beendet
-  }
+  // Ganzen Prozessbaum beenden (Dev-Server startet Kindprozesse) —
+  // tree-kill statt Prozessgruppen/negativer PID: portabel, P8.
+  await new Promise<void>((resolve) => treeKill(server.proc.pid!, 'SIGTERM', () => resolve()));
 }
 
 test.describe('Template "pwa" — Client-PWA rendert die Startseite', () => {

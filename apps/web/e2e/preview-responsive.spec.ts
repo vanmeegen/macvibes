@@ -2,14 +2,14 @@ import { expect, test } from '@playwright/test';
 import { registerNewUser, uniqueProjectName } from './fixtures';
 import { ProjectsPage } from './pages/projectsPage';
 
-const SHOT_DIR =
-  '/private/tmp/claude-501/-Users-marco-projects-macvibesarch/75621d3f-3daf-42e5-ac7d-ec08a5bd1f09/scratchpad';
-
 // Responsives Layout: auf schmalen Screens (Phone/gefaltet) muss der Preview
 // sichtbar sein (vertikal gestapelt) und per Toggle ein-/ausblendbar.
+// Screenshots landen im Playwright-Output des Tests (testInfo.outputPath) —
+// vorher stand hier ein hartkodierter Mac-Scratchpad-Pfad, der auf jedem
+// anderen Rechner brach.
 test('Preview ist auf Phone-Breite sichtbar, vertikal gestapelt und toggelbar', async ({
   page,
-}) => {
+}, testInfo) => {
   await registerNewUser(page);
   const projectsPage = new ProjectsPage(page);
   await projectsPage.createProject(uniqueProjectName('Responsive'), 'pwa');
@@ -32,13 +32,13 @@ test('Preview ist auf Phone-Breite sichtbar, vertikal gestapelt und toggelbar', 
   expect(chatBox).not.toBeNull();
   expect(previewBox!.y).toBeLessThan(chatBox!.y); // Preview liegt höher
 
-  await page.screenshot({ path: `${SHOT_DIR}/phone-split.png`, fullPage: false });
+  await page.screenshot({ path: testInfo.outputPath('phone-split.png'), fullPage: false });
 
   // ── Preview ausblenden → Chat im Vollbild ──
   await previewToggle.click();
   await expect(previewColumn).toBeHidden();
   await expect(chatColumn).toBeVisible();
-  await page.screenshot({ path: `${SHOT_DIR}/phone-chat-only.png`, fullPage: false });
+  await page.screenshot({ path: testInfo.outputPath('phone-chat-only.png'), fullPage: false });
 
   // Wieder einblenden.
   await previewToggle.click();
@@ -52,5 +52,5 @@ test('Preview ist auf Phone-Breite sichtbar, vertikal gestapelt und toggelbar', 
   const previewWide = await previewColumn.boundingBox();
   // Nebeneinander: Chat links, Preview rechts (gleiche Höhe, versetzt in x).
   expect(chatWide!.x).toBeLessThan(previewWide!.x);
-  await page.screenshot({ path: `${SHOT_DIR}/desktop-split.png`, fullPage: false });
+  await page.screenshot({ path: testInfo.outputPath('desktop-split.png'), fullPage: false });
 });

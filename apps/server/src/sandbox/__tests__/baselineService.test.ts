@@ -67,61 +67,86 @@ describe('createTemplatesFixture — konfigurierbarer Template-Name', () => {
   });
 });
 
-describe('baselineBootstrapScript — verlinkt ALLE node_modules der Baseline (Workspaces)', () => {
-  test('Root- und Workspace-node_modules werden gelinkt, innere (.bun) nicht', async () => {
-    const { mkdtempSync, mkdirSync, existsSync, readlinkSync } = await import('node:fs');
-    const { tmpdir } = await import('node:os');
-    const { join } = await import('node:path');
+// Das Bootstrap-Skript läuft produktiv NUR in der Linux-VM; dieser Test führt
+// es host-seitig aus und braucht dafür eine sh, deren `ln -s` echte Symlinks
+// anlegt. Capability-Probe statt Plattform-Weiche: Git-Bash unter Windows
+// KOPIERT bei `ln -s` (MSYS-Default) — dann wird hier übersprungen.
+const shKannSymlinks = await (async () => {
+  if (Bun.which('sh') === null) return false;
+  const { lstatSync, mkdtempSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = mkdtempSync(join(tmpdir(), 'mv-symprobe-'));
+  try {
+    const proc = Bun.spawn(['sh', '-c', 'ln -s ziel link'], { cwd: dir, stderr: 'ignore' });
+    await proc.exited;
+    return lstatSync(join(dir, 'link')).isSymbolicLink();
+  } catch {
+    // Kein Symlink erzeugbar → die Fähigkeit fehlt; genau das ist die Antwort.
+    return false;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();
 
-    const base = mkdtempSync(join(tmpdir(), 'mv-baseline-'));
-    const work = mkdtempSync(join(tmpdir(), 'mv-work-'));
-    // Baseline-Layout wie beim fullstack-Template (Workspaces, hoisted + per-App):
-    for (const d of [
-      'node_modules/.bin',
-      'node_modules/.bun/node_modules',
-      'apps/web/node_modules/.bin',
-      'apps/server/node_modules',
-    ]) {
-      mkdirSync(join(base, d), { recursive: true });
-    }
-    // Workspace hat die App-Ordner (aus git), aber keine node_modules:
-    mkdirSync(join(work, 'apps/web'), { recursive: true });
-    mkdirSync(join(work, 'apps/server'), { recursive: true });
+describe.skipIf(!shKannSymlinks)(
+  'baselineBootstrapScript — verlinkt ALLE node_modules der Baseline (Workspaces)',
+  () => {
+    test('Root- und Workspace-node_modules werden gelinkt, innere (.bun) nicht', async () => {
+      const { mkdtempSync, mkdirSync, existsSync, readlinkSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
 
-    const proc = Bun.spawn(['sh', '-c', baselineBootstrapScript], {
-      cwd: work,
-      env: { ...process.env, MV_BASELINE: base },
-      stdout: 'pipe',
-      stderr: 'pipe',
+      const base = mkdtempSync(join(tmpdir(), 'mv-baseline-'));
+      const work = mkdtempSync(join(tmpdir(), 'mv-work-'));
+      // Baseline-Layout wie beim fullstack-Template (Workspaces, hoisted + per-App):
+      for (const d of [
+        'node_modules/.bin',
+        'node_modules/.bun/node_modules',
+        'apps/web/node_modules/.bin',
+        'apps/server/node_modules',
+      ]) {
+        mkdirSync(join(base, d), { recursive: true });
+      }
+      // Workspace hat die App-Ordner (aus git), aber keine node_modules:
+      mkdirSync(join(work, 'apps/web'), { recursive: true });
+      mkdirSync(join(work, 'apps/server'), { recursive: true });
+
+      const proc = Bun.spawn(['sh', '-c', baselineBootstrapScript], {
+        cwd: work,
+        env: { ...process.env, MV_BASELINE: base },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      expect(await proc.exited).toBe(0);
+
+      expect(readlinkSync(join(work, 'node_modules'))).toBe(join(base, 'node_modules'));
+      expect(readlinkSync(join(work, 'apps/web/node_modules'))).toBe(
+        join(base, 'apps/web/node_modules'),
+      );
+      expect(readlinkSync(join(work, 'apps/server/node_modules'))).toBe(
+        join(base, 'apps/server/node_modules'),
+      );
+      // Innere node_modules (.bun) dürfen NICHT als eigener Link auftauchen.
+      expect(existsSync(join(work, 'node_modules/.bun'))).toBe(true); // via Root-Link erreichbar
     });
-    expect(await proc.exited).toBe(0);
 
-    expect(readlinkSync(join(work, 'node_modules'))).toBe(join(base, 'node_modules'));
-    expect(readlinkSync(join(work, 'apps/web/node_modules'))).toBe(
-      join(base, 'apps/web/node_modules'),
-    );
-    expect(readlinkSync(join(work, 'apps/server/node_modules'))).toBe(
-      join(base, 'apps/server/node_modules'),
-    );
-    // Innere node_modules (.bun) dürfen NICHT als eigener Link auftauchen.
-    expect(existsSync(join(work, 'node_modules/.bun'))).toBe(true); // via Root-Link erreichbar
-  });
+    test('idempotent: existierende node_modules werden nicht überschrieben', async () => {
+      const { mkdtempSync, mkdirSync, lstatSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      const base = mkdtempSync(join(tmpdir(), 'mv-baseline-'));
+      const work = mkdtempSync(join(tmpdir(), 'mv-work-'));
+      mkdirSync(join(base, 'node_modules'), { recursive: true });
+      mkdirSync(join(work, 'node_modules'), { recursive: true }); // echtes Verzeichnis vorhanden
 
-  test('idempotent: existierende node_modules werden nicht überschrieben', async () => {
-    const { mkdtempSync, mkdirSync, lstatSync } = await import('node:fs');
-    const { tmpdir } = await import('node:os');
-    const { join } = await import('node:path');
-    const base = mkdtempSync(join(tmpdir(), 'mv-baseline-'));
-    const work = mkdtempSync(join(tmpdir(), 'mv-work-'));
-    mkdirSync(join(base, 'node_modules'), { recursive: true });
-    mkdirSync(join(work, 'node_modules'), { recursive: true }); // echtes Verzeichnis vorhanden
-
-    const proc = Bun.spawn(['sh', '-c', baselineBootstrapScript], {
-      cwd: work,
-      env: { ...process.env, MV_BASELINE: base },
+      const proc = Bun.spawn(['sh', '-c', baselineBootstrapScript], {
+        cwd: work,
+        env: { ...process.env, MV_BASELINE: base },
+      });
+      expect(await proc.exited).toBe(0);
+      // bleibt ein echtes Verzeichnis, kein Symlink
+      expect(lstatSync(join(work, 'node_modules')).isSymbolicLink()).toBe(false);
     });
-    expect(await proc.exited).toBe(0);
-    // bleibt ein echtes Verzeichnis, kein Symlink
-    expect(lstatSync(join(work, 'node_modules')).isSymbolicLink()).toBe(false);
-  });
-});
+  },
+);

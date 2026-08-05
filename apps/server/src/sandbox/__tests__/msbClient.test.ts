@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { tmpdir } from 'node:os';
 import { SandboxNotFoundError } from 'microsandbox';
 import {
   buildSandboxConfig,
@@ -12,6 +13,13 @@ import {
 } from '../msbClient';
 
 const available = await msbAvailable();
+// Zustands-Gates statt Maschinen-Annahmen (P8): Diese Snapshots existieren
+// nur, wo `bun run baselines` gelaufen ist (Entwickler-Mac). Ohne sie werden
+// die Laufzeit-Tests ÜBERSPRUNGEN statt irreführend rot — z. B. auf einem
+// frischen Windows-Rechner, wo der Baseline-Bau bis zum msb#1218-Fix-Release
+// ohnehin blockiert ist (windows-portierung.md).
+const msbtestSnapshotDa = available && (await snapshotExists('macvibes-tpl-msbtest-v2'));
+const pwaSnapshotDa = available && (await snapshotExists('macvibes-tpl-pwa'));
 
 /**
  * Die Fehlerklassifikation ist der Kern des Umstiegs auf das SDK: vorher wurde
@@ -51,7 +59,7 @@ describe('Fehlerklassifikation', () => {
 });
 
 describe.skipIf(!available)('snapshotExists (gegen die echte Laufzeit)', () => {
-  test('findet einen vorhandenen Snapshot', async () => {
+  test.skipIf(!msbtestSnapshotDa)('findet einen vorhandenen Snapshot', async () => {
     expect(await snapshotExists('macvibes-tpl-msbtest-v2')).toBe(true);
   });
 
@@ -110,73 +118,78 @@ describe('waitForSandboxReady', () => {
  * Konfiguration, die die CLI mit `--net-rule 'allow@public,allow@172.16.0.0/12'`
  * erzeugt hat (per configJson ausgelesen und verglichen).
  */
-describe('Startkonfiguration (Übersetzung der bisherigen CLI-Aufrufe)', () => {
-  const spec = {
-    name: 'macvibes-test',
-    snapshot: 'macvibes-tpl-pwa',
-    workdir: '/work',
-    cpus: 2,
-    memoryMib: 1024,
-    previewHostPort: 43210,
-    previewGuestPort: 5173,
-    mounts: [
-      { host: '/private/tmp', guest: '/work' },
-      { host: '/private/tmp', guest: '/etc/macvibes', readonly: true },
-    ],
-    command: ['/bin/sh', '-c', 'echo hallo'],
-  };
+describe.skipIf(!pwaSnapshotDa)(
+  'Startkonfiguration (Übersetzung der bisherigen CLI-Aufrufe)',
+  () => {
+    // tmpdir() statt '/private/tmp': muss auf JEDER Plattform real existieren,
+    // weil bauBuilder die Mount-Quelle mit realpathSync auflöst.
+    const spec = {
+      name: 'macvibes-test',
+      snapshot: 'macvibes-tpl-pwa',
+      workdir: '/work',
+      cpus: 2,
+      memoryMib: 1024,
+      previewHostPort: 43210,
+      previewGuestPort: 5173,
+      mounts: [
+        { host: tmpdir(), guest: '/work' },
+        { host: tmpdir(), guest: '/etc/macvibes', readonly: true },
+      ],
+      command: ['/bin/sh', '-c', 'echo hallo'],
+    };
 
-  test('sperrt Egress per Default und erlaubt nur öffentlich + Host-Gateway', async () => {
-    const cfg = JSON.parse(JSON.stringify(await buildSandboxConfig(spec)));
-    const policy = cfg.network.policy;
-    expect(policy.defaultEgress).toBe('deny');
-    expect(policy.defaultIngress).toBe('allow');
-    expect(policy.rules).toHaveLength(3);
-    // DNS zum Host — fehlte in der alten CLI-Regel, wodurch Namensauflösung in
-    // Projekt-VMs unmöglich war (nachgemessen). Öffnet nur Port 53, kein LAN.
-    expect(policy.rules[0].destination).toEqual({ group: 'host' });
-    expect(policy.rules[0].ports).toEqual([{ start: 53, end: 53 }]);
-    expect(policy.rules[0].action).toBe('allow');
-    expect(policy.rules[1].destination).toEqual({ group: 'public' });
-    expect(policy.rules[1].action).toBe('allow');
-    expect(policy.rules[2].destination).toEqual({ cidr: '172.16.0.0/12' });
-    expect(policy.rules[2].action).toBe('allow');
-  });
+    test('sperrt Egress per Default und erlaubt nur öffentlich + Host-Gateway', async () => {
+      const cfg = JSON.parse(JSON.stringify(await buildSandboxConfig(spec)));
+      const policy = cfg.network.policy;
+      expect(policy.defaultEgress).toBe('deny');
+      expect(policy.defaultIngress).toBe('allow');
+      expect(policy.rules).toHaveLength(3);
+      // DNS zum Host — fehlte in der alten CLI-Regel, wodurch Namensauflösung in
+      // Projekt-VMs unmöglich war (nachgemessen). Öffnet nur Port 53, kein LAN.
+      expect(policy.rules[0].destination).toEqual({ group: 'host' });
+      expect(policy.rules[0].ports).toEqual([{ start: 53, end: 53 }]);
+      expect(policy.rules[0].action).toBe('allow');
+      expect(policy.rules[1].destination).toEqual({ group: 'public' });
+      expect(policy.rules[1].action).toBe('allow');
+      expect(policy.rules[2].destination).toEqual({ cidr: '172.16.0.0/12' });
+      expect(policy.rules[2].action).toBe('allow');
+    });
 
-  test('bindet den Preview-Port ausschließlich ans Loopback (H1)', async () => {
-    const cfg = JSON.parse(JSON.stringify(await buildSandboxConfig(spec)));
-    // Der Port MUSS im selben network()-Aufruf gesetzt werden wie die Policy —
-    // sonst ersetzt der spätere Aufruf die Netzkonfiguration und die Bindung
-    // verschwindet stillschweigend (ports: []), die Preview wäre tot.
-    const ports = cfg.network.ports;
-    expect(ports).toHaveLength(1);
-    expect(ports[0].hostBind).toBe('127.0.0.1');
-    expect(ports[0].hostPort).toBe(43210);
-    expect(ports[0].guestPort).toBe(5173);
-  });
+    test('bindet den Preview-Port ausschließlich ans Loopback (H1)', async () => {
+      const cfg = JSON.parse(JSON.stringify(await buildSandboxConfig(spec)));
+      // Der Port MUSS im selben network()-Aufruf gesetzt werden wie die Policy —
+      // sonst ersetzt der spätere Aufruf die Netzkonfiguration und die Bindung
+      // verschwindet stillschweigend (ports: []), die Preview wäre tot.
+      const ports = cfg.network.ports;
+      expect(ports).toHaveLength(1);
+      expect(ports[0].hostBind).toBe('127.0.0.1');
+      expect(ports[0].hostPort).toBe(43210);
+      expect(ports[0].guestPort).toBe(5173);
+    });
 
-  test('übernimmt Nur-Lese-Mounts als solche', async () => {
-    const cfg = JSON.parse(JSON.stringify(await buildSandboxConfig(spec)));
-    const nurLesend = cfg.mounts.filter(
-      (m: { options: { readonly: boolean } }) => m.options.readonly,
-    );
-    expect(nurLesend).toHaveLength(1);
-    expect(nurLesend[0].guest).toBe('/etc/macvibes');
-    expect(cfg.mounts).toHaveLength(2);
-  });
+    test('übernimmt Nur-Lese-Mounts als solche', async () => {
+      const cfg = JSON.parse(JSON.stringify(await buildSandboxConfig(spec)));
+      const nurLesend = cfg.mounts.filter(
+        (m: { options: { readonly: boolean } }) => m.options.readonly,
+      );
+      expect(nurLesend).toHaveLength(1);
+      expect(nurLesend[0].guest).toBe('/etc/macvibes');
+      expect(cfg.mounts).toHaveLength(2);
+    });
 
-  test('übernimmt Snapshot, Arbeitsverzeichnis und Ressourcen', async () => {
-    const cfg = JSON.parse(JSON.stringify(await buildSandboxConfig(spec)));
-    // Der Snapshot-Name steht nicht mehr im gebauten Config — er ist zum
-    // Image des Snapshots aufgelöst. Dass er angewandt wurde, zeigt genau das:
-    // ohne fromSnapshot hätte der Builder ein explizites Image gebraucht.
-    expect(cfg.image.Oci.reference).toContain('oven/bun');
-    expect(cfg.runtime.workdir).toBe('/work');
-    expect(cfg.resources.cpus).toBe(2);
-    expect(cfg.resources.memoryMib).toBe(1024);
-    expect(cfg.init).toEqual({ cmd: '/bin/sh', args: ['-c', 'echo hallo'], env: [] });
-  });
-});
+    test('übernimmt Snapshot, Arbeitsverzeichnis und Ressourcen', async () => {
+      const cfg = JSON.parse(JSON.stringify(await buildSandboxConfig(spec)));
+      // Der Snapshot-Name steht nicht mehr im gebauten Config — er ist zum
+      // Image des Snapshots aufgelöst. Dass er angewandt wurde, zeigt genau das:
+      // ohne fromSnapshot hätte der Builder ein explizites Image gebraucht.
+      expect(cfg.image.Oci.reference).toContain('oven/bun');
+      expect(cfg.runtime.workdir).toBe('/work');
+      expect(cfg.resources.cpus).toBe(2);
+      expect(cfg.resources.memoryMib).toBe(1024);
+      expect(cfg.init).toEqual({ cmd: '/bin/sh', args: ['-c', 'echo hallo'], env: [] });
+    });
+  },
+);
 
 /**
  * Regressionsschutz für die Egress-Grenze. Sie ist der Kern von Restrisiko 2
@@ -185,7 +198,7 @@ describe('Startkonfiguration (Übersetzung der bisherigen CLI-Aufrufe)', () => {
  * das Agent-Gateway und alles im LAN. Der Default MUSS deshalb die gehärtete
  * Policy sein, und die Ausnahme muss man ausdrücklich hinschreiben.
  */
-describe('Egress-Grenze ist der Default', () => {
+describe.skipIf(!pwaSnapshotDa)('Egress-Grenze ist der Default', () => {
   const basis = {
     name: 'macvibes-x',
     snapshot: 'macvibes-tpl-pwa',

@@ -32,6 +32,12 @@ import type { SandboxHandle } from '../provider';
 import type { MicrosandboxProviderConfig } from '../microsandboxProvider';
 
 const available = await msbAvailable();
+// msb#1218 (Fix upstream gemerged, in 0.6.8 noch nicht released): `cp` auf
+// ro-gemountete Dateien scheitert unter Windows (close → EACCES) — der
+// Baseline-Bau in der Builder-VM, den beforeAll hier braucht, ist damit auf
+// Windows blockiert (windows-portierung.md, Stufe 0). Bis zum Fix-Release
+// überspringen; auf macOS läuft die Suite unverändert.
+const vmTestsLauffaehig = available && process.platform !== 'win32';
 
 /**
  * Stabiler Fixture-Template-Name → Snapshot `macvibes-tpl-msbtest-v2` bleibt
@@ -47,7 +53,7 @@ let activeHandle: SandboxHandle | null = null;
 let bundleDir = '';
 
 beforeAll(async () => {
-  if (!available) return;
+  if (!vmTestsLauffaehig) return;
   bundleDir = await createTempDir('macvibes-bundle-');
   await buildDaemonBundle(bundleDir);
   if (!(await baselineExists(FIXTURE_TEMPLATE_DIR))) {
@@ -89,12 +95,16 @@ describe('Mount-Quellen (msb 0.6.8)', () => {
     tempDirs.push(echt);
     const link = join(echt, 'zeiger');
     mkdirSync(join(echt, 'ziel'));
-    symlinkSync(join(echt, 'ziel'), link);
+    // 'junction' braucht unter Windows keine Sonderrechte; auf POSIX wird
+    // der Typ-Parameter ignoriert — identisches Verhalten wie zuvor.
+    symlinkSync(join(echt, 'ziel'), link, 'junction');
 
+    const aufgeloest = realpathSync(link);
     const quelle = mountSource(link, '/work');
-    expect(quelle.endsWith(':/work')).toBe(true);
+    // Plattformneutral über realpathSync statt '/ziel:'-Literal (der
+    // Host-Pfad-Trenner ist unter Windows '\').
+    expect(quelle).toBe(`${aufgeloest}:/work`);
     expect(quelle.startsWith(link)).toBe(false);
-    expect(quelle).toContain('/ziel:');
   });
 
   test('hängt Optionen unverändert an', async () => {
@@ -171,7 +181,7 @@ async function waitForHttp(url: string, timeoutMs = 60_000): Promise<string> {
   throw new Error(`Preview unter ${url} wurde nicht erreichbar`);
 }
 
-describe.skipIf(!available)('MicrosandboxSandboxProvider (R7/R9, echte MicroVM)', () => {
+describe.skipIf(!vmTestsLauffaehig)('MicrosandboxSandboxProvider (R7/R9, echte MicroVM)', () => {
   test(
     'startet devCommand unter monit, mappt den Preview-Port und stoppt sauber',
     async () => {
@@ -256,7 +266,7 @@ describe.skipIf(!available)('MicrosandboxSandboxProvider (R7/R9, echte MicroVM)'
   });
 });
 
-describe.skipIf(!available)('Agent-Config-Persistenz (R9, resume über VM-Neustart)', () => {
+describe.skipIf(!vmTestsLauffaehig)('Agent-Config-Persistenz (R9, resume über VM-Neustart)', () => {
   test(
     'CLAUDE_CONFIG_DIR liegt auf einem Volume, das einen VM-Neustart übersteht',
     async () => {
@@ -294,65 +304,68 @@ describe.skipIf(!available)('Agent-Config-Persistenz (R9, resume über VM-Neusta
   );
 });
 
-describe.skipIf(!available)('Delta-Install (ADR 0002: bun add überlebt VM-Neustart)', () => {
-  test(
-    'ein per bun add installiertes Paket ist nach dem Neustart wieder importierbar',
-    async () => {
-      const { home, bare } = await projectSetup('delta');
-      const provider = new MicrosandboxSandboxProvider(providerConfig(home, bare));
-      const ctx = {
-        projectId: 'delta',
-        branchName: 'marco/delta',
-        workspaceDir: workspaceDirFor(home, 'delta'),
-        templateDir: FIXTURE_TEMPLATE_DIR,
-        devCommand: 'bun server.ts',
-        previewPort: 5199,
-      };
+describe.skipIf(!vmTestsLauffaehig)(
+  'Delta-Install (ADR 0002: bun add überlebt VM-Neustart)',
+  () => {
+    test(
+      'ein per bun add installiertes Paket ist nach dem Neustart wieder importierbar',
+      async () => {
+        const { home, bare } = await projectSetup('delta');
+        const provider = new MicrosandboxSandboxProvider(providerConfig(home, bare));
+        const ctx = {
+          projectId: 'delta',
+          branchName: 'marco/delta',
+          workspaceDir: workspaceDirFor(home, 'delta'),
+          templateDir: FIXTURE_TEMPLATE_DIR,
+          devCommand: 'bun server.ts',
+          previewPort: 5199,
+        };
 
-      // 1. Start: file:-Dependency host-seitig ins Volume legen (kein Netz
-      // nötig) und in der VM per bun add installieren.
-      const h1 = await provider.start(ctx);
-      activeHandle = h1;
-      await waitForHttp(`http://localhost:${h1.previewHostPort}/`);
-      const vendorDir = join(ctx.workspaceDir, 'vendor', 'mv-testpkg');
-      mkdirSync(vendorDir, { recursive: true });
-      writeFileSync(
-        join(vendorDir, 'package.json'),
-        JSON.stringify({ name: 'mv-testpkg', version: '1.0.0', main: 'index.js' }),
-      );
-      writeFileSync(join(vendorDir, 'index.js'), "module.exports = 'delta-lebt';");
-      await execShell('macvibes-delta', 'cd /work && bun add ./vendor/mv-testpkg 2>&1 | tail -1');
-      const first = await execShell(
-        'macvibes-delta',
-        `bun -e "console.log(require('mv-testpkg'))"`,
-      );
-      expect(first.trim()).toBe('delta-lebt');
-      await h1.stop();
-      activeHandle = null;
+        // 1. Start: file:-Dependency host-seitig ins Volume legen (kein Netz
+        // nötig) und in der VM per bun add installieren.
+        const h1 = await provider.start(ctx);
+        activeHandle = h1;
+        await waitForHttp(`http://localhost:${h1.previewHostPort}/`);
+        const vendorDir = join(ctx.workspaceDir, 'vendor', 'mv-testpkg');
+        mkdirSync(vendorDir, { recursive: true });
+        writeFileSync(
+          join(vendorDir, 'package.json'),
+          JSON.stringify({ name: 'mv-testpkg', version: '1.0.0', main: 'index.js' }),
+        );
+        writeFileSync(join(vendorDir, 'index.js'), "module.exports = 'delta-lebt';");
+        await execShell('macvibes-delta', 'cd /work && bun add ./vendor/mv-testpkg 2>&1 | tail -1');
+        const first = await execShell(
+          'macvibes-delta',
+          `bun -e "console.log(require('mv-testpkg'))"`,
+        );
+        expect(first.trim()).toBe('delta-lebt');
+        await h1.stop();
+        activeHandle = null;
 
-      // 2. Neustart: frischer Fork — der Boot-Delta-Install (devserver-run.sh)
-      // muss das Paket aus bun.lock rekonstruieren, BEVOR die Preview ready ist.
-      const h2 = await provider.start(ctx);
-      activeHandle = h2;
-      await waitForHttp(`http://localhost:${h2.previewHostPort}/`);
-      const second = await execShell(
-        'macvibes-delta',
-        `bun -e "console.log(require('mv-testpkg'))"`,
-      );
-      expect(second.trim()).toBe('delta-lebt');
+        // 2. Neustart: frischer Fork — der Boot-Delta-Install (devserver-run.sh)
+        // muss das Paket aus bun.lock rekonstruieren, BEVOR die Preview ready ist.
+        const h2 = await provider.start(ctx);
+        activeHandle = h2;
+        await waitForHttp(`http://localhost:${h2.previewHostPort}/`);
+        const second = await execShell(
+          'macvibes-delta',
+          `bun -e "console.log(require('mv-testpkg'))"`,
+        );
+        expect(second.trim()).toBe('delta-lebt');
 
-      // Mechanismus unverändert: node_modules bleibt Symlink in den Fork.
-      const stat = lstatSync(join(ctx.workspaceDir, 'node_modules'), { throwIfNoEntry: false });
-      expect(stat?.isSymbolicLink()).toBe(true);
+        // Mechanismus unverändert: node_modules bleibt Symlink in den Fork.
+        const stat = lstatSync(join(ctx.workspaceDir, 'node_modules'), { throwIfNoEntry: false });
+        expect(stat?.isSymbolicLink()).toBe(true);
 
-      await h2.stop();
-      activeHandle = null;
-    },
-    { timeout: 180_000 },
-  );
-});
+        await h2.stop();
+        activeHandle = null;
+      },
+      { timeout: 180_000 },
+    );
+  },
+);
 
-describe.skipIf(!available)('In-VM-Supervision (R7, Crash-Recovery durch monit)', () => {
+describe.skipIf(!vmTestsLauffaehig)('In-VM-Supervision (R7, Crash-Recovery durch monit)', () => {
   test(
     'stirbt der Dev-Server in der VM, startet monit ihn neu — VM überlebt',
     async () => {
@@ -423,7 +436,7 @@ describe('msbAvailable', () => {
  * MicroVM mit GÜLTIGEM Token zurück — Credential- und Egress-Proxy standen ihr
  * also weiter offen, obwohl der Start für den Aufrufer gescheitert war.
  */
-describe.skipIf(!available)('Aufräumen nach fehlgeschlagenem Start', () => {
+describe.skipIf(!vmTestsLauffaehig)('Aufräumen nach fehlgeschlagenem Start', () => {
   test(
     'entwertet das Token und stoppt die VM, wenn das Bereitwerden scheitert',
     async () => {
@@ -475,7 +488,7 @@ describe.skipIf(!available)('Aufräumen nach fehlgeschlagenem Start', () => {
  * Agent-Gateway, obwohl die Plattform den Start für gescheitert hält und keinen
  * Handle zum Stoppen besitzt.
  */
-describe.skipIf(!available)('Aufräumen, wenn schon der VM-Start scheitert', () => {
+describe.skipIf(!vmTestsLauffaehig)('Aufräumen, wenn schon der VM-Start scheitert', () => {
   test('gibt den Host-Port frei und entwertet das Token', async () => {
     const { home, bare } = await projectSetup('cleanup-2');
     const basis = providerConfig(home, bare);
@@ -538,7 +551,7 @@ describe.skipIf(!available)('Aufräumen, wenn schon der VM-Start scheitert', () 
  * im Provider also kein Vorab-Aufräumen. Wer das ändern will, sollte hier
  * zuerst nachlesen, warum es nicht nötig war.
  */
-describe.skipIf(!available)('Belegter Sandbox-Name (Zombie nach Serverabsturz)', () => {
+describe.skipIf(!vmTestsLauffaehig)('Belegter Sandbox-Name (Zombie nach Serverabsturz)', () => {
   test(
     'blockiert den erneuten Start NICHT — msb ersetzt die alte Sandbox',
     async () => {

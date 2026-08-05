@@ -16,7 +16,10 @@ import { createTestDb, createUser } from './testUtils';
 
 async function waitFor(
   condition: () => boolean | Promise<boolean>,
-  timeoutMs = 3000,
+  // 10 s statt 3 s: erfüllte Bedingungen kehren sofort zurück, die Frist
+  // greift nur im Fehlerfall — 3 s rissen auf langsameren Maschinen
+  // (Windows-Baseline) einen korrekten Interrupt-Test.
+  timeoutMs = 10_000,
 ): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -877,8 +880,10 @@ describe('Mid-Turn-Steering (Phase C, interrupt)', () => {
     );
     expect(messages.some((m) => m.role === 'assistant' && m.content.includes('Neue Aufgabe'))).toBe(
       true,
+      // 20 s Testfrist: der LANGSAM-Fake-Turn + Abbruch + neuer Turn liegen
+      // auf langsameren Maschinen über Buns 5-s-Default (Windows-Baseline).
     );
-  });
+  }, 20_000);
 
   test('ohne interrupt bleibt es beim Queue-Verhalten (kein Abbruch)', async () => {
     const { service, projectId } = await setup();
