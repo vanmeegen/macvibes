@@ -56,8 +56,9 @@ Skips / 0 fail; Web 151/151; Lint+Typecheck sauber). Offen bleiben:
 
 1. **Mac-Gegentest** von `bun run dev`/`bun run shutdown` (neue TS-Skripte)
    und `local-router/run.ts` — danach die alten `.sh` löschen.
-2. **Windows-CI-Leg scharf schalten**, sobald der erste Lauf auf
-   `windows-latest` grün ist (dann `continue-on-error` entfernen).
+2. ~~Windows-CI-Leg scharf schalten~~ → 2026-08-05: Lauf zu `9e54b31` war
+   auf macOS, Windows UND E2E grün; beide `continue-on-error` entfernt —
+   **die volle Matrix ist jetzt Pflicht**.
 3. Die **VM-Integrationstests** (`microsandboxProvider.test.ts`) sind unter
    Windows bis zum msb#1218-Fix-Release übersprungen — der Baseline-Bau in
    der Builder-VM scheitert dort an `cp` auf ro-Mounts (im echten Lauf

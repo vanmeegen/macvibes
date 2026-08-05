@@ -19,8 +19,8 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    # Windows ist während der Portierung informativ, nicht blockierend.
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    # Beide Plattformen sind Pflicht (scharf geschaltet nach dem ersten
+    # beidseitig grünen Lauf, 9e54b31 am 2026-08-05).
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -36,11 +36,9 @@ jobs:
           # abschalten; auf Entwickler-Macs laufen sie weiter.
           MACVIBES_DISABLE_VM_TESTS: '1'
 
-  # Playwright-E2E (Prozess-Provider + Fake-Agent) — nur Mac; wird scharf
-  # geschaltet, sobald der Lauf auf dem Runner einmal verifiziert ist.
+  # Playwright-E2E (Prozess-Provider + Fake-Agent) — nur Mac.
   e2e:
     runs-on: macos-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
