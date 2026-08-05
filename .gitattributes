@@ -1,0 +1,10 @@
+# Windows-Checkouts vor core.autocrlf=true schützen: CRLF-Shebangs würden in
+# der Linux-VM brechen, Prettier/lint-staged schlügen fehl (windows-portierung.md).
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
