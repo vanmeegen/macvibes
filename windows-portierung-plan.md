@@ -52,18 +52,36 @@ Spawn/Shell selbst mit).
 P1 `8cd1f88`, P2 `6545f1f`, P3 `e7448fb`, P4 `609ddb9`, P5 `ea79955`,
 P6 `d413bd4`, P7+P8 `dece920`). `bun run ci` ist auf dem
 Windows-11-Testrechner **komplett grün** (Server 594 pass / 22 begründete
-Skips / 0 fail; Web 151/151; Lint+Typecheck sauber). Offen bleiben:
+Skips / 0 fail; Web 151/151; Lint+Typecheck sauber).
 
-1. **Mac-Gegentest** von `bun run dev`/`bun run shutdown` (neue TS-Skripte)
-   und `local-router/run.ts` — danach die alten `.sh` löschen.
+1. ~~Mac-Gegentest~~ → 2026-08-05: erledigt, `391382e`. `bun run ci` auf dem
+   Mac grün (Server 613 pass / 3 skip / 0 fail — **inklusive** der
+   VM-Integrationstests, die dort nicht übersprungen werden — Web 151/151,
+   Shared 16/0). `bun run dev` (neue `scripts/dev.ts`) startet Server/Web/
+   Preview-Gateway sauber. `bun run shutdown` (neue `scripts/shutdown.ts`)
+   gegen eine **echte laufende MicroVM** verifiziert: Grace-Wait griff, der
+   Auto-Commit-Branch zeigt `Auto-Commit vor Sandbox-Stopp` vor dem Stopp,
+   `msb list --running` danach leer, kein verwaister Prozess auf :4000. Der
+   `local-router`-Managed-Start über `run.ts` wurde vom Test-Run selbst
+   exerciert (`"gestartet und gesund … (verwaltet)"` im CI-Log). Die alten
+   `scripts/preflight.sh`, `scripts/shutdown.sh` und
+   `apps/server/local-router/run.sh` sind gelöscht.
 2. ~~Windows-CI-Leg scharf schalten~~ → 2026-08-05: Lauf zu `9e54b31` war
    auf macOS, Windows UND E2E grün; beide `continue-on-error` entfernt —
    **die volle Matrix ist jetzt Pflicht**.
 3. Die **VM-Integrationstests** (`microsandboxProvider.test.ts`) sind unter
    Windows bis zum msb#1218-Fix-Release übersprungen — der Baseline-Bau in
    der Builder-VM scheitert dort an `cp` auf ro-Mounts (im echten Lauf
-   verifiziert). Bei jedem msb-Release erneut prüfen.
-4. Stufe 2 (unten) als eigenes Paket.
+   verifiziert). Bei jedem msb-Release erneut prüfen (siehe Re-Check-Liste
+   in `windows-portierung.md`).
+4. Stufe 2 (unten) als eigenes Paket — weiterhin blockiert auf den
+   msb#1218-Fix.
+
+**Stufe 1 ist damit formal abgeschlossen.** Die einzige bewusste
+`process.platform`-Weiche liegt weiterhin in `scripts/lib/prozesse.ts`
+(verifiziert per Repo-Grep, 2026-08-05); `core/exec.ts` und
+`core/fsCapabilities.ts` kapseln die Plattformunterschiede stattdessen über
+Feature-Detection (`bun exec`, `tree-kill`, `supportsPosixModes`).
 
 ## Arbeitspakete (Reihenfolge = Ausführungsreihenfolge)
 
