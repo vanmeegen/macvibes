@@ -1,0 +1,46 @@
+# CI-Matrix (windows-portierung-plan.md, P2): Der Mac-Leg ist Pflicht und
+# schützt die Hauptplattform während der Windows-Portierung; der Windows-Leg
+# läuft als continue-on-error mit, bis Stufe 1 abgeschlossen ist (dann wird
+# er scharf geschaltet — Definition of Done).
+#
+# Auf den Runnern ist msb NICHT installiert — die msb-Integrationstests
+# überspringen sich selbst (skipIf), getestet wird der Prozess-Provider-Pfad.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    # Windows ist während der Portierung informativ, nicht blockierend.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # Pin aus CLAUDE.md — Bun 1.3.14, NICHT upgraden ohne Sandbox-Tests.
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - run: bun run ci
+
+  # Playwright-E2E (Prozess-Provider + Fake-Agent) — nur Mac; wird scharf
+  # geschaltet, sobald der Lauf auf dem Runner einmal verifiziert ist.
+  e2e:
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - run: bunx playwright install --with-deps chromium
+        working-directory: apps/web
+      - run: bun --filter='@macvibes/web' run e2e
