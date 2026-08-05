@@ -29,6 +29,12 @@ jobs:
           bun-version: 1.3.14
       - run: bun install --frozen-lockfile
       - run: bun run ci
+        env:
+          # GitHub-Runner haben keine nested virtualization; msbAvailable()
+          # ist trotzdem true (SDK in node_modules) — der VM-Start scheitert
+          # erst zur Laufzeit. Die VM-Integrationstests hier deshalb explizit
+          # abschalten; auf Entwickler-Macs laufen sie weiter.
+          MACVIBES_DISABLE_VM_TESTS: '1'
 
   # Playwright-E2E (Prozess-Provider + Fake-Agent) — nur Mac; wird scharf
   # geschaltet, sobald der Lauf auf dem Runner einmal verifiziert ist.

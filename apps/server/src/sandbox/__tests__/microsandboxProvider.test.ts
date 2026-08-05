@@ -32,12 +32,18 @@ import type { SandboxHandle } from '../provider';
 import type { MicrosandboxProviderConfig } from '../microsandboxProvider';
 
 const available = await msbAvailable();
-// msb#1218 (Fix upstream gemerged, in 0.6.8 noch nicht released): `cp` auf
-// ro-gemountete Dateien scheitert unter Windows (close → EACCES) — der
-// Baseline-Bau in der Builder-VM, den beforeAll hier braucht, ist damit auf
-// Windows blockiert (windows-portierung.md, Stufe 0). Bis zum Fix-Release
-// überspringen; auf macOS läuft die Suite unverändert.
-const vmTestsLauffaehig = available && process.platform !== 'win32';
+// Drei Gründe, die VM-Suite zu überspringen (auf dem Entwickler-Mac greift
+// keiner davon — dort läuft sie unverändert):
+// 1. msb/SDK nicht verfügbar.
+// 2. msb#1218 (Fix upstream gemerged, in 0.6.8 noch nicht released): `cp`
+//    auf ro-gemountete Dateien scheitert unter Windows (close → EACCES) —
+//    der Baseline-Bau in der Builder-VM, den beforeAll braucht, ist dort
+//    blockiert (windows-portierung.md, Stufe 0).
+// 3. MACVIBES_DISABLE_VM_TESTS=1 (ci.yml): GitHub-Runner haben KEINE nested
+//    virtualization — msbAvailable() ist dort trotzdem true (das SDK liegt
+//    in node_modules), der VM-Start scheitert erst mit VmSetup(VmCreate).
+const vmTestsLauffaehig =
+  available && process.platform !== 'win32' && Bun.env['MACVIBES_DISABLE_VM_TESTS'] !== '1';
 
 /**
  * Stabiler Fixture-Template-Name → Snapshot `macvibes-tpl-msbtest-v2` bleibt

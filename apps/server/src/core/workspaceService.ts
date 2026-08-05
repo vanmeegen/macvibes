@@ -73,7 +73,15 @@ export async function ensureWorkspace(params: WorkspaceParams): Promise<string> 
   }
 
   mkdirSync(dirname(dir), { recursive: true });
+  // autocrlf explizit AUS: der Workspace wird in die Linux-VM gemountet —
+  // CRLF aus einem Windows-Default (core.autocrlf=true, z. B. CI-Runner)
+  // bräche dort Shebangs, und der Auto-Commit (läuft config-gehärtet OHNE
+  // autocrlf) sähe Phantom-Diffs gegen den CRLF-Checkout. `-c` wirkt beim
+  // Checkout, `config` persistiert es im separaten gitDir für alle späteren
+  // Aufrufe.
   await runGit([
+    '-c',
+    'core.autocrlf=false',
     'clone',
     '--quiet',
     '--branch',
@@ -84,6 +92,7 @@ export async function ensureWorkspace(params: WorkspaceParams): Promise<string> 
     params.bareRepoPath,
     dir,
   ]);
+  await runGit(['--git-dir', gitDir, 'config', 'core.autocrlf', 'false']);
   // `clone --separate-git-dir` hinterlässt eine .git-DATEI im Arbeitsbaum.
   // Die ist gast-beschreibbar und damit ein Umleitungsvektor — weg damit.
   removeStrayGitEntry(dir, params.projectId, { expected: true });
