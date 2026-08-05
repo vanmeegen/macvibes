@@ -1,22 +1,25 @@
-# macvibes unter Windows: Machbarkeitsanalyse (Stand 2026-08-02)
+# macvibes unter Windows: Machbarkeitsanalyse (Stand 2026-08-05)
 
-Ersetzt den Stand vom 2026-07-24. Seitdem geändert: msb wird nicht mehr über
-die CLI, sondern **in-process über das SDK** angesprochen (`msbClient.ts`);
-die Basisschicht `core/` existiert (gitService/workspaceService/processSupervisor
-liegen dort); und die Host-Inventur wurde vollständig neu erhoben.
+Ersetzt den Stand vom 2026-08-02. Seitdem geändert: **der Stufe-0-Spike wurde
+am 2026-08-05 auf einem echten Windows-11-Rechner durchgeführt — alle vier
+Experimente bestanden** (Ergebnisse unten). Die Analyse selbst (Stufen 1–2,
+Inventur vom 2026-08-02) bleibt unverändert gültig.
 
 ## Kurzfazit
 
-**Technisch machbar — ohne WSL2.** microsandbox unterstützt Windows nativ über
-die **Windows Hypervisor Platform (WHP)** seit v0.6.0 (27.06.2026); die von
-macvibes gepinnte **v0.6.8 (29.07.2026) ist zugleich die aktuellste Version**
-(Re-Check 2026-08-02) und liefert die Windows-DLLs
-(`libkrunfw-windows-{x86_64,aarch64}.dll`) sowie die npm-Plattformpakete
-`@superradcompany/microsandbox-win32-{x64,arm64}-msvc` mit. Der Host-Code-Aufwand
-ist klein und klar umrissen (~2–4 Tage); das Risiko liegt fast vollständig im
-Reifegrad des msb-Windows-Supports: Das npm-README nennt ihn ausdrücklich
-**„preview"**, das Projekt insgesamt „beta software". Windows-Support ist zum
-Analysezeitpunkt ~5 Wochen alt.
+**Technisch machbar — ohne WSL2, jetzt feldgetestet.** microsandbox
+unterstützt Windows nativ über die **Windows Hypervisor Platform (WHP)** seit
+v0.6.0 (27.06.2026); die von macvibes gepinnte **v0.6.8 (29.07.2026) ist
+zugleich die aktuellste Version** (Re-Check 2026-08-05) und liefert die
+Windows-DLLs (`libkrunfw-windows-{x86_64,aarch64}.dll`) sowie die
+npm-Plattformpakete `@superradcompany/microsandbox-win32-{x64,arm64}-msvc` mit.
+Der Stufe-0-Spike (2026-08-05, Win11 Pro 26200) hat **alle vier kritischen
+Pfade bestätigt**: Bind-Mounts mit `C:\`-Pfaden, `portBind` an 127.0.0.1,
+`host.microsandbox.internal` unter der macvibes-Egress-Policy und
+Snapshot-Bau inkl. `apt-get`. Der Host-Code-Aufwand ist klein und klar
+umrissen (~2–4 Tage); das Restrisiko liegt im Reifegrad des
+msb-Windows-Supports: Das npm-README nennt ihn ausdrücklich **„preview"**,
+das Projekt insgesamt „beta software".
 
 Zwei entlastende Befunde bleiben gültig:
 
@@ -44,27 +47,63 @@ unten. Laufender Mehraufwand nicht vergessen: eine zweite Plattform verdoppelt
 die Test-Matrix; ohne Windows-CI (oder regelmäßige manuelle Läufe) erodiert der
 Support sofort.
 
-## Stufe 0 — Validierungs-Spike (billigster Erkenntnisgewinn)
+## Stufe 0 — Validierungs-Spike: DURCHGEFÜHRT 2026-08-05, ALLE 4 BESTANDEN ✅
 
-Kein Code, ein Experiment auf einem **Windows-11**-Rechner:
+Feldtest auf Windows 11 Pro (Build 26200), msb 0.6.8 via npm
+(`bun install -g microsandbox@0.6.8` — das dokumentierte
+`irm https://install.microsandbox.dev/windows | iex` wurde hier nicht
+genutzt), Bun 1.3.14, Image `oven/bun:1.3.14`. Das Spike-Skript spiegelt
+exakt die SDK-Aufrufe aus `msbClient.ts` (volume+bind(realpathSync),
+portBind, NetworkPolicy, Snapshot.fromSandbox). Setup: `HypervisorPlatform`
+war bereits aktiv, VCRedist vorhanden, `msb doctor` grün.
 
-1. WHP aktivieren (`HypervisorPlatform`, nicht `VirtualMachinePlatform`);
-   Virtualisierung im UEFI; VCRedist 2015+; `msb doctor --fix` hilft.
-2. microsandbox 0.6.8 installieren (`irm https://install.microsandbox.dev/windows | iex`
-   bzw. npm-Paket mit win32-Plattformpaket).
-3. Eine VM starten mit genau den vier Dingen, an denen es scheitern würde:
-   - **Bind-Mount mit Laufwerksbuchstaben** (`C:\…` — unser SDK-Pfad
-     `.volume(b => b.bind(realpathSync(host)))` in `msbClient.ts:286-292` ist
-     unter Windows ungeprüft; `realpathSync` liefert dort `C:\…`-Pfade),
-   - **Port-Publishing an 127.0.0.1** (`.portBind`, `msbClient.ts:279-282`;
-     Defender-Firewall-Abfrage beim ersten Publish),
-   - **`host.microsandbox.internal`** aus der VM heraus erreichbar — daran hängt
-     der KOMPLETTE Agent-Transport (Daemon-Dial-out `index.ts:185`,
-     Credential-/Egress-Proxy `agent/vmAgentEnv.ts:29,34-36`). Ohne diesen Namen
-     läuft kein einziger Agent-Turn.
-   - **Snapshots** (`Snapshot.builder().fromSandbox()` — Baseline-Bau
-     `baselineService.ts` inkl. `apt-get` in der Builder-VM unter WHP).
-4. Trägt das, ist der Rest Fleißarbeit (Stufen 1–2). Trägt es nicht → WSL2-Weg.
+| #   | Experiment                                                                                                            | Ergebnis                                                                                                                                                                                                                                   |
+| --- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A   | **Bind-Mount mit `C:\…`-Pfad** (`.volume(b => b.bind(realpathSync(host)))`)                                           | ✅ Beide Richtungen: Gast liest Host-Datei, Host liest Gast-Datei. Caveat unten (msb#1218).                                                                                                                                                |
+| B   | **`portBind('127.0.0.1', …)`**                                                                                        | ✅ HTTP 200 vom Gast-Server auf `127.0.0.1:<hostPort>`. KEIN Defender-Prompt bei Loopback-Bind — stattdessen legt Defender **stillschweigend Inbound-BLOCK-Regeln** für die `msb.exe` aus `node_modules` an (siehe Firewall-Befund unten). |
+| C   | **`host.microsandbox.internal`** unter der echten macvibes-Egress-Policy (deny + DNS + allowPublic + `172.16.0.0/12`) | ✅ `200 gateway-ok`. Gegenproben: Default-Policy (ohne 172.16-Regel) blockt den Host korrekt (Egress-Grenze greift unter WHP!); LAN (`192.168.1.1`) bleibt gesperrt.                                                                       |
+| D   | **Snapshot-Bau** (`apt-get update/install tini` in Builder-VM → `Snapshot.builder().fromSandbox()` → Boot daraus)     | ✅ Snapshot erzeugt, VM daraus in **~8,3 s** gebootet, tini 0.19.0 vorhanden. (Langsamer als die ~2 s auf dem Mac, aber funktional.)                                                                                                       |
+
+**Befunde und Fallstricke für Stufe 2** (alle auf diesem Feldtest basierend):
+
+- **Bug msb#1218 (upstream bestätigt, Fix gemerged, in 0.6.8 NICHT
+  enthalten):** `close()` auf einer **read-only** gemounteten Bind-Mount-Datei
+  gibt unter Windows `EACCES` (FUSE-FLUSH → `FlushFileBuffers` braucht
+  Schreibzugriff). GNU-Coreutils (`cat`, `head`, `cp`) melden dadurch
+  **Exit 1, obwohl der Inhalt vollständig ankommt**. Betrifft ro-Mounts wie
+  das Agent-SDK-Bundle (`/opt/macvibes`): Agent-Shell-Kommandos auf solchen
+  Dateien schlagen scheinbar fehl. Beim Port auf die Fix-Release warten oder
+  Exit-Codes auf ro-Pfaden tolerieren. → Re-Check bei jedem msb-Release.
+- **Defender-Firewall:** Kein sichtbarer Prompt; beim ersten Port-Bind
+  entstehen **stille Inbound-Block-Regeln** für den konkreten
+  `msb.exe`-Pfad. Loopback-Preview funktioniert trotzdem; für saubere
+  Verhältnisse gehört eine Allow-Regel für
+  `node_modules\@superradcompany\...\msb.exe` ins Setup (elevated `netsh
+advfirewall firewall add rule`). Achtung: Der Regel-Pfad bricht bei jedem
+  `bun install`-Layoutwechsel.
+- **Namensauflösung Host-Gateway:** `host.microsandbox.internal` löst im Gast
+  auf **AAAA (ULA `fd42:…::1`) + A (`172.16.0.125`)** auf. **Nur der
+  Hostname-Weg funktioniert** — direkte IPv4/IPv6-Literale erreichen das
+  (rein user-mode implementierte) Gateway nicht. Für macvibes egal (wir
+  nutzen überall den Hostnamen), aber nichts auf die IP hartkodieren.
+- **Stolperfalle `workdir`:** Ein nicht existentes `.workdir()` im Gast lässt
+  den agentd-Handoff **still mit Exit 0** scheitern; die SDK-Fehlermeldung
+  („sandbox process exited (exit code: 0) before agent relay became
+  available") führt in die Irre. Echte Ursache nur im `kernel.log`
+  (`logLevel('debug')`, Logs unter `~\.microsandbox\sandboxes\<name>\logs\`).
+  `msbClient.ts` setzt das workdir auf den Projekt-Mount — der existiert —
+  aber beim Debuggen daran denken.
+- **CLI-Bug 0.6.8:** `--net-rule allow@dns…` scheitert am Parser („the `dns`
+  target supports `tcp`, `udp`, or `any`"); die **SDK**-DNS-Regel
+  funktioniert. Nur relevant, falls je wieder CLI statt SDK.
+- **SDK spawnt `msb.exe` als VM-Host-Prozess** aus `node_modules` und
+  verifiziert die gespawnte PID über eine Named-Pipe — Wrapper um die Binary
+  brechen mit „sandbox startup PID mismatch". `MSB_PATH` übersteuert den
+  Binary-Pfad. Der Agent-Relay-Kanal läuft über **Windows Named Pipes**, nicht
+  TCP — firewallunabhängig.
+
+**Fazit: Der Spike trägt → Stufen 1–2 lohnen als Paket** (der WSL2-Fallback
+bleibt dokumentiert, wird aber nicht gebraucht).
 
 ## Stufe 1 — Host-Code entunixen
 
@@ -100,14 +139,14 @@ Datei: `apps/server/src/sandbox/msbClient.ts` (napi-Addon in-process, kein
 CLI-Spawn im Produktivpfad). Das verkleinert Stufe 2 gegenüber der alten
 Analyse deutlich — die Punkte sind:
 
-| Stelle                                             | Problem                                                                                                                                                       |
-| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `msbClient.ts:286-292`                             | Bind-Mount-Quelle via `realpathSync` — Laufwerksbuchstaben-Pfade (`C:\…`) unter Windows ungeprüft (Spike-Punkt 3a).                                           |
-| `msbClient.ts:279-282`                             | `.portBind('127.0.0.1', …)` — sollte gehen, Defender-Firewall-Prompt beim ersten Mal (Spike-Punkt 3b).                                                        |
-| `msbClient.ts:229-252`                             | NetworkPolicy (deny-Egress + DNS + allowPublic + CIDR) — Verhalten unter WHP unerprobt; die Egress-Sicherheitsgrenze MUSS dort genauso greifen wie auf macOS. |
-| `microsandboxProvider.ts:268-275`                  | `mode:0o700/0o600` fürs `vm-etc`-Verzeichnis mit dem **Proxy-Token** — unter Windows wirkungslos → ACL-Handling nötig (wie DB oben).                          |
-| `baselineService.ts`                               | Baseline-Bau (Builder-VM, `apt-get`, Snapshot) läuft im Gast — unter WHP unerprobt (Spike-Punkt 3d).                                                          |
-| `backendSelection.ts:8,44-66` + `index.ts:146-172` | Backend-Auswahl kennt `'process'                                                                                                                              | 'microsandbox'`; „echter Agent nur in MicroVM" ist hart verdrahtet. Windows ohne msb ⇒ ProcessProvider **mit deutlicher Warnung** (bzw. `MACVIBES_AGENT=fake`). |
+| Stelle                                             | Problem                                                                                                                                                      |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `msbClient.ts:286-292`                             | Bind-Mount-Quelle via `realpathSync` — ✅ Spike A: `C:\…`-Pfade funktionieren. Offen nur msb#1218 (Exit 1 bei `cat` & Co. auf ro-Mounts, s. Stufe 0).        |
+| `msbClient.ts:279-282`                             | `.portBind('127.0.0.1', …)` — ✅ Spike B. Kein Prompt, aber stille Defender-Block-Regeln für `msb.exe` → Allow-Regel ins Setup (s. Stufe 0).                 |
+| `msbClient.ts:229-252`                             | NetworkPolicy (deny-Egress + DNS + allowPublic + CIDR) — ✅ Spike C: Egress-Grenze greift unter WHP exakt wie auf macOS (Host nur mit 172.16-Regel, LAN zu). |
+| `microsandboxProvider.ts:268-275`                  | `mode:0o700/0o600` fürs `vm-etc`-Verzeichnis mit dem **Proxy-Token** — unter Windows wirkungslos → ACL-Handling nötig (wie DB oben).                         |
+| `baselineService.ts`                               | Baseline-Bau (Builder-VM, `apt-get`, Snapshot) — ✅ Spike D unter WHP; Boot aus Snapshot ~8,3 s (Mac: ~2 s) → Boot-Zeit im echten Baseline-Pfad nachmessen.  |
+| `backendSelection.ts:8,44-66` + `index.ts:146-172` | Backend-Auswahl kennt `'process'                                                                                                                             | 'microsandbox'`; „echter Agent nur in MicroVM" ist hart verdrahtet. Windows ohne msb ⇒ ProcessProvider **mit deutlicher Warnung** (bzw. `MACVIBES_AGENT=fake`). |
 
 Das `SandboxProvider`-Interface (`sandbox/provider.ts`: eine Methode
 `start(context) → {previewHostPort, previewStatus(), stop()}`) ist sauber
@@ -118,9 +157,11 @@ müsste ein äquivalentes Host-Gateway-Mapping stellen.
 
 ## Risiken
 
-1. **msb-Windows ist „preview" und ~5 Wochen alt** (v0.6.0 vom 27.06.2026;
-   Re-Check 2026-08-02: 0.6.8 ist aktuell, kein neueres Release). Einziger
-   echter Feldtest wäre ein eigener (Stufe 0).
+1. **msb-Windows ist „preview" und jung** (v0.6.0 vom 27.06.2026; Re-Check
+   2026-08-05: 0.6.8 weiterhin aktuell). Der eigene Feldtest (Stufe 0,
+   2026-08-05) ist bestanden — das Restrisiko sind unentdeckte Ecken im
+   Dauerbetrieb plus der bekannte, noch unreleased gefixte Bug msb#1218
+   (ro-Bind-Mount-Reads melden Exit 1).
 2. **Bun ist auf Windows die schwächste Plattform**, ausgerechnet bei
    Monorepos/Workspaces: „failed to link package with workspace" (#26543),
    kaputte `.bin`-Shims, `bun install` mit `EPERM` (#11250). Wir stehen mit
@@ -181,15 +222,17 @@ unter tini+monit). „0,8 ms CoW-Fork"-Zahlen aus Websuchen gehören zu zeroboot
 
 ## Re-Check-Liste für später
 
-- [x] ~~microsandbox-Releases~~ → 2026-08-02: 0.6.8 (29.07.) ist aktuell und
-      bereits gepinnt; Windows weiterhin „preview" (npm-README). Nächster
-      Check bei neuem Release: ist das Preview-Label gefallen? Gibt es
-      Windows-Issues zu Bind-Mounts/Snapshots/host.microsandbox.internal?
+- [x] ~~microsandbox-Releases~~ → 2026-08-05: 0.6.8 (29.07.) weiterhin
+      aktuell und gepinnt; Windows weiterhin „preview" (npm-README). Nächster
+      Check bei neuem Release: ist der **msb#1218-Fix** (ro-Bind-Mount
+      `EACCES`) drin? Ist das Preview-Label gefallen?
       → https://github.com/superradcompany/microsandbox/releases
 - [ ] Bun-Windows: Workspace-/Isolated-Linker-Bugs (#26543, #24543, #11250)
       geschlossen? Nutzt das Bun-Team Isolated Installs selbst auf Windows?
 - [ ] Docker `sbx`: noch experimentell oder stabil?
-- [ ] Erst wenn Spike (Stufe 0) grün ist, lohnen Stufe 1+2 als Paket.
+- [x] ~~Erst wenn Spike (Stufe 0) grün ist, lohnen Stufe 1+2 als Paket.~~
+      → 2026-08-05: Spike grün, alle 4 Experimente bestanden (s. Stufe 0).
+      Nächster Schritt: `.gitattributes` + CI-Matrix, dann Stufe 1.
 
 ## Quellen (Stand 2026-08-02)
 
