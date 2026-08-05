@@ -5,6 +5,10 @@ am 2026-08-05 auf einem echten Windows-11-Rechner durchgeführt — alle vier
 Experimente bestanden** (Ergebnisse unten). Die Analyse selbst (Stufen 1–2,
 Inventur vom 2026-08-02) bleibt unverändert gültig.
 
+Der konkrete Umsetzungsplan für Stufe 1+2 steht in
+[`windows-portierung-plan.md`](windows-portierung-plan.md) — Leitprinzip
+dort: plattformneutrale Mechanismen statt Plattform-Weichen.
+
 ## Kurzfazit
 
 **Technisch machbar — ohne WSL2, jetzt feldgetestet.** microsandbox
