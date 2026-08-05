@@ -163,6 +163,28 @@ der lokalen CA einmalig vertrauen: Mac `caddy trust`; iPad das Root-Zertifikat
 (`~/Library/Application Support/Caddy/pki/authorities/local/root.crt`)
 installieren + unter Zertifikatsvertrauen aktivieren.
 
+## Windows (Stufe 1 portiert, Stand 2026-08-05)
+
+`bun run ci`, `bun run dev`/`shutdown` (Bun-TS-Skripte) und der
+Prozess-Provider laufen nativ unter Windows 11; CI-Matrix in
+`.github/workflows/ci.yml` (Windows-Leg noch `continue-on-error`).
+Leitprinzip aus `windows-portierung-plan.md`: **plattformneutrale
+Mechanismen statt `process.platform`-Weichen** (`bun exec` + `tree-kill` in
+`core/exec.ts`, Feature-Detection in `core/fsCapabilities.ts`) — bitte
+beibehalten. Wichtig:
+
+- **Bun-Pin 1.3.14** unter Windows via winget/scoop (kein brew).
+- **MicroVMs (Stufe 2) noch nicht produktiv:** der Baseline-Bau scheitert
+  unter Windows an msb-Bug #1218 (`cp` auf ro-Mounts meldet EACCES beim
+  close; Fix upstream gemerged, noch in keinem Release ≤ 0.6.8). Die
+  VM-Integrationstests überspringen sich dort deshalb.
+- Defender legt beim ersten Preview-Port **stille Block-Regeln** für die
+  `msb.exe` aus `node_modules` an — Allow-Regel per elevated `netsh` setzen
+  (Details in `windows-portierung.md`, Stufe 0).
+- git-Härtung nutzt BEWUSST `/dev/null`/`/bin/false` auch unter Windows
+  (MSYS-Git übersetzt sie; `os.devNull` wird von git abgelehnt — siehe
+  Kommentar in `core/gitService.ts`).
+
 ## Credentials
 
 Der Agent in der VM erreicht die Claude API nur über den Host-Proxy. In

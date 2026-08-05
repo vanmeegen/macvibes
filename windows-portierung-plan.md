@@ -46,6 +46,24 @@ Spawn/Shell selbst mit).
   dort ausdrücklich Verhaltensparität als Testziel dokumentiert und auf dem
   Mac gegengetestet, bevor die alten `.sh` gelöscht werden.
 
+## Stand der Umsetzung (2026-08-05, Abend)
+
+**P0–P8 sind umgesetzt und committet** (P0 `windows-portierung.md`-Update,
+P1 `8cd1f88`, P2 `6545f1f`, P3 `e7448fb`, P4 `609ddb9`, P5 `ea79955`,
+P6 `d413bd4`, P7+P8 `dece920`). `bun run ci` ist auf dem
+Windows-11-Testrechner **komplett grün** (Server 594 pass / 22 begründete
+Skips / 0 fail; Web 151/151; Lint+Typecheck sauber). Offen bleiben:
+
+1. **Mac-Gegentest** von `bun run dev`/`bun run shutdown` (neue TS-Skripte)
+   und `local-router/run.ts` — danach die alten `.sh` löschen.
+2. **Windows-CI-Leg scharf schalten**, sobald der erste Lauf auf
+   `windows-latest` grün ist (dann `continue-on-error` entfernen).
+3. Die **VM-Integrationstests** (`microsandboxProvider.test.ts`) sind unter
+   Windows bis zum msb#1218-Fix-Release übersprungen — der Baseline-Bau in
+   der Builder-VM scheitert dort an `cp` auf ro-Mounts (im echten Lauf
+   verifiziert). Bei jedem msb-Release erneut prüfen.
+4. Stufe 2 (unten) als eigenes Paket.
+
 ## Arbeitspakete (Reihenfolge = Ausführungsreihenfolge)
 
 ### P0 — Windows-Baseline erheben (½ h)
