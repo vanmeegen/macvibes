@@ -114,21 +114,18 @@ Dazu gehört: `processProvider.ts:64` `localhost` → `127.0.0.1` (Windows löst
 beobachtbaren Unterschied). Der VM-Daemon (`agent/daemon/main.ts:102`) bleibt
 unangetastet — der läuft im Linux-Gast.
 
-### P4 — `core/gitService.ts`: Härtung portabel (½ Tag)
+### P4 — `core/gitService.ts`: Härtung portabel (½ Tag) — ✅ ERLEDIGT, mit Überraschung
 
-Läuft in JEDEM git-Aufruf, deshalb früh und mit Tests:
-
-- `GIT_CONFIG_GLOBAL: '/dev/null'` → `devNull` aus `node:os` (auf POSIX
-  exakt derselbe String — Mac-Diff: null).
-- `GIT_ASKPASS: '/bin/false'` → ebenfalls `devNull`: ein nicht ausführbares
-  Askpass schlägt auf beiden Plattformen fehl statt zu hängen — dieselbe
-  fail-closed-Semantik ohne Weiche. (Verifikationstest: ein git-Kommando,
-  das Credentials bräuchte, bricht schnell und klar ab.)
-- `core.hooksPath=/dev/null`, `core.attributesFile=/dev/null` →
-  `devNull`-interpoliert (`GIT_HARDENING` wird von der Konstante zur
-  Funktion). Test: präparierter Hook im gast-kontrollierten Arbeitsbaum darf
-  NICHT feuern (das ist zugleich ein wertvoller F1-Regressionstest, den es
-  bisher nicht gibt).
+**Empirischer Ausgang (2026-08-05) anders als geplant:** Der Plan sah
+`os.devNull` vor — aber Git lehnt Windows' `\\.\nul` als Config-Pfad ab
+(„unable to access: Invalid argument"), während Git für Windows
+(MSYS-basiert) die POSIX-Literale `/dev/null` und `/bin/false` selbst
+korrekt übersetzt. Die Literale sind hier also die portablere Wahl und
+bleiben — jetzt mit begründendem Kommentar im Code und zwei neuen
+Regressionstests in `core/__tests__/gitService.test.ts`: (1) präparierter
+Hook feuert nicht (F1), (2) Credential-Nachfrage gegen einen 401-Server
+scheitert schnell statt zu hängen. Beide grün auf Windows; der Mac-Leg der
+CI bestätigt POSIX.
 
 ### P5 — Feature-Detection für Dateirechte statt win32-Weiche (½ Tag)
 

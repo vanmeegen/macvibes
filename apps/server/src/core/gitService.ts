@@ -32,6 +32,11 @@ export interface ProjectRepo {
  */
 const SAFE_GIT_ENV: Record<string, string | undefined> = {
   GIT_CONFIG_NOSYSTEM: '1',
+  // BEWUSST die POSIX-Literale, AUCH unter Windows: Git für Windows ist
+  // MSYS-basiert und übersetzt '/dev/null' und '/bin/false' selbst korrekt,
+  // während es os.devNull ('\\.\nul') als Config-Pfad ablehnt („unable to
+  // access: Invalid argument" — empirisch verifiziert 2026-08-05). Die
+  // Härtungstests in __tests__/gitService.test.ts sichern beide Plattformen.
   GIT_CONFIG_GLOBAL: '/dev/null',
   GIT_TERMINAL_PROMPT: '0',
   GIT_ASKPASS: '/bin/false',
@@ -72,6 +77,7 @@ export async function runGit(
  * `--git-dir`/`--work-tree`, weil git dann keine Repo-Discovery durch den
  * Arbeitsbaum macht und dessen `.git` gar nicht erst liest.
  */
+// '/dev/null' bewusst auch hier — siehe Begründung bei SAFE_GIT_ENV.
 const GIT_HARDENING = [
   '-c',
   'core.hooksPath=/dev/null',
