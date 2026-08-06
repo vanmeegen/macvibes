@@ -3,11 +3,12 @@
  * in EINEM plattformneutralen Bun-Skript (P6): keine bash-Abhängigkeit, keine
  * `${VAR:-…}`-Shell-Syntax mehr in package.json.
  */
+import { PORT_DEFAULTS } from './lib/ports';
 import { preflight } from './preflight';
 
 if (!(await preflight())) process.exit(1);
 
-process.env['MACVIBES_WEB_PORT'] ??= '5173';
+process.env['MACVIBES_WEB_PORT'] ??= String(PORT_DEFAULTS.web);
 
 const kind = Bun.spawn(['bun', 'run', '--filter=*', 'dev'], {
   stdin: 'inherit',

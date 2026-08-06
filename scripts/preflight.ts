@@ -10,16 +10,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { portKonfiguration } from './lib/ports';
 import { istPortBelegt } from './lib/prozesse';
-
-/** Dieselben Env-Overrides wie Server und shutdown. */
-export function portKonfiguration(): { web: number; server: number; egress: number } {
-  return {
-    web: Number(process.env['VITE_PORT'] ?? 5173),
-    server: Number(process.env['PORT'] ?? 4000),
-    egress: Number(process.env['MACVIBES_EGRESS_PORT'] ?? 4010),
-  };
-}
 
 /** Erster nicht auskommentierter Eintrag (letzter gewinnt), ohne Quotes. */
 export function adminNameAusEnvDatei(envDatei: string): string {

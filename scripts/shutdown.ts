@@ -5,16 +5,20 @@
  * TCP-Connect, PID-Suche gekapselt in lib/prozesse — die frühere harte
  * lsof-Abhängigkeit entfällt.
  */
+import { portKonfiguration } from './lib/ports';
 import { istPortBelegt, pidsAufPort, pidsMitKommandozeile, beende } from './lib/prozesse';
 
-// Ports respektieren die Env-Overrides (mit denselben Defaults wie der Server).
-const WEB_PORT = Number(process.env['VITE_PORT'] ?? 5173);
-const SERVER_PORT = Number(process.env['PORT'] ?? 4000);
-const EGRESS_PORT = Number(process.env['MACVIBES_EGRESS_PORT'] ?? 4010);
+// Ports respektieren die Env-Overrides (mit denselben Defaults wie der
+// Server) — gemeinsame Quelle mit dem Preflight: lib/ports.
 // Das Preview-Gateway hält einen eigenen festen Port. Heute ist es derselbe
 // Prozess wie der Server, es fiele also mit ihm — aber das ist eine Annahme
 // über die Prozessstruktur, nicht über den Vertrag. Explizit aufführen.
-const GATEWAY_PORT = Number(process.env['MACVIBES_PREVIEW_GATEWAY_PORT'] ?? 4173);
+const {
+  web: WEB_PORT,
+  server: SERVER_PORT,
+  egress: EGRESS_PORT,
+  gateway: GATEWAY_PORT,
+} = portKonfiguration();
 
 // ZUERST den `bun run dev`-Elternprozess beenden — sonst startet er die eben
 // gekillten Kinder (Web/Server) sofort neu (Race). Nur DIESER Elternprozess
