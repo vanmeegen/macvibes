@@ -1,10 +1,18 @@
 import { describe, expect, test } from 'bun:test';
 import { buildVmAgentEnv } from '../vmAgentEnv';
 import { AGENT_CONFIG_GUEST_DIR, PROXY_TOKEN_HEADER } from '../../core/vmContract';
+// Test darf über Schichtgrenzen greifen (s. eslint.config.js): hier wird die
+// PRODUKTIONS-Verdrahtung gepinnt — msb-Alias injiziert wie in index.ts.
+import { MSB_HOST_ALIAS } from '../../sandbox/microsandboxProvider';
 
 // Jede Assertion sichert die Reparatur eines im Systemtest gefundenen Bugs ab.
 describe('buildVmAgentEnv — kritische Agent-Umgebung', () => {
-  const env = buildVmAgentEnv({ serverPort: 4000, proxyToken: 'secret-xyz', egressPort: 4010 });
+  const env = buildVmAgentEnv({
+    serverPort: 4000,
+    proxyToken: 'secret-xyz',
+    egressPort: 4010,
+    hostAlias: MSB_HOST_ALIAS,
+  });
 
   test('API läuft über den Host-Proxy (Credentials nie in der VM)', () => {
     expect(env.ANTHROPIC_BASE_URL).toBe('http://host.microsandbox.internal:4000/anthropic');
@@ -33,5 +41,24 @@ describe('buildVmAgentEnv — kritische Agent-Umgebung', () => {
   test('der Proxy-Token wandert in den Custom-Header, nicht in ANTHROPIC_API_KEY', () => {
     expect(env.ANTHROPIC_CUSTOM_HEADERS).toContain('secret-xyz');
     expect(env.ANTHROPIC_API_KEY).not.toContain('secret-xyz');
+  });
+
+  test('der Host-Alias ist injiziert, nicht hartkodiert (Backend-Wechsel: M4)', () => {
+    // Ein anderes VM-Backend (Windows-Stufe 2) erreicht den Host anders als
+    // über msb-NAT — der Alias muss deshalb VOLLSTÄNDIG durchfließen. Bliebe
+    // irgendwo ein hartkodiertes host.microsandbox.internal stehen, zeigte
+    // API-, Egress- oder NO_PROXY-Pfad beim Backend-Wechsel still ins Leere.
+    const fremd = buildVmAgentEnv({
+      serverPort: 4000,
+      proxyToken: 'secret-xyz',
+      egressPort: 4010,
+      hostAlias: 'host.anderes-backend.test',
+    });
+    for (const wert of Object.values(fremd)) {
+      expect(wert).not.toContain('host.microsandbox.internal');
+    }
+    expect(fremd.ANTHROPIC_BASE_URL).toBe('http://host.anderes-backend.test:4000/anthropic');
+    expect(fremd.HTTPS_PROXY).toBe('http://mv:secret-xyz@host.anderes-backend.test:4010');
+    expect(fremd.NO_PROXY).toContain('host.anderes-backend.test');
   });
 });

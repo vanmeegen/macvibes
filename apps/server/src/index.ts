@@ -16,6 +16,7 @@ import { DaemonAgentRunner } from './agent/daemonRunner';
 import { FakeAgentRunner } from './agent/fakeRunner';
 import { buildVmAgentEnv } from './agent/vmAgentEnv';
 import {
+  MSB_HOST_ALIAS,
   MicrosandboxSandboxProvider,
   microsandboxSandboxName,
   msbAvailable,
@@ -25,6 +26,7 @@ import { ProcessSandboxProvider } from './sandbox/processProvider';
 import { selectBackends, type BackendSelection } from './sandbox/backendSelection';
 import { SandboxManager } from './sandbox/sandboxManager';
 import { supportsPosixModes } from './core/fsCapabilities';
+import { GUEST_WORKDIR } from './core/vmContract';
 import { createVmTokenRegistry } from './core/vmTokens';
 import { autoCommit, createTurnEndAutoCommit } from './services/autoCommitService';
 import { ensureAdmin, purgeExpiredSessions, resolveSession } from './services/authService';
@@ -191,12 +193,20 @@ const sandboxProvider = useMicrosandbox
           // Frisches Token pro VM-Start; ein älteres derselben Sandbox
           // verfällt dabei automatisch (F12).
           const vmToken = vmTokens.mint(sandboxName);
+          // MSB_HOST_ALIAS wird hier injiziert (wie sandboxNameFor beim
+          // Runner): der Weg VM→Host ist msb-Topologie — ein anderes
+          // VM-Backend reicht seinen eigenen Alias herein.
           return {
-            ...buildVmAgentEnv({ serverPort: config.port, proxyToken: vmToken, egressPort }),
+            ...buildVmAgentEnv({
+              serverPort: config.port,
+              proxyToken: vmToken,
+              egressPort,
+              hostAlias: MSB_HOST_ALIAS,
+            }),
             MACVIBES_AGENT_GATEWAY_URL:
-              `ws://host.microsandbox.internal:${config.port}${AGENT_GATEWAY_PATH}` +
+              `ws://${MSB_HOST_ALIAS}:${config.port}${AGENT_GATEWAY_PATH}` +
               `?sandbox=${encodeURIComponent(sandboxName)}&token=${encodeURIComponent(vmToken)}`,
-            MACVIBES_AGENT_CWD: '/work',
+            MACVIBES_AGENT_CWD: GUEST_WORKDIR,
           };
         },
       },

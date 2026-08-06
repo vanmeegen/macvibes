@@ -17,9 +17,10 @@ import {
   removeDir,
 } from '../../services/__tests__/testUtils';
 import { createProjectBranch, ensureBareRepo } from '../../core/gitService';
+import { GUEST_WORKDIR } from '../../core/vmContract';
 import { workspaceDirFor } from '../../core/workspaceService';
 import { baselineSnapshotName, buildTemplateBaseline, removeSnapshot } from '../baselineService';
-import { MicrosandboxSandboxProvider, msbAvailable } from '../microsandboxProvider';
+import { MSB_HOST_ALIAS, MicrosandboxSandboxProvider, msbAvailable } from '../microsandboxProvider';
 import { execShell } from '../msbClient';
 import type { SandboxHandle } from '../provider';
 
@@ -140,11 +141,18 @@ beforeAll(async () => {
       envFor: (sandboxName) => {
         const vmToken = tokens.mint(sandboxName);
         return {
-          ...buildVmAgentEnv({ serverPort, proxyToken: vmToken, egressPort }),
+          // Wie in index.ts: der msb-Alias wird injiziert (M4) — dieser
+          // Live-Test fährt echte msb-VMs, also der echte msb-Weg zum Host.
+          ...buildVmAgentEnv({
+            serverPort,
+            proxyToken: vmToken,
+            egressPort,
+            hostAlias: MSB_HOST_ALIAS,
+          }),
           MACVIBES_AGENT_GATEWAY_URL:
-            `ws://host.microsandbox.internal:${serverPort}${AGENT_GATEWAY_PATH}` +
+            `ws://${MSB_HOST_ALIAS}:${serverPort}${AGENT_GATEWAY_PATH}` +
             `?sandbox=${encodeURIComponent(sandboxName)}&token=${encodeURIComponent(vmToken)}`,
-          MACVIBES_AGENT_CWD: '/work',
+          MACVIBES_AGENT_CWD: GUEST_WORKDIR,
         };
       },
     },

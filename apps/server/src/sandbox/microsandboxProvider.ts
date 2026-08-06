@@ -6,7 +6,7 @@ import {
   ensureWorkspace,
   projectVolumeDir,
 } from '../core/workspaceService';
-import { AGENT_CONFIG_GUEST_DIR } from '../core/vmContract';
+import { AGENT_CONFIG_GUEST_DIR, GUEST_WORKDIR } from '../core/vmContract';
 import { baselineBootstrapScript, baselineExists, baselineSnapshotName } from './baselineService';
 import { httpProbe } from '../preview/httpProbe';
 import {
@@ -86,7 +86,17 @@ export function microsandboxSandboxName(projectId: string): string {
   return `macvibes-${projectId}`;
 }
 
-/** Arbeitsverzeichnis in der VM — Mountpunkt des Projekt-Workspace. */
+/**
+ * Hostname, unter dem eine msb-VM ihren Host erreicht (NAT-Alias des
+ * libkrun-Gateways). Das ist msb-spezifische Netz-Topologie, KEIN
+ * backend-neutraler Host↔VM-Vertrag — ein anderes VM-Backend (z. B.
+ * Windows-Stufe 2) hat einen anderen Weg zum Host. Deshalb wohnt der Name
+ * hier beim msb-Provider und wird von der Composition Root in die
+ * agent-Schicht injiziert (buildVmAgentEnv, Gateway-URL), statt dort
+ * hartkodiert zu sein — ein Backend-Wechsel tauscht nur die Injektion.
+ */
+export const MSB_HOST_ALIAS = 'host.microsandbox.internal';
+
 /**
  * Das `-p`-Argument für `msb run`: der Preview-Port der VM wird ausschließlich
  * an das Host-Loopback gebunden (H1).
@@ -118,8 +128,6 @@ export function mountSource(hostPath: string, guestPath: string, options?: strin
   const quelle = realpathSync(hostPath);
   return options === undefined ? `${quelle}:${guestPath}` : `${quelle}:${guestPath}:${options}`;
 }
-
-const GUEST_WORKDIR = '/work';
 
 /**
  * Mountpunkt der persistenten Agent-Config in der VM. Claude Code schreibt

@@ -7,6 +7,14 @@ export interface VmAgentEnvParams {
   proxyToken: string;
   /** Port des Egress-Proxys (CONNECT) auf dem Host. */
   egressPort: number;
+  /**
+   * Hostname, unter dem die VM ihren Host erreicht (msb: MSB_HOST_ALIAS aus
+   * sandbox/microsandboxProvider). Wird injiziert statt hier hartkodiert:
+   * der Weg zum Host ist Topologie des jeweiligen VM-Backends, kein Wissen
+   * der agent-Schicht — ein anderes Backend reicht hier einfach seinen
+   * eigenen Alias herein, ohne dass diese Datei bricht.
+   */
+  hostAlias: string;
 }
 
 /**
@@ -26,13 +34,13 @@ export interface VmAgentEnvParams {
  */
 export function buildVmAgentEnv(params: VmAgentEnvParams): Record<string, string> {
   return {
-    ANTHROPIC_BASE_URL: `http://host.microsandbox.internal:${params.serverPort}/anthropic`,
+    ANTHROPIC_BASE_URL: `http://${params.hostAlias}:${params.serverPort}/anthropic`,
     ANTHROPIC_CUSTOM_HEADERS: `${PROXY_TOKEN_HEADER}: ${params.proxyToken}`,
     ANTHROPIC_API_KEY: 'macvibes-proxy',
     IS_SANDBOX: '1',
     CLAUDE_CONFIG_DIR: AGENT_CONFIG_GUEST_DIR,
-    HTTP_PROXY: `http://mv:${params.proxyToken}@host.microsandbox.internal:${params.egressPort}`,
-    HTTPS_PROXY: `http://mv:${params.proxyToken}@host.microsandbox.internal:${params.egressPort}`,
-    NO_PROXY: 'host.microsandbox.internal,localhost,127.0.0.1',
+    HTTP_PROXY: `http://mv:${params.proxyToken}@${params.hostAlias}:${params.egressPort}`,
+    HTTPS_PROXY: `http://mv:${params.proxyToken}@${params.hostAlias}:${params.egressPort}`,
+    NO_PROXY: `${params.hostAlias},localhost,127.0.0.1`,
   };
 }

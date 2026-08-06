@@ -1,4 +1,5 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
+import { GUEST_WORKDIR, MONIT_HTTPD_PORT } from '../../core/vmContract';
 import { httpProbe } from '../../preview/httpProbe';
 import { DaemonSession } from './daemonSession';
 import type { QueryHandle } from './daemonSession';
@@ -15,7 +16,7 @@ import type { DaemonToHostMessage } from './protocol';
  *
  * Env:
  * - MACVIBES_AGENT_GATEWAY_URL  ws://host.microsandbox.internal:<port>/agent?sandbox=…&token=…
- * - MACVIBES_AGENT_CWD          Arbeitsverzeichnis (Default: /work)
+ * - MACVIBES_AGENT_CWD          Arbeitsverzeichnis (Default: GUEST_WORKDIR)
  */
 
 const gatewayUrl = process.env['MACVIBES_AGENT_GATEWAY_URL'];
@@ -23,7 +24,9 @@ if (!gatewayUrl) {
   console.error('MACVIBES_AGENT_GATEWAY_URL fehlt — Daemon kann den Host nicht erreichen.');
   process.exit(1);
 }
-const cwd = process.env['MACVIBES_AGENT_CWD'] ?? '/work';
+// Fallback aus dem Host↔VM-Vertrag: derselbe Wert, den der Provider als
+// Workspace-Mountpunkt nutzt — eine eigene Kopie hier driftete sonst still.
+const cwd = process.env['MACVIBES_AGENT_CWD'] ?? GUEST_WORKDIR;
 
 /**
  * Zusätzliche System-Anweisung an das Modell. Nötig für schwächere lokale
@@ -89,7 +92,9 @@ const session = new DaemonSession({
  * ohne Reporter weiter; der Host fällt dann auf seine HTTP-Probe zurück.
  */
 const previewPort = Number(process.env['MACVIBES_PREVIEW_PORT'] ?? '');
-const monitPort = Number(process.env['MACVIBES_MONIT_PORT'] ?? '2812');
+// Default aus dem Host↔VM-Vertrag: exakt der Port, den vmServices in die
+// monitrc schreibt — ein zweiter hartkodierter Wert liefe still auseinander.
+const monitPort = Number(process.env['MACVIBES_MONIT_PORT'] ?? MONIT_HTTPD_PORT);
 if (Number.isFinite(previewPort) && previewPort > 0) {
   const reporter = new PreviewStatusReporter({
     fetchMonitText: async () => {

@@ -11,12 +11,18 @@
  * `/opt/macvibes/bin`.
  */
 
+import { GUEST_WORKDIR, MONIT_HTTPD_PORT } from '../core/vmContract';
+
 /** Mountpunkt der Supervisor-/Service-Konfiguration in der VM. */
 export const VM_ETC_DIR = '/opt/macvibes/etc';
 /** Mountpunkt des Agent-Daemon-Bundles in der VM. */
 export const VM_BIN_DIR = '/opt/macvibes/bin';
-/** Port der monit-Status-API in der VM (wird auf den Host gemappt). */
-export const MONIT_HTTPD_PORT = 2812;
+/**
+ * Port der monit-Status-API in der VM (wird auf den Host gemappt). Teil des
+ * Host↔VM-Vertrags (core/vmContract): der Daemon in der VM nutzt denselben
+ * Default — re-exportiert statt kopiert, damit die Werte nicht driften.
+ */
+export { MONIT_HTTPD_PORT };
 
 export interface VmServicesSpec {
   /** devCommand aus templates.json — einziger Vertrag zum Template. */
@@ -54,7 +60,9 @@ function buildRunWrappers(spec: VmServicesSpec): Record<string, string> {
       '#!/bin/sh',
       '# monit startet Programme mit minimalem PATH — bun liegt in /usr/local/bin.',
       'export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"',
-      'cd /work',
+      // Ins Gast-Arbeitsverzeichnis (Host↔VM-Vertrag) — hier ist der
+      // Workspace gemountet, hier erwartet der devCommand das Projekt.
+      `cd ${GUEST_WORKDIR}`,
       '# Delta-Install (ADR 0002): ein bun add einer früheren Session liegt nur in',
       '# bun.lock — node_modules zeigt in den ephemeren Snapshot-Fork. bun install',
       '# rekonstruiert das Delta (No-Op-Fall ~17 ms, Live-Messung 2026-07-16).',
@@ -72,7 +80,7 @@ function buildRunWrappers(spec: VmServicesSpec): Record<string, string> {
       '#!/bin/sh',
       'export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"',
       `. ${VM_ETC_DIR}/daemon.env.sh`,
-      'cd /work',
+      `cd ${GUEST_WORKDIR}`,
       `exec bun ${VM_BIN_DIR}/main.js`,
       '',
     ].join('\n'),
