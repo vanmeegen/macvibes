@@ -269,6 +269,82 @@ describe('AgentGateway.closeGracefully', () => {
 });
 
 /**
+ * `invalidate` ist der Heilungs-Anker der Fehlerpfade im DaemonAgentRunner
+ * (ack-Timeout und verworfene start-turn-Frame): erst das Räumen der
+ * Registrierung lässt waitForConnection des chatService-Retrys ECHT auf den
+ * Reconnect des frischen Daemons warten, statt sofort auf die sterbende
+ * Verbindung zurückzukehren und dort ein zweites Mal zu scheitern.
+ */
+describe('AgentGateway.invalidate', () => {
+  test('räumt die Registrierung; waitForConnection wartet danach echt auf den Reconnect', async () => {
+    const h = makeHarness();
+    await openSocket(h.url('sb-1'));
+    await h.gateway.waitForConnection('sb-1', 2000);
+
+    h.gateway.invalidate('sb-1');
+    expect(h.gateway.isConnected('sb-1')).toBe(false);
+
+    // Der "Retry": kehrt nicht sofort auf die verworfene Verbindung zurück,
+    // sondern läuft erst weiter, wenn sich der frische Daemon eingewählt hat.
+    const retryWartet = h.gateway.waitForConnection('sb-1', 2000);
+    await openSocket(h.url('sb-1'));
+    await retryWartet;
+    expect(h.gateway.isConnected('sb-1')).toBe(true);
+  });
+
+  test('ohne registrierte Verbindung ein No-Op (Fehlerpfade rufen es blind)', () => {
+    const h = makeHarness();
+    expect(() => h.gateway.invalidate('sb-1')).not.toThrow();
+  });
+});
+
+/**
+ * send() muss den Bun-Rückgabewert von ws.send() ehrlich weiterreichen:
+ * 0 heißt "Frame verworfen" (Socket schließt bereits ODER maxBackpressure-
+ * Limit überschritten) — die Aufrufer im
+ * DaemonAgentRunner entscheiden am Rückgabewert, ob der Nutzer einen klaren
+ * Fehler sieht ("Neustart konnte nicht angefordert werden") oder der Turn
+ * still abbricht. Vorher log das Gateway den Verwurf nur und meldete true —
+ * der Runner lief in einen irreführenden ack-Timeout. -1 ist dagegen NUR
+ * Backpressure: die Frame ist gepuffert und geht noch raus — ein false wäre
+ * hier ein falscher "Daemon nicht erreichbar"-Alarm für einen gesunden, bloß
+ * langsamen Socket.
+ *
+ * Bun bietet keinen deterministischen Weg, diese Rückgabewerte über einen
+ * echten Socket zu provozieren (0 ist ein enges Race beim Schließen, -1
+ * bräuchte einen echt vollgelaufenen Kernel-Puffer) — deshalb wird die
+ * send-Methode der registrierten Verbindung gestubbt.
+ */
+describe('AgentGateway.send: Bun-Rückgabewerte von ws.send()', () => {
+  function stubSendResult(gateway: AgentGateway, sandbox: string, result: number): void {
+    const { connections } = gateway as unknown as {
+      connections: Map<string, { send: (data: string) => number }>;
+    };
+    const ws = connections.get(sandbox);
+    if (ws === undefined) throw new Error(`keine registrierte Verbindung für ${sandbox}`);
+    ws.send = () => result;
+  }
+
+  test('liefert false, wenn ws.send() 0 meldet (Frame verworfen)', async () => {
+    const h = makeHarness();
+    await openSocket(h.url('sb-1'));
+    await h.gateway.waitForConnection('sb-1', 2000);
+
+    stubSendResult(h.gateway, 'sb-1', 0);
+    expect(h.gateway.send('sb-1', { kind: 'shutdown' })).toBe(false);
+  });
+
+  test('liefert weiterhin true bei Backpressure (ws.send() meldet -1)', async () => {
+    const h = makeHarness();
+    await openSocket(h.url('sb-1'));
+    await h.gateway.waitForConnection('sb-1', 2000);
+
+    stubSendResult(h.gateway, 'sb-1', -1);
+    expect(h.gateway.send('sb-1', { kind: 'shutdown' })).toBe(true);
+  });
+});
+
+/**
  * F4: Vorher prüfte das Gateway nur das prozessweite Shared Secret — das jede
  * VM besitzt — und übernahm den frei wählbaren sandbox-Parameter als
  * Identität. Eine VM konnte sich damit als fremdes Projekt anmelden, dessen

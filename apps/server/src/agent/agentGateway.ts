@@ -95,14 +95,30 @@ export class AgentGateway {
     });
   }
 
-  /** Schickt ein Kommando an den Daemon; false, wenn nicht verbunden. */
+  /** Schickt ein Kommando an den Daemon; false, wenn nicht verbunden oder verworfen. */
   send(sandbox: string, message: HostToDaemonMessage): boolean {
     const ws = this.connections.get(sandbox);
     if (ws === undefined) return false;
-    // Bun: Rückgabe -1 = Backpressure, 0 = verworfen (Socket zu), >0 = Bytes raus.
+    // Bun: Rückgabe -1 = Backpressure (gepuffert), 0 = verworfen, >0 = Bytes
+    // raus. 0 heißt laut bun-types nur "dropped" — das passiert beim gerade
+    // schließenden Socket UND beim Überschreiten des maxBackpressure-Limits.
     const result = ws.send(JSON.stringify(message));
-    if (result <= 0) {
-      console.error(`Agent-Gateway: send(${message.kind}) an ${sandbox} → Ergebnis ${result}`);
+    if (result === 0) {
+      // Die Frame wurde verworfen (Socket zu oder Backpressure-Limit
+      // überschritten) — sie kommt in keinem der beiden Fälle je an. Das MUSS
+      // als false zum Aufrufer: der Runner zeigt daran dem Nutzer einen klaren
+      // Fehler statt in einen irreführenden ack-Timeout zu laufen.
+      console.error(
+        `Agent-Gateway: send(${message.kind}) an ${sandbox} verworfen ` +
+          '(Socket zu oder Backpressure-Limit überschritten)',
+      );
+      return false;
+    }
+    if (result < 0) {
+      // Backpressure ist KEIN Fehlschlag: die Frame ist gepuffert und geht
+      // noch raus — false hieße fälschlich "Daemon nicht erreichbar" für
+      // einen gesunden, bloß langsamen Socket. Nur als Hinweis loggen.
+      console.warn(`Agent-Gateway: send(${message.kind}) an ${sandbox} gepuffert (Backpressure)`);
     }
     return true;
   }

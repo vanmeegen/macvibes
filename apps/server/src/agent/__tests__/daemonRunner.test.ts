@@ -135,7 +135,7 @@ describe('DaemonAgentRunner', () => {
     expect(gw.sent).toHaveLength(0);
   });
 
-  test('send schlägt fehl (Race beim Disconnect) → error + turn-aborted', async () => {
+  test('send schlägt fehl (Race beim Disconnect) → error + turn-aborted + Verbindung verworfen', async () => {
     const gw = new FakeGateway();
     gw.sendSucceeds = false;
     const runner = makeRunner(gw);
@@ -143,6 +143,14 @@ describe('DaemonAgentRunner', () => {
     const events = await collect(runner.startTurn(TURN).events);
     expect(events[0]?.type).toBe('error');
     expect(events.at(-1)).toEqual({ type: 'turn-aborted' });
+    // Seit send() auch bei verworfener Frame (ws.send() → 0) false liefert,
+    // kann die Verbindung hier noch REGISTRIERT sein (gerade schließender
+    // Socket). Bliebe sie stehen, kehrte waitForConnection des
+    // chatService-Retrys sofort auf die sterbende Verbindung zurück und der
+    // zweite send schlüge genauso fehl — der Retry könnte nie heilen. Deshalb
+    // MUSS der Runner sie verwerfen (bei gar nicht registrierter Verbindung
+    // ein No-Op), damit der Retry echt auf den frischen Daemon wartet.
+    expect(gw.invalidated).toEqual(['sb-p1']);
   });
 
   test('Disconnect mitten im Turn → error + turn-aborted', async () => {

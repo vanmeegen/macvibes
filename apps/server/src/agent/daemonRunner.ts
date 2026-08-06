@@ -146,6 +146,16 @@ export class DaemonAgentRunner implements AgentRunner {
           model,
         });
         if (!sent) {
+          // send() liefert false auch für eine noch REGISTRIERTE Verbindung,
+          // deren Frame verworfen wurde (Bun ws.send() → 0: Socket schließt
+          // gerade oder Backpressure-Limit gerissen). Bliebe die Registrierung
+          // stehen, kehrte waitForConnection des chatService-Retrys sofort auf
+          // die sterbende Verbindung zurück und der zweite send schlüge
+          // genauso fehl — der Turn scheiterte endgültig statt zu heilen.
+          // Deshalb verwerfen wie im ack-Timeout-Pfad (bei gar nicht
+          // registrierter Verbindung ein No-Op): der Retry wartet dann echt
+          // auf den Reconnect des frischen Daemons.
+          gateway.invalidate(sandbox);
           yield {
             type: 'error',
             message: 'Agent-Daemon nicht erreichbar (Verbindung beim Senden weg)',
