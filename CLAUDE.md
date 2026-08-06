@@ -166,8 +166,9 @@ installieren + unter Zertifikatsvertrauen aktivieren.
 ## Windows (Stufe 1 portiert, Stand 2026-08-05)
 
 `bun run ci`, `bun run dev`/`shutdown` (Bun-TS-Skripte) und der
-Prozess-Provider laufen nativ unter Windows 11; CI-Matrix in
-`.github/workflows/ci.yml` (Windows-Leg noch `continue-on-error`).
+Prozess-Provider laufen nativ unter Windows 11; die CI-Matrix in
+`.github/workflows/ci.yml` (macOS + Windows + E2E) ist seit `27935bf`
+**Pflicht** (kein `continue-on-error` mehr).
 Leitprinzip aus `windows-portierung-plan.md`: **plattformneutrale
 Mechanismen statt `process.platform`-Weichen** (`bun exec` + `tree-kill` in
 `core/exec.ts`, Feature-Detection in `core/fsCapabilities.ts`) — bitte
