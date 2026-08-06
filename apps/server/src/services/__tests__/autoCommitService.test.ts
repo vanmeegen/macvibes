@@ -196,10 +196,9 @@ describe('createTurnEndAutoCommit — Integration mit ChatService (R8)', () => {
     };
     chatService = new ChatService(db, new FakeAgentRunner(1), { onTurnEnd: hook });
 
-    await chatService.sendMessage({
+    await chatService.sendMessage(owner, {
       projectId: 'projekt-1',
       workspaceDir: workspace,
-      resumeSessionId: null,
       text: 'SCHREIBE eine Notiz',
     });
     await waitFor(async () => (await commitCount(bare, 'marco/projekt')) === before + 1);

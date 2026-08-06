@@ -51,21 +51,53 @@ export async function getProject(db: Db, id: string): Promise<ProjectWithOwner |
 }
 
 /**
- * Setzt das Agenten-Modell eines Projekts (Dropdown im Chat). Validiert gegen
- * den Modellkatalog; ein laufender Turn bleibt unberührt, der NÄCHSTE Turn
- * nutzt das neue Modell (die Session startet dabei frisch — s. chatService).
+ * Lädt ein Projekt und erzwingt STRIKTE Ownership — bewusst OHNE Admin-
+ * Ausnahme, anders als renameProject/deleteProject (dort Owner ODER Admin):
+ * fremde Projekte sind les-, kopier- und betretbar (R10), aber Chatten,
+ * Stoppen und Modellwahl bleiben dem Eigentümer vorbehalten.
+ *
+ * Lebt seit M5 hier im Service statt als Resolver-Helper: die Regel hängt
+ * damit an den Operationen selbst (chatService.sendMessage/stopTurn,
+ * setProjectAgentModel prüfen selbst) und nicht an der Disziplin des
+ * jeweiligen Transports.
+ */
+export async function getProjectOwned(
+  db: Db,
+  currentUser: UserRow,
+  id: string,
+): Promise<ProjectWithOwner> {
+  const project = await getProject(db, id);
+  if (!project) {
+    throw new DomainError('Projekt nicht gefunden');
+  }
+  if (project.ownerId !== currentUser.id) {
+    throw new DomainError('Nur der Eigentümer kann mit diesem Projekt arbeiten');
+  }
+  return project;
+}
+
+/**
+ * Setzt das Agenten-Modell eines Projekts (Dropdown im Chat). Owner-only
+ * (M5, Prüfung hier im Service); validiert gegen den Modellkatalog. Ein
+ * laufender Turn bleibt unberührt, der NÄCHSTE Turn nutzt das neue Modell
+ * (die Session startet dabei frisch — s. chatService).
  */
 export async function setProjectAgentModel(
   db: Db,
+  currentUser: UserRow,
   projectId: string,
   model: string,
-): Promise<void> {
+): Promise<ProjectWithOwner> {
+  // ERST autorisieren, DANN validieren/schreiben (F10-Muster): ein Fremder
+  // erfährt nur „nicht der Eigentümer", nicht den Modellkatalog.
+  const project = await getProjectOwned(db, currentUser, projectId);
   if (!isKnownAgentModel(model)) {
     throw new DomainError(
       `Unbekanntes Modell "${model}" — wählbar sind: ${AGENT_MODELS.map((m) => m.id).join(', ')}`,
     );
   }
   await db.update(projects).set({ agentModel: model }).where(eq(projects.id, projectId));
+  return { ...project, agentModel: model };
 }
 
 export async function createProject(

@@ -44,6 +44,8 @@ async function createProjectRow(db: Db, owner: UserRow, id = 'projekt-1'): Promi
 
 interface TestSetup {
   db: Db;
+  /** Eigentümer des Testprojekts — sendMessage/stopTurn prüfen Ownership (M5). */
+  owner: UserRow;
   service: ChatService;
   projectId: string;
   turnEnds: string[];
@@ -73,7 +75,7 @@ async function setup(
     },
     { agentIdleTimeoutMs, agentAbortGraceMs, agentFirstEventTimeoutMs, agentColdStartTimeoutMs },
   );
-  return { db, service, projectId, turnEnds, activity };
+  return { db, owner, service, projectId, turnEnds, activity };
 }
 
 /** Wie `setup`, aber mit frei gesetzten ChatService-Optionen. */
@@ -97,11 +99,11 @@ async function setupChat(
     },
     options,
   );
-  return { db, service, projectId, turnEnds, activity };
+  return { db, owner, service, projectId, turnEnds, activity };
 }
 
 function sendInput(projectId: string, text: string) {
-  return { projectId, workspaceDir: '/tmp/fake-workspace', resumeSessionId: null, text };
+  return { projectId, workspaceDir: '/tmp/fake-workspace', text };
 }
 
 describe('Config-Warmup: erster Turn wird schnell, weil beim Öffnen vorgewärmt', () => {
@@ -117,9 +119,9 @@ describe('Config-Warmup: erster Turn wird schnell, weil beim Öffnen vorgewärmt
         return { events, abort: () => {} };
       },
     };
-    const { service, projectId } = await setup(runner);
-    await service.prewarm(projectId, '/tmp/ws');
-    await service.prewarm(projectId, '/tmp/ws'); // zweiter Aufruf = No-Op
+    const { owner, service, projectId } = await setup(runner);
+    await service.prewarm(owner, projectId, '/tmp/ws');
+    await service.prewarm(owner, projectId, '/tmp/ws'); // zweiter Aufruf = No-Op
     await waitFor(() => prompts.length >= 1);
     await Bun.sleep(50);
     expect(prompts.length).toBe(1); // nur EIN Warmup
@@ -150,10 +152,10 @@ describe('Config-Warmup: erster Turn wird schnell, weil beim Öffnen vorgewärmt
         return { events, abort: () => {} };
       },
     };
-    const { service, projectId } = await setup(runner);
-    await service.prewarm(projectId, '/tmp/ws');
+    const { owner, service, projectId } = await setup(runner);
+    await service.prewarm(owner, projectId, '/tmp/ws');
     await waitFor(() => order.length === 1);
-    await service.sendMessage(sendInput(projectId, 'echte Nachricht'));
+    await service.sendMessage(owner, sendInput(projectId, 'echte Nachricht'));
     await Bun.sleep(60);
     // Der echte Turn darf NICHT laufen, solange der Warmup nicht fertig ist.
     expect(order).toEqual(['warmup']);
@@ -174,12 +176,12 @@ describe('Config-Warmup: erster Turn wird schnell, weil beim Öffnen vorgewärmt
         return { events, abort: () => {} };
       },
     };
-    const { db, service, projectId } = await setup(runner);
+    const { owner, db, service, projectId } = await setup(runner);
     await db
       .update(projects)
       .set({ claudeSessionId: 'vorhanden', claudeSessionModel: DEFAULT_AGENT_MODEL })
       .where(eq(projects.id, projectId));
-    await service.prewarm(projectId, '/tmp/ws');
+    await service.prewarm(owner, projectId, '/tmp/ws');
     await Bun.sleep(50);
     expect(prompts.length).toBe(0);
   });
@@ -203,8 +205,8 @@ describe('Watchdog: stiller Hänger wird als Fehler sichtbar', () => {
         };
       },
     };
-    const { service, projectId } = await setup(stallingRunner, 40, 40);
-    await service.sendMessage(sendInput(projectId, 'Bau was Großes'));
+    const { owner, service, projectId } = await setup(stallingRunner, 40, 40);
+    await service.sendMessage(owner, sendInput(projectId, 'Bau was Großes'));
 
     await waitFor(() => !service.isTurnActive(projectId), 3000);
     expect(aborted).toBe(true);
@@ -231,8 +233,8 @@ describe('Watchdog: stiller Hänger wird als Fehler sichtbar', () => {
         return { events, abort: () => release?.() };
       },
     };
-    const { service, projectId } = await setup(runner, 40, 200);
-    await service.sendMessage(sendInput(projectId, 'x'));
+    const { owner, service, projectId } = await setup(runner, 40, 200);
+    await service.sendMessage(owner, sendInput(projectId, 'x'));
     await waitFor(() => !service.isTurnActive(projectId), 3000);
     const err = (await service.listMessages(projectId)).find((m) => m.role === 'error');
     expect(err?.content).toContain('ECONNREFUSED');
@@ -254,8 +256,8 @@ describe('Kaltstart-Timeout: der ERSTE Turn (frische VM) bekommt mehr Zeit', () 
       },
     };
     // firstEvent kurz (50ms) würde abbrechen; coldStart großzügig (2s) rettet den ersten Turn.
-    const { service, projectId } = await setup(runner, 10_000, 40, 50, 2_000);
-    await service.sendMessage(sendInput(projectId, 'Erster Prompt'));
+    const { owner, service, projectId } = await setup(runner, 10_000, 40, 50, 2_000);
+    await service.sendMessage(owner, sendInput(projectId, 'Erster Prompt'));
     await waitFor(() => !service.isTurnActive(projectId), 5000);
     const messages = await service.listMessages(projectId);
     expect(messages.some((m) => m.role === 'assistant' && m.content === 'Endlich da.')).toBe(true);
@@ -286,9 +288,9 @@ describe('First-Event-Timeout: kaputter Start wird SCHNELL erkannt (nicht erst n
     };
     // idle riesig (10s), firstEvent klein (50ms) — der Test bleibt nur schnell,
     // wenn wirklich der First-Event-Timeout greift.
-    const { service, projectId } = await setup(runner, 10_000, 40, 50, 50);
+    const { owner, service, projectId } = await setup(runner, 10_000, 40, 50, 50);
     const t0 = Date.now();
-    await service.sendMessage(sendInput(projectId, 'x'));
+    await service.sendMessage(owner, sendInput(projectId, 'x'));
     await waitFor(() => !service.isTurnActive(projectId), 5000);
     expect(Date.now() - t0).toBeLessThan(3000);
     expect(calls).toBe(2);
@@ -308,8 +310,8 @@ describe('First-Event-Timeout: kaputter Start wird SCHNELL erkannt (nicht erst n
         return { events, abort: () => {} };
       },
     };
-    const { service, projectId } = await setup(runner, 10_000, 40, 50, 50);
-    await service.sendMessage(sendInput(projectId, 'x'));
+    const { owner, service, projectId } = await setup(runner, 10_000, 40, 50, 50);
+    await service.sendMessage(owner, sendInput(projectId, 'x'));
     await waitFor(() => !service.isTurnActive(projectId), 5000);
     const messages = await service.listMessages(projectId);
     const assistant = messages.find((m) => m.role === 'assistant');
@@ -335,10 +337,10 @@ describe('Kontext-Recovery: frischer Start bekommt die Chat-Historie mitgegeben'
 
   test('ohne Resume (keine Session) wird der bisherige Verlauf in den Prompt gepackt', async () => {
     const cap = capturingRunner();
-    const { service, projectId } = await setup(cap.runner);
+    const { owner, service, projectId } = await setup(cap.runner);
     await service.postMessage(projectId, 'user', 'Baue ein Dobble-Spiel');
     await service.postMessage(projectId, 'assistant', 'Grundgeruest steht.');
-    await service.sendMessage(sendInput(projectId, 'mach die Karten groesser'));
+    await service.sendMessage(owner, sendInput(projectId, 'mach die Karten groesser'));
     await waitFor(() => !service.isTurnActive(projectId));
     const p = cap.prompt();
     expect(p).toContain('Baue ein Dobble-Spiel'); // Verlauf drin
@@ -348,21 +350,21 @@ describe('Kontext-Recovery: frischer Start bekommt die Chat-Historie mitgegeben'
 
   test('mit gültiger Session (Resume) wird KEINE Historie eingebettet — Resume trägt sie', async () => {
     const cap = capturingRunner();
-    const { db, service, projectId } = await setup(cap.runner);
+    const { owner, db, service, projectId } = await setup(cap.runner);
     await db
       .update(projects)
       .set({ claudeSessionId: 's1', claudeSessionModel: DEFAULT_AGENT_MODEL })
       .where(eq(projects.id, projectId));
     await service.postMessage(projectId, 'user', 'alter turn');
-    await service.sendMessage(sendInput(projectId, 'neuer prompt'));
+    await service.sendMessage(owner, sendInput(projectId, 'neuer prompt'));
     await waitFor(() => !service.isTurnActive(projectId));
     expect(cap.prompt()).toBe('neuer prompt');
   });
 
   test('erster Turn ohne jede Historie bekommt nur den reinen Prompt', async () => {
     const cap = capturingRunner();
-    const { service, projectId } = await setup(cap.runner);
-    await service.sendMessage(sendInput(projectId, 'allererster prompt'));
+    const { owner, service, projectId } = await setup(cap.runner);
+    await service.sendMessage(owner, sendInput(projectId, 'allererster prompt'));
     await waitFor(() => !service.isTurnActive(projectId));
     expect(cap.prompt()).toBe('allererster prompt');
   });
@@ -373,7 +375,7 @@ describe('Kontext-Recovery: frischer Start bekommt die Chat-Historie mitgegeben'
     // die waren dann fast nur tool-Zeilen, und die Konversation fiel aus dem
     // Fenster. Der Agent startete gedächtnislos.
     const cap = capturingRunner();
-    const { service, projectId } = await setup(cap.runner);
+    const { owner, service, projectId } = await setup(cap.runner);
 
     await service.postMessage(projectId, 'user', 'Baue mir einen Shop');
     await service.postMessage(projectId, 'assistant', 'Warenkorb ist fertig.');
@@ -382,7 +384,7 @@ describe('Kontext-Recovery: frischer Start bekommt die Chat-Historie mitgegeben'
       await service.postMessage(projectId, 'tool', `edit datei-${i}.ts`);
     }
 
-    await service.sendMessage(sendInput(projectId, 'weiter'));
+    await service.sendMessage(owner, sendInput(projectId, 'weiter'));
     await waitFor(() => !service.isTurnActive(projectId));
 
     const p = cap.prompt();
@@ -418,12 +420,12 @@ describe('Retry ohne Session-Resume: hängender/korrupter Resume heilt sich selb
       },
     };
     // firstEvent + coldStart klein, damit der hängende Versuch schnell abbricht.
-    const { db, service, projectId } = await setup(runner, 10_000, 40, 40, 40);
+    const { owner, db, service, projectId } = await setup(runner, 10_000, 40, 40, 40);
     await db
       .update(projects)
       .set({ claudeSessionId: 'korrupt', claudeSessionModel: DEFAULT_AGENT_MODEL })
       .where(eq(projects.id, projectId));
-    await service.sendMessage(sendInput(projectId, 'weiter'));
+    await service.sendMessage(owner, sendInput(projectId, 'weiter'));
     await waitFor(() => !service.isTurnActive(projectId), 3000);
 
     expect(calls).toBe(2);
@@ -456,8 +458,8 @@ describe('Auto-Retry: stummer Agent-Start wird einmal neu versucht (Transport-Fl
         return { events, abort: () => {} };
       },
     };
-    const { service, projectId } = await setup(flakyRunner, 500, 40);
-    await service.sendMessage(sendInput(projectId, 'Bau'));
+    const { owner, service, projectId } = await setup(flakyRunner, 500, 40);
+    await service.sendMessage(owner, sendInput(projectId, 'Bau'));
     await waitFor(() => !service.isTurnActive(projectId));
 
     expect(calls).toBe(2);
@@ -488,8 +490,8 @@ describe('Auto-Retry: stummer Agent-Start wird einmal neu versucht (Transport-Fl
         return { events, abort: () => {} };
       },
     };
-    const { service, projectId } = await setup(flakyRunner, 40, 40);
-    await service.sendMessage(sendInput(projectId, 'x'));
+    const { owner, service, projectId } = await setup(flakyRunner, 40, 40);
+    await service.sendMessage(owner, sendInput(projectId, 'x'));
     await waitFor(() => !service.isTurnActive(projectId), 3000);
     expect(calls).toBe(2);
   });
@@ -506,8 +508,8 @@ describe('Auto-Retry: stummer Agent-Start wird einmal neu versucht (Transport-Fl
         return { events, abort: () => {} };
       },
     };
-    const { service, projectId } = await setup(runner, 500, 40);
-    await service.sendMessage(sendInput(projectId, 'x'));
+    const { owner, service, projectId } = await setup(runner, 500, 40);
+    await service.sendMessage(owner, sendInput(projectId, 'x'));
     await waitFor(() => !service.isTurnActive(projectId));
     expect(calls).toBe(1);
   });
@@ -530,8 +532,8 @@ describe('Session-Resume nur bei gleichem Modell (Hänger-Schutz)', () => {
   }
 
   test('setzt das Modell beim Speichern der Session (frische Session)', async () => {
-    const { db, service, projectId } = await setup(capturingRunner().runner);
-    await service.sendMessage(sendInput(projectId, 'Bau'));
+    const { owner, db, service, projectId } = await setup(capturingRunner().runner);
+    await service.sendMessage(owner, sendInput(projectId, 'Bau'));
     await waitFor(() => !service.isTurnActive(projectId));
     const row = (await db.select().from(projects).where(eq(projects.id, projectId)))[0];
     expect(row?.claudeSessionId).toBe('neue-session');
@@ -540,24 +542,24 @@ describe('Session-Resume nur bei gleichem Modell (Hänger-Schutz)', () => {
 
   test('resumed eine Session mit passendem Modell', async () => {
     const cap = capturingRunner();
-    const { db, service, projectId } = await setup(cap.runner);
+    const { owner, db, service, projectId } = await setup(cap.runner);
     await db
       .update(projects)
       .set({ claudeSessionId: 'alte-session', claudeSessionModel: DEFAULT_AGENT_MODEL })
       .where(eq(projects.id, projectId));
-    await service.sendMessage(sendInput(projectId, 'Weiter'));
+    await service.sendMessage(owner, sendInput(projectId, 'Weiter'));
     await waitFor(() => !service.isTurnActive(projectId));
     expect(cap.seen()).toBe('alte-session');
   });
 
   test('startet frisch, wenn die Session unter einem ANDEREN Modell erstellt wurde', async () => {
     const cap = capturingRunner();
-    const { db, service, projectId } = await setup(cap.runner);
+    const { owner, db, service, projectId } = await setup(cap.runner);
     await db
       .update(projects)
       .set({ claudeSessionId: 'opus-session', claudeSessionModel: 'claude-opus-4-8' })
       .where(eq(projects.id, projectId));
-    await service.sendMessage(sendInput(projectId, 'Weiter'));
+    await service.sendMessage(owner, sendInput(projectId, 'Weiter'));
     await waitFor(() => !service.isTurnActive(projectId));
     // Modellwechsel auf bestehender Session hängt — darf NICHT resumed werden.
     expect(cap.seen()).toBeNull();
@@ -565,12 +567,12 @@ describe('Session-Resume nur bei gleichem Modell (Hänger-Schutz)', () => {
 
   test('startet frisch, wenn kein Session-Modell hinterlegt ist (Altbestand)', async () => {
     const cap = capturingRunner();
-    const { db, service, projectId } = await setup(cap.runner);
+    const { owner, db, service, projectId } = await setup(cap.runner);
     await db
       .update(projects)
       .set({ claudeSessionId: 'legacy-session', claudeSessionModel: null })
       .where(eq(projects.id, projectId));
-    await service.sendMessage(sendInput(projectId, 'Weiter'));
+    await service.sendMessage(owner, sendInput(projectId, 'Weiter'));
     await waitFor(() => !service.isTurnActive(projectId));
     expect(cap.seen()).toBeNull();
   });
@@ -600,32 +602,32 @@ describe('Modellwahl pro Projekt (Dropdown im Chat)', () => {
 
   test('der Turn läuft mit dem Projekt-Modell (nicht mit einem globalen Default)', async () => {
     const cap = modelCapturingRunner();
-    const { db, service, projectId } = await setup(cap.runner);
+    const { owner, db, service, projectId } = await setup(cap.runner);
     await db
       .update(projects)
       .set({ agentModel: 'qwen3.6-coder' })
       .where(eq(projects.id, projectId));
-    await service.sendMessage(sendInput(projectId, 'Bau ein Board'));
+    await service.sendMessage(owner, sendInput(projectId, 'Bau ein Board'));
     await waitFor(() => !service.isTurnActive(projectId));
     expect(cap.model()).toBe('qwen3.6-coder');
   });
 
   test('ohne explizite Wahl läuft der Turn mit dem Default (Sonnet 5)', async () => {
     const cap = modelCapturingRunner();
-    const { service, projectId } = await setup(cap.runner);
-    await service.sendMessage(sendInput(projectId, 'Bau'));
+    const { owner, service, projectId } = await setup(cap.runner);
+    await service.sendMessage(owner, sendInput(projectId, 'Bau'));
     await waitFor(() => !service.isTurnActive(projectId));
     expect(cap.model()).toBe(DEFAULT_AGENT_MODEL);
   });
 
   test('die Session wird mit dem PROJEKT-Modell gespeichert', async () => {
     const cap = modelCapturingRunner();
-    const { db, service, projectId } = await setup(cap.runner);
+    const { owner, db, service, projectId } = await setup(cap.runner);
     await db
       .update(projects)
       .set({ agentModel: 'claude-haiku-4-5' })
       .where(eq(projects.id, projectId));
-    await service.sendMessage(sendInput(projectId, 'Bau'));
+    await service.sendMessage(owner, sendInput(projectId, 'Bau'));
     await waitFor(() => !service.isTurnActive(projectId));
     const row = (await db.select().from(projects).where(eq(projects.id, projectId)))[0];
     expect(row?.claudeSessionModel).toBe('claude-haiku-4-5');
@@ -642,19 +644,19 @@ describe('Modellwahl pro Projekt (Dropdown im Chat)', () => {
         return { events, abort: () => {} };
       },
     };
-    const { db, service, projectId } = await setup(runner);
+    const { owner, db, service, projectId } = await setup(runner);
     await db
       .update(projects)
       .set({ agentModel: 'qwen3.6-coder' })
       .where(eq(projects.id, projectId));
-    await service.prewarm(projectId, '/tmp/ws');
+    await service.prewarm(owner, projectId, '/tmp/ws');
     await Bun.sleep(30);
     expect(prompts).toHaveLength(0);
   });
 
   test('Modellwechsel im Projekt startet die Session frisch, gleiches Modell resumed', async () => {
     const cap = modelCapturingRunner();
-    const { db, service, projectId } = await setup(cap.runner);
+    const { owner, db, service, projectId } = await setup(cap.runner);
     // Session wurde unter qwen erstellt, Projekt steht jetzt auf Opus → kein Resume.
     await db
       .update(projects)
@@ -664,7 +666,7 @@ describe('Modellwahl pro Projekt (Dropdown im Chat)', () => {
         claudeSessionModel: 'qwen3.6-coder',
       })
       .where(eq(projects.id, projectId));
-    await service.sendMessage(sendInput(projectId, 'Weiter'));
+    await service.sendMessage(owner, sendInput(projectId, 'Weiter'));
     await waitFor(() => !service.isTurnActive(projectId));
     expect(cap.resume()).toBeNull();
 
@@ -673,7 +675,7 @@ describe('Modellwahl pro Projekt (Dropdown im Chat)', () => {
       .update(projects)
       .set({ claudeSessionId: 'opus-session', claudeSessionModel: 'claude-opus-4-8' })
       .where(eq(projects.id, projectId));
-    await service.sendMessage(sendInput(projectId, 'Und weiter'));
+    await service.sendMessage(owner, sendInput(projectId, 'Und weiter'));
     await waitFor(() => !service.isTurnActive(projectId));
     expect(cap.resume()).toBe('opus-session');
   });
@@ -691,8 +693,8 @@ describe('Streaming-Rendering (Tool live, Text/Denk getrennt)', () => {
         return { events, abort: () => {} };
       },
     };
-    const { service, projectId } = await setup(toolRunner);
-    await service.sendMessage(sendInput(projectId, 'Bau'));
+    const { owner, service, projectId } = await setup(toolRunner);
+    await service.sendMessage(owner, sendInput(projectId, 'Bau'));
     await waitFor(() => !service.isTurnActive(projectId));
 
     const tools = (await service.listMessages(projectId)).filter((m) => m.role === 'tool');
@@ -712,8 +714,8 @@ describe('Streaming-Rendering (Tool live, Text/Denk getrennt)', () => {
         return { events, abort: () => {} };
       },
     };
-    const { service, projectId } = await setup(runner);
-    await service.sendMessage(sendInput(projectId, 'Los'));
+    const { owner, service, projectId } = await setup(runner);
+    await service.sendMessage(owner, sendInput(projectId, 'Los'));
     await waitFor(() => !service.isTurnActive(projectId));
 
     const assistants = (await service.listMessages(projectId)).filter(
@@ -734,8 +736,8 @@ describe('Streaming-Rendering (Tool live, Text/Denk getrennt)', () => {
         return { events, abort: () => {} };
       },
     };
-    const { service, projectId } = await setup(runner);
-    await service.sendMessage(sendInput(projectId, 'Denk nach'));
+    const { owner, service, projectId } = await setup(runner);
+    await service.sendMessage(owner, sendInput(projectId, 'Denk nach'));
     await waitFor(() => !service.isTurnActive(projectId));
 
     const messages = await service.listMessages(projectId);
@@ -747,8 +749,8 @@ describe('Streaming-Rendering (Tool live, Text/Denk getrennt)', () => {
 
 describe('sendMessage (R6)', () => {
   test('persistiert die Nutzer-Nachricht sofort und streamt die Antwort in die Historie', async () => {
-    const { service, projectId } = await setup();
-    await service.sendMessage(sendInput(projectId, 'Hallo Welt'));
+    const { owner, service, projectId } = await setup();
+    await service.sendMessage(owner, sendInput(projectId, 'Hallo Welt'));
 
     // Nutzer-Nachricht ist sofort da, noch bevor der Turn fertig ist.
     const immediate = await service.listMessages(projectId);
@@ -775,14 +777,14 @@ describe('sendMessage (R6)', () => {
         return { events, abort: () => {} };
       },
     };
-    const { service, projectId } = await setup(toolOnlyRunner);
+    const { owner, service, projectId } = await setup(toolOnlyRunner);
     const payloads: ChatEventPayload[] = [];
     const subscription = service.subscribe(projectId);
     const collector = (async () => {
       for await (const payload of subscription) payloads.push(payload);
     })();
 
-    await service.sendMessage(sendInput(projectId, 'Ändere die Überschrift'));
+    await service.sendMessage(owner, sendInput(projectId, 'Ändere die Überschrift'));
     await waitFor(() => !service.isTurnActive(projectId));
     // Es muss ein finales Event mit turnActive=false angekommen sein.
     await waitFor(() => payloads.some((p) => !p.turnActive));
@@ -794,7 +796,7 @@ describe('sendMessage (R6)', () => {
   });
 
   test('veröffentlicht Events an Subscriber; letztes Event meldet turnActive=false', async () => {
-    const { service, projectId } = await setup();
+    const { owner, service, projectId } = await setup();
     const payloads: ChatEventPayload[] = [];
     const subscription = service.subscribe(projectId);
     const collector = (async () => {
@@ -803,7 +805,7 @@ describe('sendMessage (R6)', () => {
       }
     })();
 
-    await service.sendMessage(sendInput(projectId, 'Streaming Test'));
+    await service.sendMessage(owner, sendInput(projectId, 'Streaming Test'));
     await waitFor(() => payloads.some((p) => !p.turnActive));
     await subscription.return?.(undefined);
     await collector;
@@ -835,9 +837,9 @@ describe('sendMessage (R6)', () => {
       },
     };
 
-    const { service, projectId } = await setup(spyRunner);
-    await service.sendMessage(sendInput(projectId, 'Eins'));
-    await service.sendMessage(sendInput(projectId, 'Zwei'));
+    const { owner, service, projectId } = await setup(spyRunner);
+    await service.sendMessage(owner, sendInput(projectId, 'Eins'));
+    await service.sendMessage(owner, sendInput(projectId, 'Zwei'));
 
     await waitFor(async () => {
       const msgs = await service.listMessages(projectId);
@@ -857,13 +859,13 @@ describe('sendMessage (R6)', () => {
 
 describe('Mid-Turn-Steering (Phase C, interrupt)', () => {
   test('interrupt bricht den laufenden Turn ab und lässt die neue Nachricht laufen', async () => {
-    const { service, projectId } = await setup();
-    await service.sendMessage(sendInput(projectId, 'LANGSAM alte Aufgabe'));
+    const { owner, service, projectId } = await setup();
+    await service.sendMessage(owner, sendInput(projectId, 'LANGSAM alte Aufgabe'));
     await waitFor(() => service.isTurnActive(projectId));
     await Bun.sleep(20);
 
     // Neue Anweisung mitten im Turn — mit interrupt.
-    await service.sendMessage({ ...sendInput(projectId, 'Neue Aufgabe'), interrupt: true });
+    await service.sendMessage(owner, { ...sendInput(projectId, 'Neue Aufgabe'), interrupt: true });
 
     await waitFor(async () => {
       const msgs = await service.listMessages(projectId);
@@ -886,9 +888,9 @@ describe('Mid-Turn-Steering (Phase C, interrupt)', () => {
   }, 20_000);
 
   test('ohne interrupt bleibt es beim Queue-Verhalten (kein Abbruch)', async () => {
-    const { service, projectId } = await setup();
-    await service.sendMessage(sendInput(projectId, 'Eins'));
-    await service.sendMessage(sendInput(projectId, 'Zwei'));
+    const { owner, service, projectId } = await setup();
+    await service.sendMessage(owner, sendInput(projectId, 'Eins'));
+    await service.sendMessage(owner, sendInput(projectId, 'Zwei'));
     await waitFor(async () => {
       const msgs = await service.listMessages(projectId);
       return (
@@ -904,12 +906,12 @@ describe('Mid-Turn-Steering (Phase C, interrupt)', () => {
 
 describe('stopTurn (R6 Stop-Button)', () => {
   test('bricht den laufenden Turn ab und hinterlässt eine Abbruch-Zeile', async () => {
-    const { service, projectId, turnEnds } = await setup();
-    await service.sendMessage(sendInput(projectId, 'LANGSAM bitte'));
+    const { owner, service, projectId, turnEnds } = await setup();
+    await service.sendMessage(owner, sendInput(projectId, 'LANGSAM bitte'));
     await waitFor(() => service.isTurnActive(projectId));
     await Bun.sleep(30);
 
-    service.stopTurn(projectId);
+    await service.stopTurn(owner, projectId);
     await waitFor(() => !service.isTurnActive(projectId));
 
     const messages = await service.listMessages(projectId);
@@ -918,17 +920,17 @@ describe('stopTurn (R6 Stop-Button)', () => {
     expect(turnEnds).toEqual([]);
   });
 
-  test('Race: stopTurn direkt nach sendMessage (noch KEIN Handle gesetzt) bricht trotzdem ab', async () => {
+  test('Race: stopTurn unmittelbar nach sendMessage bricht trotzdem ab', async () => {
     // sendMessage() reiht den Turn nur ein und stößt pump() fire-and-forget an —
     // der Agent-Runner-Handle wird erst etwas später (nach dem ersten await in
     // runAttempt) in state.currentHandle gesetzt. Klickt der Nutzer "Stopp"
-    // extrem schnell (die UI zeigt den Button optimistisch, noch bevor die
-    // sendMessage-Mutation überhaupt zurück ist), trifft stopTurn() auf ein noch
-    // leeres currentHandle — ohne Fix ist der Abbruch dann stillschweigend
-    // wirkungslos und der Turn läuft komplett durch.
-    const { service, projectId, turnEnds } = await setup();
-    await service.sendMessage(sendInput(projectId, 'LANGSAM bitte'));
-    service.stopTurn(projectId); // sofort, ohne zu warten — reproduziert die Race.
+    // extrem schnell, darf der Abbruch nicht stillschweigend wirkungslos sein,
+    // egal ob das Handle schon steht oder nicht. (Das Startfenster OHNE Handle
+    // erzwingt Test (3) im Gegenwartsmodell-Block deterministisch über den
+    // Config-Warmup.)
+    const { owner, service, projectId, turnEnds } = await setup();
+    await service.sendMessage(owner, sendInput(projectId, 'LANGSAM bitte'));
+    await service.stopTurn(owner, projectId); // unmittelbar danach — reproduziert die Race.
 
     await waitFor(() => !service.isTurnActive(projectId), 15_000);
 
@@ -936,6 +938,164 @@ describe('stopTurn (R6 Stop-Button)', () => {
     const system = messages.find((m) => m.role === 'system');
     expect(system?.content).toContain('abgebrochen');
     expect(turnEnds).toEqual([]);
+  });
+});
+
+/**
+ * M5: Die Ownership-Regel hängt am SERVICE, nicht (nur) am Resolver. Diese
+ * Tests rufen den ChatService DIREKT auf — ohne GraphQL-Schicht — und belegen,
+ * dass die Regel auch dann greift: ein künftiger Transport oder ein Skript
+ * kann sie nicht versehentlich umgehen. Bewusst strikt Owner-only OHNE
+ * Admin-Ausnahme (R10: fremde Projekte sind les- und kopierbar, Chatten,
+ * Stoppen und Modellwahl bleiben dem Eigentümer vorbehalten).
+ */
+describe('Ownership am Service (M5): sendMessage/stopTurn prüfen selbst', () => {
+  test('sendMessage eines fremden Nutzers: DomainError, keine Zeile, kein Turn', async () => {
+    const ctrl = steuerbarerRunner();
+    const { db, service, projectId } = await setupChat(ctrl.runner);
+    const fremd = await createUser(db, 'eve');
+
+    await expect(
+      service.sendMessage(fremd, sendInput(projectId, 'fremder Prompt')),
+    ).rejects.toThrow(/Eigentümer/);
+
+    expect(ctrl.starts).toHaveLength(0);
+    expect(await service.listMessages(projectId)).toHaveLength(0);
+    expect(service.isTurnActive(projectId)).toBe(false);
+  });
+
+  test('stopTurn eines fremden Nutzers: DomainError, der laufende Turn läuft weiter', async () => {
+    const ctrl = steuerbarerRunner();
+    const { db, owner, service, projectId, turnEnds } = await setupChat(ctrl.runner);
+    const fremd = await createUser(db, 'eve');
+    await service.sendMessage(owner, sendInput(projectId, 'lange Aufgabe'));
+    await waitFor(() => ctrl.starts.length === 1);
+
+    await expect(service.stopTurn(fremd, projectId)).rejects.toThrow(/Eigentümer/);
+
+    // Der Turn des Owners bleibt unberührt und endet regulär.
+    expect(ctrl.laeufe[0]?.abgebrochen()).toBe(false);
+    expect(service.isTurnActive(projectId)).toBe(true);
+    ctrl.laeufe[0]?.fertigstellen();
+    await waitFor(() => !service.isTurnActive(projectId));
+    expect(turnEnds).toEqual(['lange Aufgabe']);
+  });
+
+  test('auch ein Admin darf im fremden Projekt weder chatten noch stoppen (R10)', async () => {
+    // Bewusst strenger als deleteProject/renameProject (dort Owner ODER
+    // Admin): die Chat-Fläche bleibt Owner-only. `setup` legt marco als
+    // ERSTEN User an — er ist damit der Bootstrap-Admin.
+    const ctrl = steuerbarerRunner();
+    const { db, owner: admin, service } = await setupChat(ctrl.runner);
+    expect(admin.role).toBe('admin');
+    const olivia = await createUser(db, 'olivia');
+    const fremdesProjekt = await createProjectRow(db, olivia, 'projekt-olivia');
+
+    await expect(service.sendMessage(admin, sendInput(fremdesProjekt, 'hallo'))).rejects.toThrow(
+      /Eigentümer/,
+    );
+    await expect(service.stopTurn(admin, fremdesProjekt)).rejects.toThrow(/Eigentümer/);
+    expect(ctrl.starts).toHaveLength(0);
+  });
+
+  test('unbekanntes Projekt: DomainError — und kein liegenbleibender leerer State', async () => {
+    const { owner, service } = await setup();
+
+    await expect(service.sendMessage(owner, sendInput('gibt-es-nicht', 'x'))).rejects.toThrow(
+      /nicht gefunden/,
+    );
+    await expect(service.stopTurn(owner, 'gibt-es-nicht')).rejects.toThrow(/nicht gefunden/);
+
+    // Die Prüfung läuft VOR dem lazy state() — sonst entstünde pro Tippfehler
+    // ein leerer Eintrag für die Prozesslebensdauer (Leck-Klasse wie in H11).
+    expect(service.trackedProjects()).toBe(0);
+  });
+});
+
+/**
+ * M5 auch für die turn-startenden Nebenpfade: resumeUnansweredTurn reiht einen
+ * VOLLEN Agent-Turn ein (inkl. Auto-Commit am Ende), prewarm startet einen
+ * Wegwerf-Turn — beide hingen bisher allein am ownerId-Branch des
+ * enterProject-Resolvers, also an der Disziplin des Transports.
+ *
+ * WICHTIG, anderer Vertrag als sendMessage/stopTurn: Für Besucher ist das
+ * KEINE Authz-Ablehnung, sondern FEATURE-GATING — sie bekommen schlicht kein
+ * Resume und keinen Warmup. Ein Wurf würde enterProject für Nur-Lese-Besucher
+ * (R10) kaputtmachen. Die Methoden kehren bei fremdem Projekt deshalb STILL
+ * zurück; diese Tests rufen den Service DIREKT auf und belegen beides:
+ * kein Turn UND kein Wurf.
+ */
+describe('Feature-Gating am Service (M5): resumeUnansweredTurn/prewarm sind Owner-only', () => {
+  test('resumeUnansweredTurn eines fremden Nutzers: still false — kein Wurf, kein Turn, keine Zeilen', async () => {
+    const ctrl = steuerbarerRunner();
+    const { service, projectId, db, turnEnds } = await setupChat(ctrl.runner);
+    const fremd = await createUser(db, 'eve');
+    // Die letzte Zeile IST eine unbeantwortete User-Zeile — der einzige Grund,
+    // warum kein Turn startet, ist das Gating.
+    await service.postMessage(projectId, 'user', 'Bau ein Memory-Spiel');
+
+    await expect(
+      service.resumeUnansweredTurn(fremd, projectId, '/tmp/fake-workspace'),
+    ).resolves.toBe(false);
+
+    await Bun.sleep(30);
+    expect(ctrl.starts).toHaveLength(0);
+    expect(service.isTurnActive(projectId)).toBe(false);
+    expect(turnEnds).toEqual([]); // kein Auto-Commit-Hook
+    // Keine neuen Zeilen — nur die eine User-Zeile von oben.
+    expect(await service.listMessages(projectId)).toHaveLength(1);
+    // Das Gating läuft VOR dem lazy state() (Leck-Klasse wie in H11).
+    expect(service.trackedProjects()).toBe(0);
+  });
+
+  test('prewarm eines fremden Nutzers: stille Rückkehr — kein Wurf, kein Warmup-Turn', async () => {
+    const ctrl = steuerbarerRunner();
+    const { service, projectId, db } = await setupChat(ctrl.runner);
+    const fremd = await createUser(db, 'eve');
+
+    await expect(service.prewarm(fremd, projectId, '/tmp/ws')).resolves.toBeUndefined();
+
+    await Bun.sleep(30);
+    expect(ctrl.starts).toHaveLength(0);
+    expect(service.trackedProjects()).toBe(0);
+  });
+
+  test('auch ein Admin bekommt im fremden Projekt weder Resume noch Warmup (R10)', async () => {
+    // Konsistent mit sendMessage/stopTurn: strikt Owner-only, KEINE
+    // Admin-Ausnahme. `setup` legt marco als ERSTEN User an — Bootstrap-Admin.
+    const ctrl = steuerbarerRunner();
+    const { owner: admin, service, db } = await setupChat(ctrl.runner);
+    expect(admin.role).toBe('admin');
+    const olivia = await createUser(db, 'olivia');
+    const fremdesProjekt = await createProjectRow(db, olivia, 'projekt-olivia');
+    await service.postMessage(fremdesProjekt, 'user', 'unbeantwortet');
+
+    await expect(
+      service.resumeUnansweredTurn(admin, fremdesProjekt, '/tmp/fake-workspace'),
+    ).resolves.toBe(false);
+    await expect(service.prewarm(admin, fremdesProjekt, '/tmp/ws')).resolves.toBeUndefined();
+
+    await Bun.sleep(30);
+    expect(ctrl.starts).toHaveLength(0);
+  });
+
+  test('unbekanntes Projekt: ebenfalls stille Rückkehr (anders als sendMessage/stopTurn)', async () => {
+    // Bewusst KEIN „nicht gefunden"-Wurf wie bei sendMessage/stopTurn: die
+    // beiden Methoden sind Beschleuniger/Komfort, kein Nutzerbefehl — es gibt
+    // niemanden, dem der Fehler etwas sagen würde (enterProject wirft für
+    // unbekannte Projekte längst selbst). Einheitliche Gating-Semantik:
+    // „nichts Eigenes da" heißt still nichts tun.
+    const ctrl = steuerbarerRunner();
+    const { owner, service } = await setupChat(ctrl.runner);
+
+    await expect(
+      service.resumeUnansweredTurn(owner, 'gibt-es-nicht', '/tmp/fake-workspace'),
+    ).resolves.toBe(false);
+    await expect(service.prewarm(owner, 'gibt-es-nicht', '/tmp/ws')).resolves.toBeUndefined();
+
+    await Bun.sleep(30);
+    expect(ctrl.starts).toHaveLength(0);
+    expect(service.trackedProjects()).toBe(0);
   });
 });
 
@@ -977,11 +1137,11 @@ describe('Abbruch ist kein Flake — kein stiller zweiter Durchlauf', () => {
     // zweites Mal los — diesmal ohne Abbruchwunsch. Der Agent führte den Turn
     // also trotz Stop vollständig aus, schrieb Dateien und committete sie.
     const starts: string[] = [];
-    const { service, projectId, turnEnds } = await setup(abbrechbarerRunner(starts, 10_000));
+    const { owner, service, projectId, turnEnds } = await setup(abbrechbarerRunner(starts, 10_000));
 
-    await service.sendMessage(sendInput(projectId, 'bitte nicht ausführen'));
+    await service.sendMessage(owner, sendInput(projectId, 'bitte nicht ausführen'));
     await waitFor(() => starts.length === 1);
-    service.stopTurn(projectId);
+    await service.stopTurn(owner, projectId);
 
     // Ohne Fix startet genau hier der zweite Versuch — mit demselben Prompt,
     // aber ohne Abbruchwunsch, und läuft dann vollständig durch.
@@ -1089,11 +1249,13 @@ function dbMitInsertTor(
 describe('Gegenwartsmodell: Stop/Interrupt treffen nur den JETZT aktiven Turn', () => {
   test('(1) Stop während laufendem Turn: abgebrochen, kein Retry, Abbruch sichtbar', async () => {
     const starts: string[] = [];
-    const { service, projectId, turnEnds } = await setupChat(abbrechbarerRunner(starts, 10_000));
-    await service.sendMessage(sendInput(projectId, 'lange Aufgabe'));
+    const { owner, service, projectId, turnEnds } = await setupChat(
+      abbrechbarerRunner(starts, 10_000),
+    );
+    await service.sendMessage(owner, sendInput(projectId, 'lange Aufgabe'));
     await waitFor(() => starts.length === 1);
 
-    service.stopTurn(projectId);
+    await service.stopTurn(owner, projectId);
     await waitFor(() => !service.isTurnActive(projectId), 15_000);
 
     expect(starts).toEqual(['lange Aufgabe']); // kein zweiter Versuch
@@ -1109,10 +1271,10 @@ describe('Gegenwartsmodell: Stop/Interrupt treffen nur den JETZT aktiven Turn', 
     // für eine UNMITTELBAR danach eintreffende Nachricht (die alte
     // R6-Reihenfolge-Race wird bewusst nicht mehr rückwirkend gestoppt).
     const starts: string[] = [];
-    const { service, projectId } = await setupChat(abbrechbarerRunner(starts, 20));
+    const { owner, service, projectId } = await setupChat(abbrechbarerRunner(starts, 20));
 
-    service.stopTurn(projectId); // nichts läuft, nichts in der Queue
-    await service.sendMessage(sendInput(projectId, 'ganz normaler Prompt'));
+    await service.stopTurn(owner, projectId); // nichts läuft, nichts in der Queue
+    await service.sendMessage(owner, sendInput(projectId, 'ganz normaler Prompt'));
     await waitFor(() => !service.isTurnActive(projectId), 15_000);
 
     expect(starts).toEqual(['ganz normaler Prompt']);
@@ -1146,14 +1308,14 @@ describe('Gegenwartsmodell: Stop/Interrupt treffen nur den JETZT aktiven Turn', 
         return echt.runner.startTurn(options);
       },
     };
-    const { service, projectId, turnEnds } = await setupChat(runner);
+    const { owner, service, projectId, turnEnds } = await setupChat(runner);
 
-    await service.prewarm(projectId, '/tmp/ws');
+    await service.prewarm(owner, projectId, '/tmp/ws');
     await waitFor(() => warmupGestartet);
-    await service.sendMessage(sendInput(projectId, 'echte Aufgabe'));
+    await service.sendMessage(owner, sendInput(projectId, 'echte Aufgabe'));
     expect(echt.starts).toHaveLength(0); // Turn aktiv, aber Handle steht noch nicht
 
-    service.stopTurn(projectId);
+    await service.stopTurn(owner, projectId);
     releaseWarmup();
     await waitFor(() => !service.isTurnActive(projectId), 15_000);
 
@@ -1165,7 +1327,7 @@ describe('Gegenwartsmodell: Stop/Interrupt treffen nur den JETZT aktiven Turn', 
     expect(messages.find((m) => m.role === 'system')?.content).toContain('abgebrochen');
 
     // Und NUR ihn: eine spätere, unabhängige Nachricht läuft normal.
-    await service.sendMessage(sendInput(projectId, 'späterer Prompt'));
+    await service.sendMessage(owner, sendInput(projectId, 'späterer Prompt'));
     await waitFor(() => echt.starts.length === 2);
     echt.laeufe[1]?.fertigstellen();
     await waitFor(() => !service.isTurnActive(projectId));
@@ -1174,11 +1336,11 @@ describe('Gegenwartsmodell: Stop/Interrupt treffen nur den JETZT aktiven Turn', 
 
   test('(4) Interrupt bricht den laufenden Turn ab und bearbeitet die neue Nachricht', async () => {
     const ctrl = steuerbarerRunner();
-    const { service, projectId, turnEnds } = await setupChat(ctrl.runner);
-    await service.sendMessage(sendInput(projectId, 'alte Aufgabe'));
+    const { owner, service, projectId, turnEnds } = await setupChat(ctrl.runner);
+    await service.sendMessage(owner, sendInput(projectId, 'alte Aufgabe'));
     await waitFor(() => ctrl.starts.length === 1);
 
-    await service.sendMessage({ ...sendInput(projectId, 'neue Aufgabe'), interrupt: true });
+    await service.sendMessage(owner, { ...sendInput(projectId, 'neue Aufgabe'), interrupt: true });
 
     await waitFor(() => ctrl.laeufe[0]?.abgebrochen() === true);
     await waitFor(() => ctrl.starts.length === 2);
@@ -1199,9 +1361,9 @@ describe('Gegenwartsmodell: Stop/Interrupt treffen nur den JETZT aktiven Turn', 
 
   test('(5) Interrupt im Leerlauf: die neue Nachricht läuft normal und wird nicht abgebrochen', async () => {
     const ctrl = steuerbarerRunner();
-    const { service, projectId, turnEnds } = await setupChat(ctrl.runner);
+    const { owner, service, projectId, turnEnds } = await setupChat(ctrl.runner);
 
-    await service.sendMessage({ ...sendInput(projectId, 'neue Richtung'), interrupt: true });
+    await service.sendMessage(owner, { ...sendInput(projectId, 'neue Richtung'), interrupt: true });
     await waitFor(() => ctrl.starts.length === 1);
     ctrl.laeufe[0]?.fertigstellen();
     await waitFor(() => !service.isTurnActive(projectId));
@@ -1234,14 +1396,14 @@ describe('Gegenwartsmodell: Stop/Interrupt treffen nur den JETZT aktiven Turn', 
     );
     const service = new ChatService(gatedDb, ctrl.runner, {}, {});
 
-    await service.sendMessage(sendInput(projectId, 'alte Aufgabe'));
+    await service.sendMessage(owner, sendInput(projectId, 'alte Aufgabe'));
     await waitFor(() => ctrl.starts.length === 1);
 
     tor = async () => {
       ctrl.laeufe[0]?.fertigstellen(); // der vorige Turn endet GENAU JETZT …
       await waitFor(() => ctrl.starts.length === 2); // … und die Pump startet die neue
     };
-    await service.sendMessage({ ...sendInput(projectId, 'neue Aufgabe'), interrupt: true });
+    await service.sendMessage(owner, { ...sendInput(projectId, 'neue Aufgabe'), interrupt: true });
 
     // Die eigene neue Nachricht darf NIEMALS Ziel des Abbruchs sein.
     expect(ctrl.laeufe[1]?.abgebrochen()).toBe(false);
@@ -1285,8 +1447,8 @@ describe('Gegenwartsmodell: Stop/Interrupt treffen nur den JETZT aktiven Turn', 
       {},
     );
 
-    const zGesendet = service.sendMessage(sendInput(projectId, 'Z wartet')); // Queue: [Z]
-    const yGesendet = service.sendMessage({
+    const zGesendet = service.sendMessage(owner, sendInput(projectId, 'Z wartet')); // Queue: [Z]
+    const yGesendet = service.sendMessage(owner, {
       ...sendInput(projectId, 'Y steuert'),
       interrupt: true,
     }); // Queue: [Z, Y]
@@ -1312,15 +1474,15 @@ describe('Gegenwartsmodell: Stop/Interrupt treffen nur den JETZT aktiven Turn', 
 
   test('(8) Doppelter Stop ist idempotent und berührt keinen späteren Turn', async () => {
     const ctrl = steuerbarerRunner();
-    const { service, projectId } = await setupChat(ctrl.runner);
-    await service.sendMessage(sendInput(projectId, 'läuft gerade'));
+    const { owner, service, projectId } = await setupChat(ctrl.runner);
+    await service.sendMessage(owner, sendInput(projectId, 'läuft gerade'));
     await waitFor(() => ctrl.starts.length === 1);
 
-    service.stopTurn(projectId);
+    await service.stopTurn(owner, projectId);
     await waitFor(() => !service.isTurnActive(projectId));
-    service.stopTurn(projectId); // Doppelklick / veralteter turnActive-Stand: No-op
+    await service.stopTurn(owner, projectId); // Doppelklick / veralteter turnActive-Stand: No-op
 
-    await service.sendMessage(sendInput(projectId, 'unbeteiligter Turn danach'));
+    await service.sendMessage(owner, sendInput(projectId, 'unbeteiligter Turn danach'));
     await waitFor(() => ctrl.starts.length === 2);
     ctrl.laeufe[1]?.fertigstellen();
     await waitFor(() => !service.isTurnActive(projectId));
@@ -1339,11 +1501,13 @@ describe('Gegenwartsmodell: Stop/Interrupt treffen nur den JETZT aktiven Turn', 
     // als msb-Flake werten und denselben Prompt ein zweites Mal starten —
     // diesmal ohne Stop; der Agent führte die gestoppte Arbeit vollständig aus.
     const starts: string[] = [];
-    const { service, projectId, turnEnds } = await setupChat(abbrechbarerRunner(starts, 10_000));
-    await service.sendMessage(sendInput(projectId, 'gestoppte Arbeit'));
+    const { owner, service, projectId, turnEnds } = await setupChat(
+      abbrechbarerRunner(starts, 10_000),
+    );
+    await service.sendMessage(owner, sendInput(projectId, 'gestoppte Arbeit'));
     await waitFor(() => starts.length === 1);
 
-    service.stopTurn(projectId);
+    await service.stopTurn(owner, projectId);
     await waitFor(() => !service.isTurnActive(projectId), 15_000);
     await Bun.sleep(100); // Gelegenheit für einen fälschlichen zweiten Versuch
 
@@ -1376,7 +1540,7 @@ describe('Config-Warmup: Robustheit', () => {
     }) as Db;
     const service = new ChatService(kaputteDb, new FakeAgentRunner(1), {}, {});
 
-    await expect(service.prewarm(projectId, '/tmp/ws')).resolves.toBeUndefined();
+    await expect(service.prewarm(owner, projectId, '/tmp/ws')).resolves.toBeUndefined();
   });
 
   test('nach einem beendeten Warmup ist erneutes Vorwärmen möglich', async () => {
@@ -1393,13 +1557,13 @@ describe('Config-Warmup: Robustheit', () => {
         return { events, abort: () => {} };
       },
     };
-    const { service, projectId } = await setup(runner);
+    const { owner, service, projectId } = await setup(runner);
 
-    await service.prewarm(projectId, '/tmp/ws');
+    await service.prewarm(owner, projectId, '/tmp/ws');
     await waitFor(() => prompts.length === 1);
     await Bun.sleep(50); // Warmup zu Ende laufen lassen
 
-    await service.prewarm(projectId, '/tmp/ws');
+    await service.prewarm(owner, projectId, '/tmp/ws');
     await waitFor(() => prompts.length === 2);
 
     expect(prompts.length).toBe(2);
@@ -1429,8 +1593,8 @@ describe('Fehlerbehandlung (R6)', () => {
         return { events, abort: () => {} };
       },
     };
-    const { service, projectId } = await setup(retryRunner);
-    await service.sendMessage(sendInput(projectId, 'Hallo'));
+    const { owner, service, projectId } = await setup(retryRunner);
+    await service.sendMessage(owner, sendInput(projectId, 'Hallo'));
     await waitFor(() => !service.isTurnActive(projectId));
 
     const messages = await service.listMessages(projectId);
@@ -1446,8 +1610,8 @@ describe('Fehlerbehandlung (R6)', () => {
   });
 
   test('error-Events landen als error-Zeile in der Historie', async () => {
-    const { service, projectId } = await setup();
-    await service.sendMessage(sendInput(projectId, 'FEHLER provozieren'));
+    const { owner, service, projectId } = await setup();
+    await service.sendMessage(owner, sendInput(projectId, 'FEHLER provozieren'));
     await waitFor(() => !service.isTurnActive(projectId));
 
     const messages = await service.listMessages(projectId);
@@ -1457,8 +1621,8 @@ describe('Fehlerbehandlung (R6)', () => {
 
 describe('Hooks & Session (R8/R9)', () => {
   test('meldet Agent-Aktivität, ruft onTurnEnd und persistiert die Claude-Session', async () => {
-    const { db, service, projectId, turnEnds, activity } = await setup();
-    await service.sendMessage(sendInput(projectId, 'Hallo'));
+    const { owner, db, service, projectId, turnEnds, activity } = await setup();
+    await service.sendMessage(owner, sendInput(projectId, 'Hallo'));
     await waitFor(() => turnEnds.length === 1);
 
     expect(turnEnds).toEqual(['Hallo']);
@@ -1492,9 +1656,9 @@ describe('Delta-Deckel gegen unbegrenztes Wachstum (F16)', () => {
         };
       },
     };
-    const { service, projectId } = await setup(runner);
+    const { owner, service, projectId } = await setup(runner);
 
-    await service.sendMessage(sendInput(projectId, 'los'));
+    await service.sendMessage(owner, sendInput(projectId, 'los'));
     await waitFor(async () => !service.isTurnActive(projectId));
 
     const zeilen = (await service.listMessages(projectId)).filter((m) => m.role === 'assistant');
@@ -1548,8 +1712,8 @@ describe('Config-Warmup hat eine Frist', () => {
     const projectId = await createProjectRow(db, owner);
     const service = new ChatService(db, runner, {}, { agentWarmupTimeoutMs: 300 });
 
-    await service.prewarm(projectId, '/tmp/fake');
-    await service.sendMessage(sendInput(projectId, 'Hallo'));
+    await service.prewarm(owner, projectId, '/tmp/fake');
+    await service.sendMessage(owner, sendInput(projectId, 'Hallo'));
     await waitFor(async () => !service.isTurnActive(projectId), 10_000);
 
     expect(warmupAbgebrochen).toBe(true);
@@ -1565,8 +1729,8 @@ describe('Config-Warmup hat eine Frist', () => {
  */
 describe('forget: Zustand geloeschter Projekte freigeben', () => {
   test('entfernt den Projektzustand', async () => {
-    const { service, projectId } = await setup();
-    await service.sendMessage(sendInput(projectId, 'hallo'));
+    const { owner, service, projectId } = await setup();
+    await service.sendMessage(owner, sendInput(projectId, 'hallo'));
     await waitFor(() => !service.isTurnActive(projectId));
     expect(service.trackedProjects()).toBe(1);
 
@@ -1598,8 +1762,8 @@ describe('forget: Zustand geloeschter Projekte freigeben', () => {
         };
       },
     };
-    const { service, projectId } = await setup(runner);
-    await service.sendMessage(sendInput(projectId, 'laeuft noch'));
+    const { owner, service, projectId } = await setup(runner);
+    await service.sendMessage(owner, sendInput(projectId, 'laeuft noch'));
     await waitFor(() => gestartet);
 
     service.forget(projectId);
@@ -1651,7 +1815,7 @@ describe('forget: Zustand geloeschter Projekte freigeben', () => {
       service.forget(projectId);
     };
 
-    await service.sendMessage(sendInput(projectId, 'flaket gleich'));
+    await service.sendMessage(owner, sendInput(projectId, 'flaket gleich'));
     await waitFor(() => starts >= 1);
     await Bun.sleep(100); // Gelegenheit für den fälschlichen zweiten Versuch
 
@@ -1679,12 +1843,12 @@ describe('Re-Entry-Resume (resumeUnansweredTurn)', () => {
 
   test('unbeantwortete letzte User-Zeile → Turn läuft mit ORIGINALER turnId, keine zweite User-Zeile', async () => {
     const cap = fangenderRunner();
-    const { service, projectId } = await setupChat(cap.runner);
+    const { owner, service, projectId } = await setupChat(cap.runner);
     await service.postMessage(projectId, 'user', 'Bau ein Memory-Spiel');
     const userRow = (await service.listMessages(projectId))[0];
     expect(userRow).toBeDefined();
 
-    const resumed = await service.resumeUnansweredTurn(projectId, '/tmp/fake-workspace');
+    const resumed = await service.resumeUnansweredTurn(owner, projectId, '/tmp/fake-workspace');
 
     expect(resumed).toBe(true);
     await waitFor(() => !service.isTurnActive(projectId));
@@ -1703,12 +1867,12 @@ describe('Re-Entry-Resume (resumeUnansweredTurn)', () => {
 
   test('letzte Zeile ist eine assistant-Antwort → false, kein Turn, keine neuen Zeilen', async () => {
     const cap = fangenderRunner();
-    const { service, projectId } = await setupChat(cap.runner);
+    const { owner, service, projectId } = await setupChat(cap.runner);
     await service.postMessage(projectId, 'user', 'Bau was');
     await service.postMessage(projectId, 'assistant', 'Fertig gebaut.');
     const vorher = (await service.listMessages(projectId)).length;
 
-    expect(await service.resumeUnansweredTurn(projectId, '/tmp/fake-workspace')).toBe(false);
+    expect(await service.resumeUnansweredTurn(owner, projectId, '/tmp/fake-workspace')).toBe(false);
 
     await Bun.sleep(30);
     expect(service.isTurnActive(projectId)).toBe(false);
@@ -1718,11 +1882,11 @@ describe('Re-Entry-Resume (resumeUnansweredTurn)', () => {
 
   test('letzte Zeile ist die „Turn abgebrochen"-Systemzeile (Nutzer-Stop) → false', async () => {
     const cap = fangenderRunner();
-    const { service, projectId } = await setupChat(cap.runner);
+    const { owner, service, projectId } = await setupChat(cap.runner);
     await service.postMessage(projectId, 'user', 'Bau was');
     await service.postMessage(projectId, 'system', 'Turn abgebrochen');
 
-    expect(await service.resumeUnansweredTurn(projectId, '/tmp/fake-workspace')).toBe(false);
+    expect(await service.resumeUnansweredTurn(owner, projectId, '/tmp/fake-workspace')).toBe(false);
 
     await Bun.sleep(30);
     expect(cap.gesehen).toHaveLength(0);
@@ -1730,9 +1894,9 @@ describe('Re-Entry-Resume (resumeUnansweredTurn)', () => {
 
   test('leere Historie → false', async () => {
     const cap = fangenderRunner();
-    const { service, projectId } = await setupChat(cap.runner);
+    const { owner, service, projectId } = await setupChat(cap.runner);
 
-    expect(await service.resumeUnansweredTurn(projectId, '/tmp/fake-workspace')).toBe(false);
+    expect(await service.resumeUnansweredTurn(owner, projectId, '/tmp/fake-workspace')).toBe(false);
 
     await Bun.sleep(30);
     expect(cap.gesehen).toHaveLength(0);
@@ -1754,13 +1918,13 @@ describe('Re-Entry-Resume (resumeUnansweredTurn)', () => {
         return { events, abort: () => {} };
       },
     };
-    const { service, projectId } = await setupChat(runner);
-    await service.sendMessage(sendInput(projectId, 'läuft gerade'));
+    const { owner, service, projectId } = await setupChat(runner);
+    await service.sendMessage(owner, sendInput(projectId, 'läuft gerade'));
     await waitFor(() => starts === 1);
 
     // Die letzte Zeile IST eine (noch unbeantwortete) User-Zeile — trotzdem
     // kein Resume: im selben Prozess läuft der Turn ja noch.
-    expect(await service.resumeUnansweredTurn(projectId, '/tmp/fake-workspace')).toBe(false);
+    expect(await service.resumeUnansweredTurn(owner, projectId, '/tmp/fake-workspace')).toBe(false);
 
     release();
     await waitFor(() => !service.isTurnActive(projectId));
@@ -1785,15 +1949,15 @@ describe('Re-Entry-Resume (resumeUnansweredTurn)', () => {
         return { events, abort: () => {} };
       },
     };
-    const { service, projectId } = await setupChat(runner);
+    const { owner, service, projectId } = await setupChat(runner);
     await service.postMessage(projectId, 'user', 'Bau ein Memory-Spiel');
 
     // Beide Aufrufe passieren ihren synchronen Vorab-Guard, BEVOR der jeweils
     // andere seinen Push erreicht — exakt das Fenster des Races. Das erste
     // await (listMessages) suspendiert deterministisch beide.
     const ergebnisse = await Promise.all([
-      service.resumeUnansweredTurn(projectId, '/tmp/fake-workspace'),
-      service.resumeUnansweredTurn(projectId, '/tmp/fake-workspace'),
+      service.resumeUnansweredTurn(owner, projectId, '/tmp/fake-workspace'),
+      service.resumeUnansweredTurn(owner, projectId, '/tmp/fake-workspace'),
     ]);
 
     // Genau EINER der Aufrufe gewinnt.
@@ -1808,13 +1972,13 @@ describe('Re-Entry-Resume (resumeUnansweredTurn)', () => {
 
   test('Idempotenz: zweiter Aufruf direkt nach erfolgreichem Resume → false', async () => {
     const cap = fangenderRunner();
-    const { service, projectId } = await setupChat(cap.runner);
+    const { owner, service, projectId } = await setupChat(cap.runner);
     await service.postMessage(projectId, 'user', 'Bau ein Quiz');
 
-    expect(await service.resumeUnansweredTurn(projectId, '/tmp/fake-workspace')).toBe(true);
+    expect(await service.resumeUnansweredTurn(owner, projectId, '/tmp/fake-workspace')).toBe(true);
     // Sofort danach ist der wiederaufgenommene Turn aktiv (Queue/Pump) —
     // der Guard verhindert den Doppellauf.
-    expect(await service.resumeUnansweredTurn(projectId, '/tmp/fake-workspace')).toBe(false);
+    expect(await service.resumeUnansweredTurn(owner, projectId, '/tmp/fake-workspace')).toBe(false);
 
     await waitFor(() => !service.isTurnActive(projectId));
     expect(cap.gesehen).toHaveLength(1);

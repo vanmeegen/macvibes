@@ -23,6 +23,7 @@ import {
   assertCanDeleteProject,
   deleteProject,
   getProject,
+  getProjectOwned,
   listProjects,
   renameProject,
   setProjectAgentModel,
@@ -141,22 +142,6 @@ function requireAdmin(ctx: GraphQLContext): UserRow {
     throw new DomainError('Nur ein Admin darf das');
   }
   return user;
-}
-
-/** Lädt ein Projekt und stellt serverseitig die Ownership sicher (R10). */
-async function getProjectOwned(
-  ctx: GraphQLContext,
-  user: UserRow,
-  id: string,
-): Promise<ProjectWithOwner> {
-  const project = await getProject(ctx.db, id);
-  if (!project) {
-    throw new DomainError('Projekt nicht gefunden');
-  }
-  if (project.ownerId !== user.id) {
-    throw new DomainError('Nur der Eigentümer kann mit diesem Projekt arbeiten');
-  }
-  return project;
 }
 
 /** Lädt ein Projekt ohne Ownership-Prüfung (R10, lesender Zugriff). */
@@ -492,6 +477,13 @@ builder.mutationType({
           devCommand: project.devCommand,
           previewPort: project.previewPort,
         });
+        // Ownership prüfen resumeUnansweredTurn/prewarm inzwischen SELBST
+        // (M5, Feature-Gating: bei fremdem Projekt stille Rückkehr statt
+        // Wurf). Der Branch hier bleibt trotzdem — nicht als Authz (das wäre
+        // wieder Transport-Disziplin), sondern weil er ETWAS ANDERES gated:
+        // touchProject darf nur der Owner auslösen, sonst bumpte jeder
+        // Nur-Lese-Besuch die Aktivitätssortierung des Projekts. Nebenbei
+        // erspart er Besuchern zwei sinnlose DB-Reads pro enterProject.
         if (project.ownerId === user.id) {
           // Re-Entry-Resume (#34): Starb ein Turn beim Host-Neustart/Release,
           // bevor eine Antwort persistiert wurde, ist die letzte Chat-Zeile eine
@@ -499,7 +491,11 @@ builder.mutationType({
           // Prompt automatisch erneut ausführen — für den User dasselbe
           // Ergebnis, ohne erneutes Tippen. Nur für den Owner: Besucher dürfen
           // weder den Agent-Daemon belegen noch Turns anstoßen.
-          const resumed = await ctx.chatService.resumeUnansweredTurn(project.id, workspaceDir);
+          const resumed = await ctx.chatService.resumeUnansweredTurn(
+            user,
+            project.id,
+            workspaceDir,
+          );
           if (!resumed) {
             // Nur wenn NICHT wiederaufgenommen: stiller Config-Warmup
             // (fire-and-forget), während der User tippt — der erste echte Turn
@@ -508,7 +504,7 @@ builder.mutationType({
             // Kein nacktes `void` (F18): ohne Rejection-Handler beendet ein
             // Fehler hier den ganzen Serverprozess. prewarm fängt inzwischen
             // selbst ab — der Handler bleibt als zweite Sicherung.
-            ctx.chatService.prewarm(project.id, workspaceDir).catch((error: unknown) => {
+            ctx.chatService.prewarm(user, project.id, workspaceDir).catch((error: unknown) => {
               console.error(`Config-Warmup für ${project.id} fehlgeschlagen:`, error);
             });
           }
@@ -521,6 +517,7 @@ builder.mutationType({
      * Modellwahl pro Chat/Projekt (Dropdown). Ein laufender Turn bleibt
      * unberührt; der NÄCHSTE Turn nutzt das neue Modell — die Claude-Session
      * startet dabei automatisch frisch (Reconciliation im chatService).
+     * Ownership prüft der Service selbst (M5, Owner-only ohne Admin-Ausnahme).
      */
     setProjectModel: t.field({
       type: ProjectRef,
@@ -528,12 +525,8 @@ builder.mutationType({
         projectId: t.arg.id({ required: true }),
         model: t.arg.string({ required: true }),
       },
-      resolve: async (_root, args, ctx) => {
-        const user = requireUser(ctx);
-        const project = await getProjectOwned(ctx, user, String(args.projectId));
-        await setProjectAgentModel(ctx.db, project.id, args.model);
-        return { ...project, agentModel: args.model };
-      },
+      resolve: (_root, args, ctx) =>
+        setProjectAgentModel(ctx.db, requireUser(ctx), String(args.projectId), args.model),
     }),
     sendMessage: t.boolean({
       args: {
@@ -543,7 +536,12 @@ builder.mutationType({
       },
       resolve: async (_root, args, ctx) => {
         const user = requireUser(ctx);
-        const project = await getProjectOwned(ctx, user, String(args.projectId));
+        // ERST autorisieren, DANN Seiteneffekte (F10-Muster wie bei
+        // deleteProject): ohne diese Vorab-Prüfung startete ein Nicht-Owner
+        // über ensureRunning die Sandbox. Der ChatService prüft die Ownership
+        // zusätzlich SELBST (M5) — hier ist es die zweite Sicherung plus die
+        // Reihenfolge-Garantie.
+        const project = await getProjectOwned(ctx.db, user, String(args.projectId));
         const text = args.text.trim();
         if (text.length === 0) {
           throw new DomainError('Nachricht darf nicht leer sein');
@@ -560,10 +558,9 @@ builder.mutationType({
           devCommand: project.devCommand,
           previewPort: project.previewPort,
         });
-        await ctx.chatService.sendMessage({
+        await ctx.chatService.sendMessage(user, {
           projectId: project.id,
           workspaceDir,
-          resumeSessionId: project.claudeSessionId,
           text,
           interrupt: args.interrupt === true,
         });
@@ -575,10 +572,10 @@ builder.mutationType({
       args: {
         projectId: t.arg.id({ required: true }),
       },
+      // Ownership prüft der Service selbst (M5) — hier gibt es vor dem Aufruf
+      // keine Seiteneffekte, also braucht es keine Vorab-Prüfung.
       resolve: async (_root, args, ctx) => {
-        const user = requireUser(ctx);
-        await getProjectOwned(ctx, user, String(args.projectId));
-        ctx.chatService.stopTurn(String(args.projectId));
+        await ctx.chatService.stopTurn(requireUser(ctx), String(args.projectId));
         return true;
       },
     }),

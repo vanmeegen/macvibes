@@ -3,7 +3,8 @@ import { DEFAULT_AGENT_MODEL, agentTimeoutsFor, isSlowAgentModel } from '../agen
 import type { AgentEvent } from '../agent/events';
 import type { AgentRunner, TurnHandle } from '../agent/runner';
 import type { Db } from '../db/client';
-import { chatMessages, projects, type ChatMessageRow } from '../db/schema';
+import { chatMessages, projects, type ChatMessageRow, type UserRow } from '../db/schema';
+import { getProject, getProjectOwned } from './projectsService';
 
 /**
  * Obergrenze pro Chat-Zeile (F16). Jedes Delta schreibt die komplette Zeile
@@ -33,7 +34,6 @@ export interface ChatHooks {
 export interface SendMessageInput {
   projectId: string;
   workspaceDir: string;
-  resumeSessionId: string | null;
   text: string;
   /** Mid-Turn-Steering (Phase C): laufenden Turn abbrechen und neu ansetzen. */
   interrupt?: boolean;
@@ -209,8 +209,14 @@ export class ChatService {
    * nur einen ZWEITEN gleichzeitigen Warmup — bliebe er liegen, wäre `prewarm`
    * für dieses Projekt dauerhaft wirkungslos, auch nach erneutem Öffnen mit
    * einer frischen VM, deren Config wieder kalt ist.
+   *
+   * Owner-only, und die Prüfung hängt HIER am Service (M5) — aber als
+   * FEATURE-GATING, nicht als Authz-Ablehnung: ein Besucher bekommt schlicht
+   * keinen Warmup (stille Rückkehr). Ein Wurf wäre falsch — er machte
+   * enterProject für Nur-Lese-Besucher (R10) kaputt, und es gibt nichts
+   * abzulehnen: der Warmup ist ein Beschleuniger, kein Nutzerbefehl.
    */
-  async prewarm(projectId: string, workspaceDir: string): Promise<void> {
+  async prewarm(user: UserRow, projectId: string, workspaceDir: string): Promise<void> {
     if (!this.prewarmEnabled) return;
     if (this.warmups.has(projectId)) return;
     // Der Aufrufer (schema/index.ts) startet prewarm als floating promise. Eine
@@ -227,7 +233,12 @@ export class ChatService {
       console.error(`Config-Warmup für ${projectId} nicht gestartet (DB-Fehler):`, error);
       return;
     }
-    if (projectRow?.claudeSessionId != null) return;
+    // Feature-Gating (M5, s. Methodenkommentar): fremdes oder unbekanntes
+    // Projekt → STILL zurück, kein Wurf. Vorwärmen dürfte sonst jeder
+    // Transport, der den Resolver-Branch vergisst, für fremde Projekte —
+    // und belegte damit deren Ein-Turn-Daemon.
+    if (projectRow === undefined || projectRow.ownerId !== user.id) return;
+    if (projectRow.claudeSessionId != null) return;
     const model = projectRow?.agentModel ?? DEFAULT_AGENT_MODEL;
     // Langsame lokale Modelle NICHT vorwärmen: der minutenlange Warmup belegt
     // den Ein-Turn-Daemon und der erste echte Prompt würde abgewiesen.
@@ -297,8 +308,14 @@ export class ChatService {
    * selbst gestartet, ist SIE der aktive Turn und der Abbruch ein No-op
    * (`ausnahmeTurnId`). Es wird nichts vorgemerkt, das später einen anderen
    * Turn treffen könnte.
+   *
+   * Chatten ist Owner-only (R10) und die Prüfung hängt HIER am Service (M5):
+   * sie greift damit für jeden Aufrufer — GraphQL-Resolver, Skript, künftiger
+   * Transport —, nicht nur für den, der an sie denkt. Bewusst VOR jedem
+   * Effekt (kein state()-Eintrag, keine persistierte Zeile, kein Turn).
    */
-  async sendMessage(input: SendMessageInput): Promise<void> {
+  async sendMessage(user: UserRow, input: SendMessageInput): Promise<void> {
+    await getProjectOwned(this.db, user, input.projectId);
     const state = this.state(input.projectId);
     const turnId = crypto.randomUUID();
     state.queue.push({ turnId, prompt: input.text, workspaceDir: input.workspaceDir });
@@ -342,11 +359,28 @@ export class ChatService {
    * `resumeSessionId` wird nicht übergeben — `runAttempt` liest es pro Versuch
    * frisch aus der Projektzeile (`projects.claudeSessionId` + Modellabgleich).
    *
+   * Owner-only, und die Prüfung hängt HIER am Service (M5): sie greift damit
+   * für jeden Aufrufer, nicht nur für den enterProject-Resolver — ein Resume
+   * reiht einen VOLLEN Agent-Turn ein, inklusive Auto-Commit am Ende. Aber
+   * als FEATURE-GATING, nicht als Authz-Ablehnung: ein Besucher bekommt
+   * schlicht kein Resume (stille Rückkehr mit false, kein Wurf). Ein Wurf
+   * wäre falsch — er machte enterProject für Nur-Lese-Besucher (R10) kaputt,
+   * und „nichts Eigenes wiederaufzunehmen" ist kein Fehler.
+   *
    * @returns true, wenn ein Turn wiederaufgenommen wurde.
    */
-  async resumeUnansweredTurn(projectId: string, workspaceDir: string): Promise<boolean> {
+  async resumeUnansweredTurn(
+    user: UserRow,
+    projectId: string,
+    workspaceDir: string,
+  ): Promise<boolean> {
     // Früher Guard nur als billiger Kurzschluss — er allein genügt NICHT.
     if (this.isTurnActive(projectId)) return false;
+    // Feature-Gating (s. o.): fremdes oder unbekanntes Projekt → still false.
+    // VOR listMessages und VOR dem lazy state() — kein DB-Lesen der Historie
+    // und kein liegenbleibender State-Eintrag für fremde Projekte.
+    const project = await getProject(this.db, projectId);
+    if (project === null || project.ownerId !== user.id) return false;
     const history = await this.listMessages(projectId);
     // Re-Check NACH dem await (check-then-act-Race): zwei gleichzeitige
     // enterProject-Aufrufe des Owners (zwei Tabs; im Dev-Modus der React-
@@ -397,8 +431,15 @@ export class ChatService {
    *    nichts vorgemerkt: ein Stop ins Leere (Doppelklick, veralteter
    *    `turnActive`-Stand im Client) darf keine später gesendete, unabhängige
    *    Nachricht abbrechen.
+   *
+   * Stoppen ist Owner-only (R10) und die Prüfung hängt HIER am Service (M5).
+   * Das await davor ändert das Gegenwartsmodell nicht: dasselbe Fenster lag
+   * vorher zwischen der Ownership-Prüfung des Resolvers und dem damals
+   * synchronen Abbruch — und `abortActiveTurn` pinnt sich ohnehin an das, was
+   * IM MOMENT des Abbruchs aktiv ist, nie an „irgendeinen nächsten" Turn.
    */
-  stopTurn(projectId: string): void {
+  async stopTurn(user: UserRow, projectId: string): Promise<void> {
+    await getProjectOwned(this.db, user, projectId);
     const state = this.state(projectId);
     state.queue.length = 0;
     this.abortActiveTurn(state, null);
