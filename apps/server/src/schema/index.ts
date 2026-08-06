@@ -424,7 +424,15 @@ builder.mutationType({
         await deleteProject(ctx.db, user, String(args.id), ctx.config.macvibesHome);
         // Zustand freigeben: ohne das behalten SandboxManager und ChatService
         // Kontext, Timer, Queue und Subscriber eines Projekts, das es nicht
-        // mehr gibt, für die Lebensdauer des Prozesses.
+        // mehr gibt, für die Lebensdauer des Prozesses. Kein try/finally:
+        // deleteProject wirft nur, solange noch NICHTS gelöscht ist (ab dem
+        // DB-Delete ist die Volume-Entfernung best effort und wirft nicht
+        // mehr) — wirft es, ist forget() hier in beiden möglichen Fällen
+        // falsch bzw. überflüssig: Entweder existiert das Projekt weiter
+        // (forget() verwürfe lebende Betrachter-Refcounts und Chat-Zustand),
+        // oder eine PARALLELE deleteProject-Mutation war schneller
+        // („Projekt nicht gefunden" aus assertCanDeleteProject) — dann hat
+        // deren Resolver das forget() bereits erledigt, nichts leckt.
         ctx.sandboxManager.forget(String(args.id));
         ctx.chatService.forget(String(args.id));
         return true;

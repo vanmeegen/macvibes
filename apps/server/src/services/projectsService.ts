@@ -89,16 +89,40 @@ export async function createProject(
     join(config.templatesDir, template.dir),
   );
 
+  return insertProjectRow(db, config, owner, {
+    name,
+    branchName,
+    templateDir: template.dir,
+    devCommand: template.devCommand,
+    previewPort: template.previewPort,
+  });
+}
+
+/**
+ * Fügt die Projektzeile ein, NACHDEM der Git-Branch bereits angelegt wurde —
+ * gemeinsamer Abschluss von createProject (Template-Metadaten) und copyProject
+ * (Metadaten des Quell-Projekts). Scheitert der Insert, wird der frisch
+ * angelegte Branch zurückgerollt: kein halb-angelegtes Projekt hinterlassen
+ * (R1) — weder verwaister Branch noch DB-Zeile ohne Branch.
+ */
+async function insertProjectRow(
+  db: Db,
+  config: ProjectsConfig,
+  owner: UserRow,
+  values: {
+    name: string;
+    branchName: string;
+    templateDir: string;
+    devCommand: string;
+    previewPort: number;
+  },
+): Promise<ProjectWithOwner> {
   try {
     const inserted = await db
       .insert(projects)
       .values({
         id: crypto.randomUUID(),
-        name,
-        branchName,
-        templateDir: template.dir,
-        devCommand: template.devCommand,
-        previewPort: template.previewPort,
+        ...values,
         ownerId: owner.id,
         // Neue Chats starten mit dem Default-Modell (Sonnet 5, env-übersteuerbar).
         agentModel: DEFAULT_AGENT_MODEL,
@@ -111,7 +135,7 @@ export async function createProject(
     return { ...project, owner };
   } catch (error) {
     // Kein halb-angelegtes Projekt hinterlassen (R1): Branch zurückrollen.
-    await deleteBranch(config.bareRepoPath, branchName);
+    await deleteBranch(config.bareRepoPath, values.branchName);
     throw error;
   }
 }
@@ -173,30 +197,13 @@ export async function copyProject(
 
   await forkBranch(config.bareRepoPath, branchName, source.branchName);
 
-  try {
-    const inserted = await db
-      .insert(projects)
-      .values({
-        id: crypto.randomUUID(),
-        name,
-        branchName,
-        templateDir: source.templateDir,
-        devCommand: source.devCommand,
-        previewPort: source.previewPort,
-        ownerId: owner.id,
-        agentModel: DEFAULT_AGENT_MODEL,
-      })
-      .returning();
-    const project = inserted[0];
-    if (!project) {
-      throw new Error('Projekt-Insert lieferte keine Zeile zurück');
-    }
-    return { ...project, owner };
-  } catch (error) {
-    // Kein halb-angelegtes Projekt hinterlassen: Branch zurückrollen.
-    await deleteBranch(config.bareRepoPath, branchName);
-    throw error;
-  }
+  return insertProjectRow(db, config, owner, {
+    name,
+    branchName,
+    templateDir: source.templateDir,
+    devCommand: source.devCommand,
+    previewPort: source.previewPort,
+  });
 }
 
 /**
@@ -268,5 +275,21 @@ export async function deleteProject(
   await db.delete(projects).where(eq(projects.id, id));
   // Volumes (Workspace + Agent-Config) entfernen; der Git-Branch bleibt
   // bewusst erhalten (R2) — kein Code-Verlust, nur der lokale Stand geht weg.
-  rmSync(projectVolumeDir(macvibesHome, id), { recursive: true, force: true });
+  //
+  // Best effort — INVARIANTE: ab dem DB-Delete wirft deleteProject nicht mehr.
+  // Das Projekt IST dann gelöscht; würfe ein fehlgeschlagenes rmSync (unter
+  // Windows plausibel: EBUSY/EPERM auf offene Handles) hier noch, meldete die
+  // Mutation einen Fehler für eine längst vollzogene Löschung — und der
+  // Resolver käme nie zu sandboxManager.forget / chatService.forget: Timer,
+  // Betrachter-Refcounts und Chat-Zustand des toten Projekts blieben für die
+  // Prozesslaufzeit stehen (genau das Leck, gegen das H11 absichert). Der
+  // liegengebliebene Verzeichnisrest kostet nur Platte und wird geloggt.
+  try {
+    rmSync(projectVolumeDir(macvibesHome, id), { recursive: true, force: true });
+  } catch (error) {
+    console.error(
+      `Projekt ${id}: Volumes nicht vollständig entfernbar, Rest bleibt liegen:`,
+      error,
+    );
+  }
 }

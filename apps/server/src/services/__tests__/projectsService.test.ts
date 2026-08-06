@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync } from 'node:fs';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DomainError } from '../../core/errors';
 import { ensureBareRepo, listBranches } from '../../core/gitService';
@@ -312,6 +312,61 @@ describe('deleteProject', () => {
     });
     await deleteProject(db, marco, project.id, home);
     expect(await listProjects(db)).toHaveLength(0);
+  });
+
+  test('gilt als erfolgreich, wenn das Volume nicht entfernbar ist (rmSync wirft)', async () => {
+    const { db, config, marco, home } = await setup();
+    const project = await createProject(db, config, marco, {
+      name: 'Blockiert',
+      templateDir: 'pwa',
+    });
+    const volumeDir = projectVolumeDir(home, project.id);
+    const workspace = join(volumeDir, 'workspace');
+    mkdirSync(workspace, { recursive: true });
+    writeFileSync(join(workspace, 'blockiert.txt'), 'x');
+    // rmSync zum Scheitern bringen — über echte fs-Zustände statt Modul-Mocks,
+    // aber pro Plattform über den Mechanismus, der dort GARANTIERT greift:
+    // - POSIX: das schreibgeschützte Verzeichnis verweigert das unlink der
+    //   enthaltenen Datei (EACCES).
+    // - Windows: chmod auf Verzeichnisse ist wirkungslos, und ein offener
+    //   File-Handle blockiert das Löschen auf modernem NTFS (POSIX-Delete
+    //   seit Win10 1903) nicht zuverlässig. Was dort IMMER blockiert, ist das
+    //   aktuelle Arbeitsverzeichnis eines Prozesses — das OS hält den
+    //   cwd-Handle ohne Delete-Sharing, rmdir(workspace) wirft EBUSY/EPERM.
+    // Beides zusammen macht den rmSync-Fehler auf BEIDEN Pflicht-CI-Legs
+    // deterministisch, ohne dass der Test etwas anderes als echtes
+    // fs-Verhalten prüft.
+    // prevCwd VOR dem try, alles Verändernde HINEIN: bliebe der cwd nach einem
+    // Fehler in einer dieser Zeilen im Temp-Verzeichnis stehen, könnte afterEach
+    // es unter Windows nicht mehr entfernen — der Folgefehler träfe fremde Tests.
+    const prevCwd = process.cwd();
+    let errorSpy: ReturnType<typeof spyOn<Console, 'error'>> | undefined;
+    let logged: unknown[][] = [];
+    try {
+      process.chdir(workspace);
+      chmodSync(workspace, 0o555);
+      errorSpy = spyOn(console, 'error').mockImplementation(() => {});
+      // Ab dem DB-Delete ist das Projekt gelöscht; das Volume ist best effort.
+      // Würfe deleteProject hier noch, bräche im Resolver die Aufräumkette
+      // (sandboxManager.forget / chatService.forget) ab — Timer, Betrachter
+      // und Chat-Zustand blieben für die Prozesslaufzeit stehen (vgl. H11).
+      await expect(deleteProject(db, marco, project.id, home)).resolves.toBeUndefined();
+    } finally {
+      if (errorSpy) {
+        logged = errorSpy.mock.calls.map((call) => [...call]);
+        errorSpy.mockRestore();
+      }
+      chmodSync(workspace, 0o755);
+      // cwd zurück, BEVOR afterEach die Temp-Verzeichnisse entfernt — sonst
+      // verhinderte der cwd-Handle unter Windows auch das Testaufräumen.
+      process.chdir(prevCwd);
+    }
+    expect(await getProject(db, project.id)).toBeNull();
+    expect(await listProjects(db)).toHaveLength(0);
+    // Ehrlich bleiben: der Rest liegt noch auf der Platte …
+    expect(existsSync(volumeDir)).toBe(true);
+    // … und der Fehler wurde geloggt (Konvention: keine verschluckten Exceptions).
+    expect(logged.some((call) => String(call[0]).includes(project.id))).toBe(true);
   });
 
   test('verweigert Löschen für fremde Projekte (Nicht-Admin, Volumes bleiben)', async () => {
