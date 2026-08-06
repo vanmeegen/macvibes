@@ -63,8 +63,11 @@ const serverRules = [
   // → preview: der ProcessSupervisor meldet seinen Lebenszyklus im geteilten
   //   Status-Vokabular (preview/status), das wegen des VM-Bundles selbst
   //   importfrei bleiben muss.
-  // → db: erlaubt laut Zielbild (aktuell ungenutzt).
-  { from: 'core', allow: ['preview', 'db', 'base-file'] },
+  // Die frühere Kante → db wurde bewusst gestrichen: sie war im Importgraphen
+  // tot, und eine Basisschicht, die Persistenz kennt, wäre auch im Zielbild
+  // ein Rückschritt. Jede ungenutzte Erlaubnis ist ein Loch im Gate — bei
+  // echtem Bedarf hier begründet wieder eintragen.
+  { from: 'core', allow: ['preview', 'base-file'] },
   // preview ist das geteilte Status-Vokabular zwischen Host und VM-Daemon
   // (wird ins VM-Bundle gebündelt) — es darf GAR NICHTS importieren.
   { from: 'preview', allow: [] },
@@ -75,9 +78,12 @@ const serverRules = [
   // keiner kennt services, schema oder http — und einander auch nicht.
   { from: 'sandbox', allow: ['core', 'preview', 'db', 'base-file'] },
   { from: 'agent', allow: ['core', 'preview', 'db', 'base-file'] },
-  // services orchestrieren Fachlichkeit über agent + sandbox und persistieren
-  // in db. Sie kennen weder GraphQL (schema) noch HTTP.
-  { from: 'services', allow: ['core', 'agent', 'sandbox', 'db', 'base-file'] },
+  // services orchestrieren Fachlichkeit über agent und persistieren in db.
+  // Sie kennen weder GraphQL (schema) noch HTTP. Die frühere Kante → sandbox
+  // wurde bewusst gestrichen: kein Service importiert sandbox mehr — die
+  // Sandbox-Orchestrierung liegt heute in schema (chatEvents-Subscription).
+  // Bei echtem Bedarf hier begründet wieder eintragen.
+  { from: 'services', allow: ['core', 'agent', 'db', 'base-file'] },
   // schema (GraphQL-Resolver):
   // → services/db/core: Fachlogik, Persistenz-Typen, DomainError.
   // → agent: Modellkatalog (agentModel) für die Modellwahl im UI.
