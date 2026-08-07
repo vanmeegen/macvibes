@@ -6,6 +6,7 @@ import type { Db } from '../../db/client';
 import { projects, type ProjectRow } from '../../db/schema';
 import { ensureBareRepo } from '../../core/gitService';
 import { projectVolumeDir, workspaceDirFor } from '../../core/workspaceService';
+import type { SandboxContext } from '../../sandbox/provider';
 import { createProject, getProject } from '../projectsService';
 import {
   deleteProjectAndCleanup,
@@ -76,6 +77,23 @@ describe('sandboxContextFor (Stufe 1)', () => {
   test('workspaceDir folgt macvibesHome + Projekt-ID (core/workspaceService)', () => {
     const context = sandboxContextFor(fakeProject({ id: 'abc' }), '/data/home');
     expect(context.workspaceDir).toBe(join('/data/home', 'volumes', 'abc', 'workspace'));
+  });
+
+  /**
+   * Drift-Schutz (entkoppelt von der enter()-Aufrufstelle in schema/index.ts):
+   * `SandboxRunContext` (services) spiegelt `SandboxContext` (sandbox/provider)
+   * bewusst dupliziert, damit die Kante services→sandbox tot bleibt. Bisher
+   * fing NUR die einzige Resolver-Zeile `enter(sandboxContextFor(...))` einen
+   * Drift beider Typen zur Kompilierzeit. Baut jemand diese Zeile um, verschwände
+   * der Schutz lautlos. Dieser type-level Test hält ihn unabhängig: das Ergebnis
+   * von `sandboxContextFor` MUSS einem echten `SandboxContext` zuweisbar sein —
+   * exakt was der Provider-Aufruf verlangt. Fällt ein Feld weg oder ändert einen
+   * Typ, bricht `bun run typecheck` schon an dieser Zuweisung.
+   */
+  test('bleibt zu sandbox/provider.SandboxContext driftfrei (type-level)', () => {
+    const context = sandboxContextFor(fakeProject(), '/data/home');
+    const asProviderContext: SandboxContext = context;
+    expect(asProviderContext).toBe(context);
   });
 });
 
