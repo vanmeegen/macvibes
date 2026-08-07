@@ -133,8 +133,8 @@ const toPolicies = (rules) =>
 const webRules = [
   { from: 'test', allow: webElements.map((e) => e.type) },
   { from: 'web-app', allow: webElements.map((e) => e.type) },
-  // api (GraphQL-Client + generierte Typen) ist die unterste Schicht:
-  // importiert NICHTS aus models/pages.
+  // api (GraphQL-Client + handgepflegte Typen in api/types.ts — KEIN Codegen)
+  // ist die unterste Schicht: importiert NICHTS aus models/pages.
   { from: 'api', allow: [] },
   // speech kapselt die Web-Speech-API ohne Kenntnis der App.
   { from: 'speech', allow: [] },
@@ -191,6 +191,10 @@ export default tseslint.config(
     },
   },
   // ─── Architektur-Gate Server ────────────────────────────────────────────
+  // Bewusst NUR src/: die Skripte (apps/server/scripts/buildBaselines.ts,
+  // top-level scripts/) sind Composition-Root-artig — sie verdrahten Schichten,
+  // gehören also selbst keiner an und importieren begründet schichtenfrei.
+  // Sie stehen darum außerhalb der boundaries-Elemente statt als Ausnahme drin.
   {
     files: ['apps/server/src/**/*.ts'],
     plugins: { boundaries },

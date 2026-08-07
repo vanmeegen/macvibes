@@ -7,26 +7,35 @@ export type ProjectFilter = 'mine' | 'all';
 
 export const PROJECT_FILTER_STORAGE_KEY = 'macvibes.projectFilter';
 
+// Die vollständige Feldauswahl eines Projekts — von der Listen-Query UND vom
+// copyProject-Ergebnis gebraucht. Als EINE Quelle, damit die beiden nicht
+// auseinanderdriften (ein hier ergänztes Feld fehlte sonst nach dem Kopieren).
+// Kein echtes GraphQL-Fragment, nur Textbaustein: der handgepflegte Client
+// (api/types.ts) kennt keinen Codegen, der Fragmente auflösen würde.
+const PROJECT_FIELDS = /* GraphQL */ `
+  id
+  name
+  branchName
+  templateDir
+  owner {
+    id
+    username
+  }
+  agentModel
+  createdAt
+  lastActivityAt
+  sandboxStatus
+  turnActive
+  previewHostPort
+  previewStatus
+`;
+
 const PROJECTS_AND_TEMPLATES_QUERY = /* GraphQL */ `
   query ProjectsAndTemplates {
     previewGatewayPort
     previewGatewayHttpsPort
     projects {
-      id
-      name
-      branchName
-      templateDir
-      owner {
-        id
-        username
-      }
-      agentModel
-      createdAt
-      lastActivityAt
-      sandboxStatus
-      turnActive
-      previewHostPort
-      previewStatus
+      ${PROJECT_FIELDS}
     }
     agentModels {
       id
@@ -52,21 +61,7 @@ const DELETE_PROJECT_MUTATION = /* GraphQL */ `
 const COPY_PROJECT_MUTATION = /* GraphQL */ `
   mutation CopyProject($sourceId: ID!, $name: String!) {
     copyProject(sourceId: $sourceId, name: $name) {
-      id
-      name
-      branchName
-      templateDir
-      owner {
-        id
-        username
-      }
-      agentModel
-      createdAt
-      lastActivityAt
-      sandboxStatus
-      turnActive
-      previewHostPort
-      previewStatus
+      ${PROJECT_FIELDS}
     }
   }
 `;
