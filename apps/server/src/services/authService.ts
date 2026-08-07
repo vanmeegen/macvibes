@@ -24,6 +24,11 @@ export interface AuthConfig {
   sessionTtlMs: number;
   /** Optionaler Bootstrap-Admin: dieser Username wird beim Start zum Admin. */
   adminUsername?: string | undefined;
+  /**
+   * MACVIBES_FORCE_ADMIN (via config.ts, M6): befördert den Bootstrap-Admin
+   * auch, wenn bereits ein Admin existiert (F21).
+   */
+  forceAdmin?: boolean | undefined;
 }
 
 export interface Session {
@@ -238,7 +243,7 @@ export async function ensureAdmin(db: Db, config: AuthConfig): Promise<void> {
   // verrät, konnte ein Fremder ihn vorbelegen und wurde beim nächsten
   // Neustart Admin.
   const admins = await db.select({ id: users.id }).from(users).where(eq(users.role, 'admin'));
-  const erzwungen = Bun.env.MACVIBES_FORCE_ADMIN === '1' || Bun.env.MACVIBES_FORCE_ADMIN === 'true';
+  const erzwungen = config.forceAdmin === true;
   if (admins.length > 0 && !erzwungen) {
     console.warn(
       `Bootstrap-Admin "${username}" wird NICHT befördert — es gibt bereits einen Admin. ` +

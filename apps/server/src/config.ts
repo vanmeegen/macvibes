@@ -18,6 +18,11 @@ export interface ServerConfig {
    * automatisch Admin.
    */
   adminUsername?: string | undefined;
+  /**
+   * MACVIBES_FORCE_ADMIN: befördert den Bootstrap-Admin auch dann, wenn
+   * bereits ein Admin existiert (F21 — ohne Flag nur echter Bootstrap).
+   */
+  forceAdmin: boolean;
   dbPath: string;
   /** Login-Session: 3 Tage, rollierend verlängert. */
   sessionTtlMs: number;
@@ -56,6 +61,32 @@ export interface ServerConfig {
      * (MACVIBES_DISABLE_PREWARM=1).
      */
     prewarm: boolean;
+    /**
+     * MACVIBES_ALLOW_HOST_AGENT: ausdrücklicher Verzicht auf das VM-Isolat —
+     * der echte Agent darf als Host-Prozess laufen (F9, nur Dev).
+     */
+    allowHostAgent: boolean;
+    /**
+     * MACVIBES_AGENT_APPEND_PROMPT: überschreibt die eingebaute Zusatz-
+     * System-Anweisung des Host-Runners; null = eingebauter Default
+     * (agent/claudeRunner). Der VM-Daemon liest sie weiterhin aus seiner
+     * VM-Env — dort IST die Env der Host→VM-Transport.
+     */
+    appendSystemPrompt: string | null;
+    /**
+     * Turn-Fristen des ChatService (MACVIBES_AGENT_*_TIMEOUT_MS); undefined =
+     * eingebauter Default des ChatService. Die slow*-Werte greifen bei
+     * langsamen (lokalen) Modellen.
+     */
+    timeouts: {
+      idleMs: number | undefined;
+      firstEventMs: number | undefined;
+      coldStartMs: number | undefined;
+      warmupMs: number | undefined;
+      slowIdleMs: number | undefined;
+      slowFirstEventMs: number | undefined;
+      slowColdStartMs: number | undefined;
+    };
   };
   anthropic: {
     upstreamUrl: string;
@@ -63,7 +94,35 @@ export interface ServerConfig {
     oauthToken: string | null;
     /** Alternativ: klassischer API-Key. */
     apiKey: string | null;
+    /**
+     * MACVIBES_PROXY_KEEPALIVE_MS: Takt der SSE-Keepalives des Credential-
+     * Proxys; undefined = Default des Proxys (http/anthropicProxy).
+     */
+    keepAliveMs: number | undefined;
   };
+  /** Egress-Proxy: einziger Weg der VMs ins Internet (F3). */
+  egress: {
+    /** MACVIBES_EGRESS_PORT: Port des CONNECT-Proxys auf dem Host. */
+    port: number;
+    /**
+     * MACVIBES_EGRESS_PORTS: öffentliche Zielports, die eine VM ansteuern
+     * darf; ungültige Einträge werden gefiltert, leer ⇒ [80, 443].
+     */
+    allowedPorts: number[];
+  };
+  /**
+   * MACVIBES_WEB_PORT: Dev-Port des Vite-Servers — im Dev eine erlaubte
+   * Origin (F5). Bewusst OHNE Default 5173: in Produktion liefe dort die
+   * erste Sandbox-Preview, die Allowlist vertraute sonst dem vom Agenten
+   * kontrollierten Ursprung (s. Kommentar in index.ts).
+   */
+  devWebPort: number | null;
+  /** MACVIBES_ALLOWED_ORIGINS: zusätzlich erlaubte Origins (F5/F6), kommagetrennt. */
+  allowedOrigins: string[];
+  /** MACVIBES_DEBUG_ERRORS=1: hebt die Fehlermaskierung (F24) zur Fehlersuche auf. */
+  debugErrors: boolean;
+  /** MACVIBES_RATE_LIMIT_DISABLED=1: schaltet das Rate-Limit (F14) ab — nur E2E. */
+  rateLimitDisabled: boolean;
   /**
    * Lokaler Modell-Router (LiteLLM-Shim vor Ollama) — Ziel aller NICHT-Claude-
    * Modelle. Der Credential-Proxy routet pro Request nach dem `model` im Body.
@@ -146,6 +205,43 @@ function detectLocalRouterCommand(): string | null {
   return existsSync(script) ? `'${process.execPath}' '${script}'` : null;
 }
 
+/** Zahl aus der Env; undefined (auch bei leerem Wert) = Default des Konsumenten. */
+function envNumber(name: string): number | undefined {
+  const raw = Bun.env[name];
+  return raw ? Number(raw) : undefined;
+}
+
+/** Schalter, der wie bisher '1' ODER 'true' akzeptiert. */
+function envFlag(name: string): boolean {
+  const raw = Bun.env[name];
+  return raw === '1' || raw === 'true';
+}
+
+/** Default-Zielports des Egress-Proxys (F3) — nur HTTP(S) ins öffentliche Netz. */
+export const DEFAULT_EGRESS_ALLOWED_PORTS: readonly number[] = [80, 443];
+
+/**
+ * MACVIBES_EGRESS_PORTS parsen (Semantik unverändert aus http/egressPolicy
+ * hierher gezogen, M6): ungültige Einträge fliegen raus, eine leere Liste
+ * fällt auf den Default zurück — Tippfehler dürfen den Proxy nicht aufreißen.
+ */
+function parseEgressPorts(raw: string | undefined): number[] {
+  if (!raw) return [...DEFAULT_EGRESS_ALLOWED_PORTS];
+  const ports = raw
+    .split(',')
+    .map((p) => Number(p.trim()))
+    .filter((p) => Number.isInteger(p) && p > 0 && p <= 65535);
+  return ports.length > 0 ? ports : [...DEFAULT_EGRESS_ALLOWED_PORTS];
+}
+
+/** MACVIBES_ALLOWED_ORIGINS: kommagetrennt, Leerraum tolerant (F5/F6). */
+function parseAllowedOrigins(raw: string | undefined): string[] {
+  return (raw ?? '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter((o) => o.length > 0);
+}
+
 export function loadConfig(): ServerConfig {
   const macvibesHome = Bun.env.MACVIBES_HOME ?? join(homedir(), 'macvibes');
   return {
@@ -155,6 +251,7 @@ export function loadConfig(): ServerConfig {
     bareRepoPath: join(macvibesHome, 'macvibes-apps.git'),
     templatesDir: Bun.env.MACVIBES_TEMPLATES_DIR ?? DEFAULT_TEMPLATES_DIR,
     adminUsername: Bun.env.MACVIBES_ADMIN_USERNAME || undefined,
+    forceAdmin: envFlag('MACVIBES_FORCE_ADMIN'),
     dbPath: resolveDbPath(macvibesHome),
     sessionTtlMs: 3 * 24 * 60 * 60 * 1000,
     webDistDir: Bun.env.MACVIBES_WEB_DIST ?? DEFAULT_WEB_DIST_DIR,
@@ -183,12 +280,32 @@ export function loadConfig(): ServerConfig {
       fakeDelayMs: Number(Bun.env.MACVIBES_FAKE_DELAY_MS ?? 25),
       prewarm:
         Bun.env.MACVIBES_DISABLE_PREWARM !== '1' && Bun.env.MACVIBES_DISABLE_PREWARM !== 'true',
+      allowHostAgent: envFlag('MACVIBES_ALLOW_HOST_AGENT'),
+      appendSystemPrompt: Bun.env.MACVIBES_AGENT_APPEND_PROMPT ?? null,
+      timeouts: {
+        idleMs: envNumber('MACVIBES_AGENT_IDLE_TIMEOUT_MS'),
+        firstEventMs: envNumber('MACVIBES_AGENT_FIRST_EVENT_TIMEOUT_MS'),
+        coldStartMs: envNumber('MACVIBES_AGENT_COLD_START_TIMEOUT_MS'),
+        warmupMs: envNumber('MACVIBES_AGENT_WARMUP_TIMEOUT_MS'),
+        slowIdleMs: envNumber('MACVIBES_AGENT_SLOW_IDLE_TIMEOUT_MS'),
+        slowFirstEventMs: envNumber('MACVIBES_AGENT_SLOW_FIRST_EVENT_TIMEOUT_MS'),
+        slowColdStartMs: envNumber('MACVIBES_AGENT_SLOW_COLD_START_TIMEOUT_MS'),
+      },
     },
     anthropic: {
       upstreamUrl: Bun.env.ANTHROPIC_UPSTREAM_URL ?? 'https://api.anthropic.com',
       oauthToken: Bun.env.CLAUDE_CODE_OAUTH_TOKEN ?? null,
       apiKey: Bun.env.ANTHROPIC_API_KEY ?? null,
+      keepAliveMs: envNumber('MACVIBES_PROXY_KEEPALIVE_MS'),
     },
+    egress: {
+      port: envNumber('MACVIBES_EGRESS_PORT') ?? 4010,
+      allowedPorts: parseEgressPorts(Bun.env.MACVIBES_EGRESS_PORTS),
+    },
+    devWebPort: envNumber('MACVIBES_WEB_PORT') ?? null,
+    allowedOrigins: parseAllowedOrigins(Bun.env.MACVIBES_ALLOWED_ORIGINS),
+    debugErrors: Bun.env.MACVIBES_DEBUG_ERRORS === '1',
+    rateLimitDisabled: Bun.env.MACVIBES_RATE_LIMIT_DISABLED === '1',
     localModels: {
       upstreamUrl: Bun.env.MACVIBES_LOCAL_UPSTREAM_URL ?? 'http://localhost:8787',
       apiKey: Bun.env.MACVIBES_LOCAL_API_KEY ?? 'local',

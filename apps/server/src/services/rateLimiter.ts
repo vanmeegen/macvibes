@@ -101,8 +101,3 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimiter {
     },
   };
 }
-
-/** Ist das Limit per Env abgeschaltet (E2E)? */
-export function rateLimitDisabled(): boolean {
-  return Bun.env.MACVIBES_RATE_LIMIT_DISABLED === '1';
-}

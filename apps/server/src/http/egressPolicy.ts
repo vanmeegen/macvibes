@@ -8,21 +8,20 @@
  * Unterschied zwischen „VM darf ins Internet" und „VM darf alles".
  */
 
-/** Öffentlich erreichbare Ports, die eine VM ansteuern darf. */
-const DEFAULT_ALLOWED_PORTS = [80, 443];
+import { DEFAULT_EGRESS_ALLOWED_PORTS } from '../config';
 
 export interface EgressPolicy {
   allowedPorts: number[];
 }
 
+/**
+ * Policy mit den Default-Zielports. Der Env-Override (MACVIBES_EGRESS_PORTS)
+ * wird seit M6 zentral in config.ts geparst — die Composition Root reicht
+ * `config.egress.allowedPorts` explizit herein (createTargetChecker in
+ * index.ts); dieser Default trägt nur noch Tests und DI-Nähte.
+ */
 export function defaultEgressPolicy(): EgressPolicy {
-  const configured = Bun.env.MACVIBES_EGRESS_PORTS;
-  if (!configured) return { allowedPorts: [...DEFAULT_ALLOWED_PORTS] };
-  const ports = configured
-    .split(',')
-    .map((p) => Number(p.trim()))
-    .filter((p) => Number.isInteger(p) && p > 0 && p <= 65535);
-  return { allowedPorts: ports.length > 0 ? ports : [...DEFAULT_ALLOWED_PORTS] };
+  return { allowedPorts: [...DEFAULT_EGRESS_ALLOWED_PORTS] };
 }
 
 function ipv4Parts(ip: string): number[] | null {

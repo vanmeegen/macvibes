@@ -15,7 +15,7 @@ import {
 import { releaseOnClose } from './releaseOnClose';
 import { revalidateStream } from './revalidateStream';
 import { DomainError } from '../core/errors';
-import { createRateLimiter, rateLimitDisabled, type RateLimiter } from '../services/rateLimiter';
+import { createRateLimiter, type RateLimiter } from '../services/rateLimiter';
 import { AGENT_MODELS, type AgentModelInfo } from '../agent/agentModel';
 import {
   copyProject,
@@ -120,8 +120,9 @@ const SUBSCRIPTION_REVALIDATE_MS = 15_000;
 const loginLimiter = createRateLimiter({ windowMs: 5 * 60_000, max: 20 });
 const registerLimiter = createRateLimiter({ windowMs: 60 * 60_000, max: 10 });
 
-function assertWithinLimit(limiter: RateLimiter, keys: string[]): void {
-  if (rateLimitDisabled()) return;
+function assertWithinLimit(ctx: GraphQLContext, limiter: RateLimiter, keys: string[]): void {
+  // MACVIBES_RATE_LIMIT_DISABLED=1 (nur E2E) — seit M6 über die Config.
+  if (ctx.config.rateLimitDisabled) return;
   for (const key of keys) {
     if (!limiter.check(key)) {
       throw new DomainError('Zu viele Versuche — bitte einige Minuten warten.');
@@ -325,7 +326,7 @@ builder.mutationType({
         password: t.arg.string({ required: true }),
       },
       resolve: async (_root, args, ctx) => {
-        assertWithinLimit(registerLimiter, [`ip:${ctx.clientIp ?? 'unbekannt'}`]);
+        assertWithinLimit(ctx, registerLimiter, [`ip:${ctx.clientIp ?? 'unbekannt'}`]);
         const result = await register(ctx.db, ctx.config, args);
         // Nur der erste (Admin-)Nutzer ist sofort freigeschaltet und bekommt eine
         // Session. Alle anderen sind pending und müssen zuerst zugelassen werden.
@@ -363,7 +364,7 @@ builder.mutationType({
       },
       resolve: async (_root, args, ctx) => {
         // VOR dem argon2-Verify prüfen — das ist der teure Teil (F14).
-        assertWithinLimit(loginLimiter, [
+        assertWithinLimit(ctx, loginLimiter, [
           `ip:${ctx.clientIp ?? 'unbekannt'}`,
           `user:${args.username.toLowerCase()}`,
         ]);

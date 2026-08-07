@@ -2,7 +2,7 @@ import { loadConfig } from './config';
 import { createDb } from './db/client';
 import { runMigrations } from './db/migrate';
 import { createAnthropicProxy } from './http/anthropicProxy';
-import { startEgressProxy } from './http/egressProxy';
+import { createTargetChecker, startEgressProxy } from './http/egressProxy';
 import { startPreviewGateway } from './http/previewGateway';
 import { createAppYoga } from './http/createAppYoga';
 import { serveWebUi } from './http/staticFiles';
@@ -56,10 +56,13 @@ await ensureBareRepo(config.bareRepoPath);
 // jedes Token gehört genau einer VM und wird beim Stoppen entwertet.
 const vmTokens = createVmTokenRegistry();
 // Egress-Proxy: einziger Weg der VMs ins Internet (msb-Regeln blocken Public).
-const egressPort = Bun.env.MACVIBES_EGRESS_PORT ? Number(Bun.env.MACVIBES_EGRESS_PORT) : 4010;
+const egressPort = config.egress.port;
 const egressProxy = startEgressProxy({
   port: egressPort,
   verifyToken: (token) => vmTokens.lookup(token),
+  // Zielprüfung (F3) mit den zentral geparsten Zielports (M6) — dieselbe
+  // Policy-Mechanik wie zuvor, nur die Env-Quelle ist jetzt config.ts.
+  checkTarget: createTargetChecker({ allowedPorts: config.egress.allowedPorts }),
 });
 console.log(`Egress-Proxy für VMs auf Port ${egressProxy.port}`);
 const anthropicProxy = createAnthropicProxy({
@@ -67,9 +70,7 @@ const anthropicProxy = createAnthropicProxy({
   verifyToken: (token) => vmTokens.lookup(token),
   oauthToken: config.anthropic.oauthToken,
   apiKey: config.anthropic.apiKey,
-  keepAliveMs: Bun.env.MACVIBES_PROXY_KEEPALIVE_MS
-    ? Number(Bun.env.MACVIBES_PROXY_KEEPALIVE_MS)
-    : undefined,
+  keepAliveMs: config.anthropic.keepAliveMs,
   // Modell-Routing: claude-* → Anthropic, alles andere → lokaler Router (Shim);
   // Zusatz-Routen (MACVIBES_MODEL_ROUTES) matchen davor.
   localUpstreamUrl: config.localModels.upstreamUrl,
@@ -150,8 +151,7 @@ try {
     configured: config.sandbox.backend,
     agent: config.agent.backend,
     msbAvailable: await msbAvailable(),
-    allowHostAgent:
-      Bun.env.MACVIBES_ALLOW_HOST_AGENT === '1' || Bun.env.MACVIBES_ALLOW_HOST_AGENT === 'true',
+    allowHostAgent: config.agent.allowHostAgent,
   });
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
@@ -295,7 +295,7 @@ function selectAgentRunner() {
     'Agent-Backend: claude als HOST-PROZESS ohne VM-Isolat — ' +
       'nur wegen MACVIBES_ALLOW_HOST_AGENT=1. Der Agent hat damit die Rechte des Server-Nutzers.',
   );
-  return new ClaudeAgentRunner();
+  return new ClaudeAgentRunner({ appendSystemPrompt: config.agent.appendSystemPrompt });
 }
 
 const agentRunner = selectAgentRunner();
@@ -315,51 +315,27 @@ const chatService = new ChatService(
     },
   },
   {
-    // Reagiert der Agent so lange gar nicht, gilt der Turn als hängend und wird als
-    // Fehler sichtbar abgebrochen (statt ewig „Agent arbeitet"). Env-übersteuerbar.
-    agentIdleTimeoutMs: Bun.env.MACVIBES_AGENT_IDLE_TIMEOUT_MS
-      ? Number(Bun.env.MACVIBES_AGENT_IDLE_TIMEOUT_MS)
-      : undefined,
-    agentFirstEventTimeoutMs: Bun.env.MACVIBES_AGENT_FIRST_EVENT_TIMEOUT_MS
-      ? Number(Bun.env.MACVIBES_AGENT_FIRST_EVENT_TIMEOUT_MS)
-      : undefined,
-    agentColdStartTimeoutMs: Bun.env.MACVIBES_AGENT_COLD_START_TIMEOUT_MS
-      ? Number(Bun.env.MACVIBES_AGENT_COLD_START_TIMEOUT_MS)
-      : undefined,
-    // Frist für den stillen Config-Warmup: der echte Turn wartet auf ihn,
-    // bevor sein eigener Timeout greift.
-    agentWarmupTimeoutMs: Bun.env.MACVIBES_AGENT_WARMUP_TIMEOUT_MS
-      ? Number(Bun.env.MACVIBES_AGENT_WARMUP_TIMEOUT_MS)
-      : undefined,
-    // Timeouts für LANGSAME (lokale) Modelle — greift pro Turn je nach Projekt-Modell.
-    agentSlowIdleTimeoutMs: Bun.env.MACVIBES_AGENT_SLOW_IDLE_TIMEOUT_MS
-      ? Number(Bun.env.MACVIBES_AGENT_SLOW_IDLE_TIMEOUT_MS)
-      : undefined,
-    agentSlowFirstEventTimeoutMs: Bun.env.MACVIBES_AGENT_SLOW_FIRST_EVENT_TIMEOUT_MS
-      ? Number(Bun.env.MACVIBES_AGENT_SLOW_FIRST_EVENT_TIMEOUT_MS)
-      : undefined,
-    agentSlowColdStartTimeoutMs: Bun.env.MACVIBES_AGENT_SLOW_COLD_START_TIMEOUT_MS
-      ? Number(Bun.env.MACVIBES_AGENT_SLOW_COLD_START_TIMEOUT_MS)
-      : undefined,
+    // Reagiert der Agent so lange gar nicht, gilt der Turn als hängend und wird
+    // als Fehler sichtbar abgebrochen (statt ewig „Agent arbeitet"). Über die
+    // Config env-übersteuerbar (MACVIBES_AGENT_*_TIMEOUT_MS, M6); die slow*-
+    // Fristen greifen pro Turn bei LANGSAMEN (lokalen) Modellen, die warmup-
+    // Frist deckt den stillen Config-Warmup ab, auf den der erste echte Turn
+    // wartet, bevor sein eigener Timeout greift.
+    agentIdleTimeoutMs: config.agent.timeouts.idleMs,
+    agentFirstEventTimeoutMs: config.agent.timeouts.firstEventMs,
+    agentColdStartTimeoutMs: config.agent.timeouts.coldStartMs,
+    agentWarmupTimeoutMs: config.agent.timeouts.warmupMs,
+    agentSlowIdleTimeoutMs: config.agent.timeouts.slowIdleMs,
+    agentSlowFirstEventTimeoutMs: config.agent.timeouts.slowFirstEventMs,
+    agentSlowColdStartTimeoutMs: config.agent.timeouts.slowColdStartMs,
     prewarmEnabled: config.agent.prewarm,
   },
 );
 chatServiceRef = chatService;
 
-const yoga = createAppYoga({
-  db,
-  config,
-  sandboxManager,
-  chatService,
-  // Im Dev läuft das Web-UI auf einem eigenen Port und proxied /graphql mit
-  // changeOrigin — diese Origin muss erlaubt sein (F5). NUR bei ausdrücklich
-  // gesetztem MACVIBES_WEB_PORT: der frühere Default 5173 war ein Loch, denn
-  // in Produktion läuft dort KEIN Vite, sondern der Port, den sich die erste
-  // Sandbox für ihre Preview greift (templates.json: previewPort 5173). Damit
-  // vertraute die Allowlist ausgerechnet dem vom Agenten kontrollierten
-  // Ursprung — genau der Angriff, den CORS/CSRF verhindern sollen.
-  devWebPort: Bun.env.MACVIBES_WEB_PORT ? Number(Bun.env.MACVIBES_WEB_PORT) : null,
-});
+// devWebPort (F5) zieht createAppYoga selbst aus dem config-Objekt — wie
+// allowedOrigins; Begründung dort am allowedOrigins-Aufruf.
+const yoga = createAppYoga({ db, config, sandboxManager, chatService });
 
 const server = Bun.serve({
   port: config.port,

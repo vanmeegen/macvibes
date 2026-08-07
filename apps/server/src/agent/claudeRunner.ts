@@ -2,19 +2,30 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { AgentEvent } from './events';
 import type { AgentRunner, TurnHandle, TurnOptions } from './runner';
 
+export interface ClaudeAgentRunnerOptions {
+  /**
+   * Überschreibt die eingebaute Zusatz-System-Anweisung
+   * (MACVIBES_AGENT_APPEND_PROMPT, seit M6 über config.agent.appendSystemPrompt
+   * hereingereicht statt hier aus der Env gelesen); null = Default unten.
+   */
+  appendSystemPrompt?: string | null;
+}
+
 /**
  * Treibt Claude Code über das Agent SDK im Projekt-Workspace.
  * Volle Autonomie (bypassPermissions) — die Isolation leistet die Sandbox.
  * Transiente API-Fehler behandelt das SDK selbst per Retry/Backoff (R6).
  */
 export class ClaudeAgentRunner implements AgentRunner {
+  constructor(private readonly options: ClaudeAgentRunnerOptions = {}) {}
+
   startTurn(options: TurnOptions): TurnHandle {
     const abortController = new AbortController();
 
     // Schwächere lokale Modelle kündigen Arbeit oft nur an, statt Tools aufzurufen —
     // diese Anweisung drängt zum direkten Handeln. Für Claude ein harmloses No-Op.
     const appendSystemPrompt =
-      Bun.env.MACVIBES_AGENT_APPEND_PROMPT ??
+      this.options.appendSystemPrompt ??
       `WICHTIG (macvibes): Kündige Änderungen nicht nur an, sondern rufe sofort die ` +
         `passenden Tools (Write/Edit) im aktuellen Arbeitsverzeichnis auf und führe sie aus.`;
 
