@@ -100,6 +100,17 @@ export async function setProjectAgentModel(
   return { ...project, agentModel: model };
 }
 
+/**
+ * Setzt die Aktivitäts-Zeitstempel eines Projekts auf jetzt — für die
+ * Sortierung auf der Projektliste (zuletzt aktiv oben). Lag zuvor als
+ * direkter Drizzle-Write im GraphQL-Transport (schema/index.ts) am Service
+ * vorbei; hier gebündelt, damit der Schreibpfad auf `projects` an einer
+ * Stelle liegt.
+ */
+export async function touchProject(db: Db, id: string): Promise<void> {
+  await db.update(projects).set({ lastActivityAt: new Date() }).where(eq(projects.id, id));
+}
+
 export async function createProject(
   db: Db,
   config: ProjectsConfig,

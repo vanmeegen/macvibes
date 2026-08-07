@@ -1,7 +1,5 @@
-import { eq } from 'drizzle-orm';
 import type { TemplateEntry } from '@macvibes/shared';
-import type { Db } from '../db/client';
-import { projects, type ChatMessageRow, type UserRow } from '../db/schema';
+import type { ChatMessageRow, UserRow } from '../db/schema';
 import type { ChatEventPayload } from '../services/chatService';
 import {
   approveUser,
@@ -20,18 +18,20 @@ import { AGENT_MODELS, type AgentModelInfo } from '../agent/agentModel';
 import {
   copyProject,
   createProject,
-  assertCanDeleteProject,
-  deleteProject,
   getProject,
-  getProjectOwned,
   listProjects,
   renameProject,
   setProjectAgentModel,
   type ProjectWithOwner,
 } from '../services/projectsService';
 import { loadTemplates } from '../services/templatesService';
+import {
+  deleteProjectAndCleanup,
+  enterProjectSession,
+  sandboxContextFor,
+  sendMessageToProject,
+} from '../services/projectSessionService';
 import { viewerKey } from '../sandbox/sandboxManager';
-import { workspaceDirFor } from '../core/workspaceService';
 import { builder, type GraphQLContext } from './builder';
 
 const UserRef = builder.objectRef<UserRow>('User');
@@ -154,10 +154,6 @@ async function getProjectAny(ctx: GraphQLContext, id: string): Promise<ProjectWi
   return project;
 }
 
-async function touchProject(db: Db, id: string): Promise<void> {
-  await db.update(projects).set({ lastActivityAt: new Date() }).where(eq(projects.id, id));
-}
-
 const AgentModelRef = builder.objectRef<AgentModelInfo>('AgentModel');
 AgentModelRef.implement({
   fields: (t) => ({
@@ -260,17 +256,7 @@ builder.subscriptionType({
         // Netzabriss, lebt die Preview weiter. Schlägt der Start fehl
         // (Kapazität, msb), scheitert die Subscription sichtbar — EventSource
         // versucht es von selbst erneut.
-        await ctx.sandboxManager.enter(
-          {
-            projectId: project.id,
-            branchName: project.branchName,
-            workspaceDir: workspaceDirFor(ctx.config.macvibesHome, project.id),
-            templateDir: project.templateDir,
-            devCommand: project.devCommand,
-            previewPort: project.previewPort,
-          },
-          viewer,
-        );
+        await ctx.sandboxManager.enter(sandboxContextFor(project, ctx.config.macvibesHome), viewer);
         // Brach der Client WÄHREND des (bei kaltem Boot sekundenlangen) enter()
         // ab, existiert noch kein Iterator, auf dem Yoga `.return()` rufen
         // könnte — `releaseOnClose` griffe nie, der Betrachter bliebe für
@@ -401,26 +387,16 @@ builder.mutationType({
       },
       resolve: async (_root, args, ctx) => {
         const user = requireUser(ctx);
-        // ERST autorisieren, DANN erst Seiteneffekte (F10): der Stopp löst
-        // einen Auto-Commit im fremden Branch aus und wäre sonst auch für
-        // Nicht-Eigentümer auslösbar.
-        await assertCanDeleteProject(ctx.db, user, String(args.id));
-        // Sandbox stoppen, bevor die Volumes entfernt werden (R2).
-        await ctx.sandboxManager.stop(String(args.id));
-        await deleteProject(ctx.db, user, String(args.id), ctx.config.macvibesHome);
-        // Zustand freigeben: ohne das behalten SandboxManager und ChatService
-        // Kontext, Timer, Queue und Subscriber eines Projekts, das es nicht
-        // mehr gibt, für die Lebensdauer des Prozesses. Kein try/finally:
-        // deleteProject wirft nur, solange noch NICHTS gelöscht ist (ab dem
-        // DB-Delete ist die Volume-Entfernung best effort und wirft nicht
-        // mehr) — wirft es, ist forget() hier in beiden möglichen Fällen
-        // falsch bzw. überflüssig: Entweder existiert das Projekt weiter
-        // (forget() verwürfe lebende Betrachter-Refcounts und Chat-Zustand),
-        // oder eine PARALLELE deleteProject-Mutation war schneller
-        // („Projekt nicht gefunden" aus assertCanDeleteProject) — dann hat
-        // deren Resolver das forget() bereits erledigt, nichts leckt.
-        ctx.sandboxManager.forget(String(args.id));
-        ctx.chatService.forget(String(args.id));
+        await deleteProjectAndCleanup(
+          {
+            db: ctx.db,
+            sandbox: ctx.sandboxManager,
+            chat: ctx.chatService,
+            macvibesHome: ctx.config.macvibesHome,
+          },
+          user,
+          String(args.id),
+        );
         return true;
       },
     }),
@@ -469,48 +445,16 @@ builder.mutationType({
         // fremde Projekte keine Live-Preview (R10). Chatten bleibt Owner-only.
         const user = requireUser(ctx);
         const project = await getProjectAny(ctx, String(args.id));
-        const workspaceDir = workspaceDirFor(ctx.config.macvibesHome, project.id);
-        await ctx.sandboxManager.ensureRunning({
-          projectId: project.id,
-          branchName: project.branchName,
-          workspaceDir,
-          templateDir: project.templateDir,
-          devCommand: project.devCommand,
-          previewPort: project.previewPort,
-        });
-        // Ownership prüfen resumeUnansweredTurn/prewarm inzwischen SELBST
-        // (M5, Feature-Gating: bei fremdem Projekt stille Rückkehr statt
-        // Wurf). Der Branch hier bleibt trotzdem — nicht als Authz (das wäre
-        // wieder Transport-Disziplin), sondern weil er ETWAS ANDERES gated:
-        // touchProject darf nur der Owner auslösen, sonst bumpte jeder
-        // Nur-Lese-Besuch die Aktivitätssortierung des Projekts. Nebenbei
-        // erspart er Besuchern zwei sinnlose DB-Reads pro enterProject.
-        if (project.ownerId === user.id) {
-          // Re-Entry-Resume (#34): Starb ein Turn beim Host-Neustart/Release,
-          // bevor eine Antwort persistiert wurde, ist die letzte Chat-Zeile eine
-          // unbeantwortete User-Nachricht. Beim Wieder-Öffnen genau diesen
-          // Prompt automatisch erneut ausführen — für den User dasselbe
-          // Ergebnis, ohne erneutes Tippen. Nur für den Owner: Besucher dürfen
-          // weder den Agent-Daemon belegen noch Turns anstoßen.
-          const resumed = await ctx.chatService.resumeUnansweredTurn(
-            user,
-            project.id,
-            workspaceDir,
-          );
-          if (!resumed) {
-            // Nur wenn NICHT wiederaufgenommen: stiller Config-Warmup
-            // (fire-and-forget), während der User tippt — der erste echte Turn
-            // trägt dann nicht mehr den claude-First-Run. Ein echter
-            // wiederaufgenommener Turn wärmt die Config selbst.
-            // Kein nacktes `void` (F18): ohne Rejection-Handler beendet ein
-            // Fehler hier den ganzen Serverprozess. prewarm fängt inzwischen
-            // selbst ab — der Handler bleibt als zweite Sicherung.
-            ctx.chatService.prewarm(user, project.id, workspaceDir).catch((error: unknown) => {
-              console.error(`Config-Warmup für ${project.id} fehlgeschlagen:`, error);
-            });
-          }
-          await touchProject(ctx.db, project.id);
-        }
+        await enterProjectSession(
+          {
+            db: ctx.db,
+            sandbox: ctx.sandboxManager,
+            chat: ctx.chatService,
+            macvibesHome: ctx.config.macvibesHome,
+          },
+          user,
+          project,
+        );
         return project;
       },
     }),
@@ -537,35 +481,20 @@ builder.mutationType({
       },
       resolve: async (_root, args, ctx) => {
         const user = requireUser(ctx);
-        // ERST autorisieren, DANN Seiteneffekte (F10-Muster wie bei
-        // deleteProject): ohne diese Vorab-Prüfung startete ein Nicht-Owner
-        // über ensureRunning die Sandbox. Der ChatService prüft die Ownership
-        // zusätzlich SELBST (M5) — hier ist es die zweite Sicherung plus die
-        // Reihenfolge-Garantie.
-        const project = await getProjectOwned(ctx.db, user, String(args.projectId));
-        const text = args.text.trim();
-        if (text.length === 0) {
-          throw new DomainError('Nachricht darf nicht leer sein');
-        }
-        const workspaceDir = workspaceDirFor(ctx.config.macvibesHome, project.id);
-        // Chatten setzt eine laufende Sandbox voraus (R6). Kein Betrachter-
-        // Eintrag (H11): der Owner zählt über seine chatEvents-Subscription;
-        // ein Turn ohne Subscription bleibt über isBusy vor Grace geschützt.
-        await ctx.sandboxManager.ensureRunning({
-          projectId: project.id,
-          branchName: project.branchName,
-          workspaceDir,
-          templateDir: project.templateDir,
-          devCommand: project.devCommand,
-          previewPort: project.previewPort,
-        });
-        await ctx.chatService.sendMessage(user, {
-          projectId: project.id,
-          workspaceDir,
-          text,
-          interrupt: args.interrupt === true,
-        });
-        await touchProject(ctx.db, project.id);
+        await sendMessageToProject(
+          {
+            db: ctx.db,
+            sandbox: ctx.sandboxManager,
+            chat: ctx.chatService,
+            macvibesHome: ctx.config.macvibesHome,
+          },
+          user,
+          {
+            projectId: String(args.projectId),
+            text: args.text,
+            interrupt: args.interrupt === true,
+          },
+        );
         return true;
       },
     }),
