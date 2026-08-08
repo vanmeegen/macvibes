@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "bin": {
+    "macvibes": "./scripts/cli.ts"
+  },
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -10,6 +13,7 @@
   "scripts": {
     "dev": "bun scripts/dev.ts",
     "setup": "bun scripts/setup.ts",
+    "doctor": "bun scripts/cli.ts doctor",
     "shutdown": "bun scripts/shutdown.ts",
     "dev:web": "cd apps/web && bun run dev",
     "dev:server": "cd apps/server && bun run dev",

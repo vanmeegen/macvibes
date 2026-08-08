@@ -55,13 +55,21 @@ läuft alles trotzdem, dann aber ohne VM-Isolat (Prozess-Provider).
 ```bash
 bun install
 
-# Claude-Credentials für den Host-Proxy (verlassen den Host nie):
+bun run setup              # geführtes First-Run-Setup: Doctor, Anbieter-Wahl,
+                           # Admin, .env, Baselines — empfohlen
+
+# … oder manuell (Claude-Credentials für den Host-Proxy, verlassen den Host nie):
 cp apps/server/.env.example apps/server/.env
 #   → CLAUDE_CODE_OAUTH_TOKEN=... (via `claude setup-token`) oder ANTHROPIC_API_KEY
 
 bun run baselines          # Template-Baseline-Snapshots bauen (nur mit msb)
 bun run dev                # http://localhost:5173
 ```
+
+Die `macvibes`-CLI klammert die Alltagsbefehle (`setup · start · stop · dev ·
+doctor`, je `--help`): heute als `bun scripts/cli.ts <befehl>` bzw. nach
+`bun link` (später Homebrew) als `macvibes <befehl>`. `bun run doctor` prüft
+die Umgebung (bun, git, msb, Hypervisor, freie Ports), ohne etwas zu ändern.
 
 Registrieren, dann von einem Admin freischalten lassen (der erste Nutzer der
 Instanz wird automatisch Admin; ist `MACVIBES_ADMIN_USERNAME` gesetzt, gilt das

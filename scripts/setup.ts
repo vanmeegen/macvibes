@@ -17,19 +17,16 @@ import { chmodSync, existsSync, mkdirSync, rmSync, statSync, writeFileSync } fro
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { usernameSchema } from '@macvibes/shared';
-import { portKonfiguration } from './lib/ports';
-import { istPortBelegt } from './lib/prozesse';
+import { druckeDoctorReport, erhebeDoctorInput } from './lib/doctorState';
 import {
   buildEnvContent,
   doctor,
   envWertIstUnsicher,
   sandboxModeFor,
-  type DoctorReport,
   type ProviderChoice,
   type SetupAnswers,
 } from './lib/setup';
 
-const BUN_PIN = '1.3.14';
 const ENV_PFAD = join('apps', 'server', '.env');
 
 /**
@@ -49,36 +46,6 @@ function unterstuetztPosixModes(dir: string): boolean {
     return false;
   } finally {
     rmSync(probe, { force: true });
-  }
-}
-
-/** Symbol pro Status — knappe, lesbare Doctor-Ausgabe. */
-function symbol(status: 'ok' | 'warn' | 'fail'): string {
-  return status === 'ok' ? '✓' : status === 'warn' ? '⚠' : '✗';
-}
-
-function druckeDoctor(report: DoctorReport): void {
-  console.log('\n── Doctor ─────────────────────────────────────────────');
-  for (const check of report.checks) {
-    const zeile = `${symbol(check.status)} ${check.label}`;
-    console.log(check.hinweis ? `${zeile}: ${check.hinweis}` : zeile);
-  }
-  console.log('───────────────────────────────────────────────────────\n');
-}
-
-/** Hypervisor-Check: auf macOS via sysctl kern.hv_support; sonst nicht geprüft. */
-async function hypervisorVerfuegbar(): Promise<boolean | null> {
-  if (process.platform !== 'darwin') return null;
-  try {
-    const proc = Bun.spawn(['sysctl', '-n', 'kern.hv_support'], {
-      stdout: 'pipe',
-      stderr: 'ignore',
-    });
-    const out = (await new Response(proc.stdout).text()).trim();
-    await proc.exited;
-    return out === '1';
-  } catch {
-    return null;
   }
 }
 
@@ -229,22 +196,12 @@ function anbieterWaehlen(): ProviderChoice[] {
 async function main(): Promise<void> {
   console.log('macvibes — geführtes First-Run-Setup\n');
 
-  // 1) Doctor — echte Zustände einsammeln, reine Auswertung in lib/setup.
-  const ports = portKonfiguration();
-  const zuPruefen = [ports.server, ports.egress, ports.web, ports.gateway];
-  const belegtePorts: number[] = [];
-  for (const port of zuPruefen) if (await istPortBelegt(port)) belegtePorts.push(port);
-
-  const msbAvailable = Bun.which('msb') !== null;
-  const report = doctor({
-    bunVersion: Bun.version,
-    bunPin: BUN_PIN,
-    gitAvailable: Bun.which('git') !== null,
-    msbAvailable,
-    hypervisorAvailable: msbAvailable ? await hypervisorVerfuegbar() : null,
-    belegtePorts,
-  });
-  druckeDoctor(report);
+  // 1) Doctor — Zustands-Erhebung geteilt mit `macvibes doctor`
+  // (lib/doctorState), reine Auswertung in lib/setup.
+  const doctorInput = await erhebeDoctorInput();
+  const msbAvailable = doctorInput.msbAvailable;
+  const report = doctor(doctorInput);
+  druckeDoctorReport(report);
 
   if (report.hatFehler) {
     console.error(
