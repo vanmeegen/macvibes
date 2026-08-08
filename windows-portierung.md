@@ -70,14 +70,23 @@ war bereits aktiv, VCRedist vorhanden, `msb doctor` grün.
 
 **Befunde und Fallstricke für Stufe 2** (alle auf diesem Feldtest basierend):
 
-- **Bug msb#1218 (upstream bestätigt, Fix gemerged, in 0.6.8 NICHT
-  enthalten):** `close()` auf einer **read-only** gemounteten Bind-Mount-Datei
+- **Bug msb#1218 (Fix gemerged als PR #1214 am 07.08.2026, noch in KEINEM
+  Release):** `close()` auf einer **read-only** gemounteten Bind-Mount-Datei
   gibt unter Windows `EACCES` (FUSE-FLUSH → `FlushFileBuffers` braucht
   Schreibzugriff). GNU-Coreutils (`cat`, `head`, `cp`) melden dadurch
   **Exit 1, obwohl der Inhalt vollständig ankommt**. Betrifft ro-Mounts wie
   das Agent-SDK-Bundle (`/opt/macvibes`): Agent-Shell-Kommandos auf solchen
-  Dateien schlagen scheinbar fehl. Beim Port auf die Fix-Release warten oder
-  Exit-Codes auf ro-Pfaden tolerieren. → Re-Check bei jedem msb-Release.
+  Dateien schlagen scheinbar fehl.
+  **Stand 2026-08-08:** PR #1214 („skip flush for read-only handles")
+  behebt genau diese Ursache und ist in `main`; das neueste Release ist
+  weiterhin **0.6.8 (29.07.)**, also OHNE den Fix (Issue #1218 selbst ist
+  formal noch offen). Beachten: Der PR-Autor fordert für das nächste Release
+  zusätzlich einen **libkrun-Bump** („kritische Windows-Patches") — der
+  Code-Fix allein ist womöglich nicht die ganze Geschichte.
+  **Entscheidung: Wir warten auf das Release** (kein Bauen aus dem Branch,
+  kein Vorab-Spike) — eine unveröffentlichte Version als Repo-Dependency
+  wäre dieselbe Risikoklasse, gegen die wir Bun bewusst pinnen.
+  → Re-Check bei jedem msb-Release.
 - **Defender-Firewall:** Kein sichtbarer Prompt; beim ersten Port-Bind
   entstehen **stille Inbound-Block-Regeln** für den konkreten
   `msb.exe`-Pfad. Loopback-Preview funktioniert trotzdem; für saubere
@@ -162,10 +171,11 @@ müsste ein äquivalentes Host-Gateway-Mapping stellen.
 ## Risiken
 
 1. **msb-Windows ist „preview" und jung** (v0.6.0 vom 27.06.2026; Re-Check
-   2026-08-05: 0.6.8 weiterhin aktuell). Der eigene Feldtest (Stufe 0,
-   2026-08-05) ist bestanden — das Restrisiko sind unentdeckte Ecken im
-   Dauerbetrieb plus der bekannte, noch unreleased gefixte Bug msb#1218
-   (ro-Bind-Mount-Reads melden Exit 1).
+   2026-08-08: 0.6.8 vom 29.07. weiterhin aktuell). Der eigene Feldtest
+   (Stufe 0, 2026-08-05) ist bestanden — das Restrisiko sind unentdeckte
+   Ecken im Dauerbetrieb plus msb#1218 (ro-Bind-Mount-Reads melden Exit 1),
+   dessen Fix (PR #1214, gemerged 07.08.) auf sein Release wartet. Stufe 2
+   startet, wenn dieses Release da ist.
 2. **Bun ist auf Windows die schwächste Plattform**, ausgerechnet bei
    Monorepos/Workspaces: „failed to link package with workspace" (#26543),
    kaputte `.bin`-Shims, `bun install` mit `EPERM` (#11250). Wir stehen mit
@@ -226,10 +236,13 @@ unter tini+monit). „0,8 ms CoW-Fork"-Zahlen aus Websuchen gehören zu zeroboot
 
 ## Re-Check-Liste für später
 
-- [x] ~~microsandbox-Releases~~ → 2026-08-05: 0.6.8 (29.07.) weiterhin
-      aktuell und gepinnt; Windows weiterhin „preview" (npm-README). Nächster
-      Check bei neuem Release: ist der **msb#1218-Fix** (ro-Bind-Mount
-      `EACCES`) drin? Ist das Preview-Label gefallen?
+- [ ] **microsandbox-Release > 0.6.8 abwarten** (Stand 2026-08-08: 0.6.8 vom
+      29.07. ist weiterhin das neueste, npm `latest` ebenfalls). Der Fix für
+      den Stufe-2-Blocker msb#1218 ist als **PR #1214 am 07.08. in `main`
+      gemerged**, aber unveröffentlicht. Beim nächsten Release prüfen:
+      (a) ist #1214 enthalten, (b) wurde der geforderte **libkrun-Bump**
+      mitgenommen, (c) ist das Windows-„preview"-Label gefallen?
+      Dann Pin heben und Stufe 2 angehen.
       → https://github.com/superradcompany/microsandbox/releases
 - [ ] Bun-Windows: Workspace-/Isolated-Linker-Bugs (#26543, #24543, #11250)
       geschlossen? Nutzt das Bun-Team Isolated Installs selbst auf Windows?
