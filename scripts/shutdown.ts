@@ -5,6 +5,7 @@
  * TCP-Connect, PID-Suche gekapselt in lib/prozesse — die frühere harte
  * lsof-Abhängigkeit entfällt.
  */
+import { SHUTDOWN_GRACE_SECONDS } from '@macvibes/shared';
 import { portKonfiguration } from './lib/ports';
 import { istPortBelegt, pidsAufPort, pidsMitKommandozeile, beende } from './lib/prozesse';
 
@@ -32,7 +33,14 @@ for (const pid of await pidsMitKommandozeile(/run --filter.* dev/)) beende(pid);
 // ihn früher mitten aus dem Stoppen, und der msb-Sweep unten löst KEINEN
 // Auto-Commit aus: mit laufenden VMs ging so bei jedem Shutdown der letzte
 // Commit verloren.
-const GRACE_SECONDS = Number(process.env['MACVIBES_SHUTDOWN_GRACE'] ?? 45);
+//
+// Diese Grace steht in einem festen Verhältnis zu den Schritt-Fristen der
+// ShutdownSequence (apps/server): Sie ist GRÖSSER als deren Summe, damit ein
+// einzelner hängender Schritt nicht das ganze Budget frisst und die restlichen
+// Schritte (u. a. der Auto-Commit) abschneidet (Live-Befund 2026-08). Der
+// Default kommt aus EINER Quelle mit den Schritt-Fristen: @macvibes/shared
+// (SHUTDOWN_GRACE_SECONDS; dort auch die maschinell bewachte Invariante).
+const GRACE_SECONDS = Number(process.env['MACVIBES_SHUTDOWN_GRACE'] ?? SHUTDOWN_GRACE_SECONDS);
 
 console.log(
   `→ Beende Ports (${WEB_PORT} Web, ${SERVER_PORT} Server, ${EGRESS_PORT} Egress, ${GATEWAY_PORT} Gateway) …`,

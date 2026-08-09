@@ -35,6 +35,7 @@ import { ensureBareRepo } from './core/gitService';
 import { startMirrorScheduler } from './services/mirrorService';
 import { startLocalRouter } from './services/localRouterService';
 import { ShutdownSequence } from './shutdownSequence';
+import { SHUTDOWN_STEP_TIMEOUTS_MS } from '@macvibes/shared';
 import { projectRepoFor } from './core/workspaceService';
 
 const config = loadConfig();
@@ -109,10 +110,16 @@ const localRouterReady =
 // Selbst gestarteten Shim beim Beenden mitnehmen (SIGTERM = bun run shutdown).
 // Als Schritt, NICHT als eigener Handler: ein zweiter Handler mit eigenem
 // process.exit(0) hat vorher den Auto-Commit der Sandboxes abgeschnitten.
-shutdownSequence.register('lokaler Modell-Router', async () => {
-  const router = await localRouterReady;
-  await router.stop();
-});
+// Fristen pro Schritt aus EINER Quelle (@macvibes/shared), damit sie mit der
+// Grace des Shutdown-Skripts (scripts/shutdown.ts) im Verhältnis bleiben.
+shutdownSequence.register(
+  'lokaler Modell-Router',
+  async () => {
+    const router = await localRouterReady;
+    await router.stop();
+  },
+  SHUTDOWN_STEP_TIMEOUTS_MS['lokaler Modell-Router'],
+);
 
 /** Meldet eine group/other-lesbare .env — dort steht der Claude-Token (F26). */
 function warnIfEnvFileReadable(envPath: string): void {
@@ -393,6 +400,18 @@ if (config.mirror.remoteUrl !== null) {
 // Reihenfolge ergibt sich aus der Registrierung: rückwärts, also Sandboxes
 // zuerst (ihr Auto-Commit ist das Empfindlichste), dann Gateway, Mirror und
 // zuletzt der Modell-Router.
-shutdownSequence.register('GitHub-Mirror', () => mirror.stop());
-shutdownSequence.register('Preview-Gateway', () => previewGateway.stop());
-shutdownSequence.register('Sandboxes (inkl. Auto-Commit)', () => sandboxManager.stopAll());
+shutdownSequence.register(
+  'GitHub-Mirror',
+  () => mirror.stop(),
+  SHUTDOWN_STEP_TIMEOUTS_MS['GitHub-Mirror'],
+);
+shutdownSequence.register(
+  'Preview-Gateway',
+  () => previewGateway.stop(),
+  SHUTDOWN_STEP_TIMEOUTS_MS['Preview-Gateway'],
+);
+shutdownSequence.register(
+  'Sandboxes (inkl. Auto-Commit)',
+  () => sandboxManager.stopAll(),
+  SHUTDOWN_STEP_TIMEOUTS_MS['Sandboxes (inkl. Auto-Commit)'],
+);

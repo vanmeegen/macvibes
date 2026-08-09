@@ -178,7 +178,13 @@ export interface PreviewGatewayOptions {
 
 export interface PreviewGatewayHandle {
   port: number;
-  stop: () => void;
+  /**
+   * Fährt das Gateway herunter. Ehrlich als `Promise<void>` typisiert (früher
+   * `() => void`, obwohl die Rückgabe von `server.stop(true)` ein echtes Promise
+   * ist): die ShutdownSequence `await`et diesen Schritt, und ein verschluckter
+   * Rückgabetyp lässt einen Hänger unbemerkt bis in die Frist laufen.
+   */
+  stop: () => Promise<void>;
 }
 
 interface WsProxyData {
@@ -242,10 +248,25 @@ function createAuthCache(
   };
 }
 
+/**
+ * Frist, die `stop()` dem Server-Stopp höchstens einräumt, bevor es trotzdem
+ * auflöst (s. Kommentar in `stop()`). Bewusst knapp: im Normalfall settelt
+ * `server.stop(true)` sofort — die Frist greift nur im pathologischen
+ * Dead-Peer-Fall und darf den geordneten Abgang nicht spürbar bremsen.
+ */
+const STOP_DRAIN_BUDGET_MS = 1_000;
+
 /** Startet das Preview-Gateway (HTTP + WS-Reverse-Proxy). */
 export function startPreviewGateway(options: PreviewGatewayOptions): PreviewGatewayHandle {
   const { previewPortFor } = options;
   const isAuthenticated = createAuthCache(options.authenticate);
+
+  // Alle vom Gateway selbst geöffneten Upstream-Clients (einer pro HMR-WS).
+  // Beim Herunterfahren sind die Sandboxes (VMs) VOR dem Gateway gestoppt — die
+  // Upstreams zeigen dann auf tote Peers, auf die `server.stop(true)` sonst bis
+  // zum TCP-Timeout wartet (Live-Befund 2026-08: Gateway-Schritt hing >45 s).
+  // Deshalb verfolgen wir sie und schliessen sie in `stop()` selbst.
+  const upstreams = new Set<WebSocket>();
 
   const server = Bun.serve<WsProxyData>({
     port: options.port,
@@ -315,6 +336,10 @@ export function startPreviewGateway(options: PreviewGatewayOptions): PreviewGate
         const upstream =
           ws.data.protocol !== null ? new WebSocket(url, ws.data.protocol) : new WebSocket(url);
         ws.data.upstream = upstream;
+        upstreams.add(upstream);
+        // Aus der Nachverfolgung austragen, sobald der Upstream terminal ist —
+        // sonst wüchse die Menge über die Laufzeit unbegrenzt.
+        const vergiss = (): void => void upstreams.delete(upstream);
         upstream.addEventListener('open', () => {
           ws.data.ready = true;
           for (const m of ws.data.pending) upstream.send(m);
@@ -323,8 +348,14 @@ export function startPreviewGateway(options: PreviewGatewayOptions): PreviewGate
         upstream.addEventListener('message', (e: MessageEvent) =>
           ws.send(e.data as string | Buffer),
         );
-        upstream.addEventListener('close', () => ws.close());
-        upstream.addEventListener('error', () => ws.close());
+        upstream.addEventListener('close', () => {
+          vergiss();
+          ws.close();
+        });
+        upstream.addEventListener('error', () => {
+          vergiss();
+          ws.close();
+        });
       },
       message(ws: ServerWebSocket<WsProxyData>, message: string | Buffer) {
         const upstream = ws.data.upstream;
@@ -332,13 +363,43 @@ export function startPreviewGateway(options: PreviewGatewayOptions): PreviewGate
         else ws.data.pending.push(message);
       },
       close(ws: ServerWebSocket<WsProxyData>) {
-        ws.data.upstream?.close();
+        const upstream = ws.data.upstream;
+        if (upstream !== null) {
+          upstreams.delete(upstream);
+          upstream.close();
+        }
       },
     },
   });
 
   return {
     port: server.port ?? options.port,
-    stop: () => server.stop(true),
+    stop: async () => {
+      // ZUERST die selbst geöffneten Upstream-Clients schliessen, DANN den
+      // Server stoppen — offene Upstreams sollen nicht als Verbindungen
+      // zurückbleiben.
+      for (const upstream of upstreams) {
+        // `close()` auf einem schon geschlossenen/kaputten Socket ist laut
+        // Spec ein No-op; der try/catch deckt nur einen ungültigen Zustand ab,
+        // damit ein einzelner Socket den Abgang nicht mit einem Wurf blockiert.
+        try {
+          upstream.close();
+        } catch {
+          // absichtlich leer: beim Zuklappen einer ohnehin sterbenden
+          // Verbindung gibt es nichts zu behandeln.
+        }
+      }
+      upstreams.clear();
+      // Gebändigt auf den Server-Stopp warten. Bun-Eigenart (Live-Befund
+      // 2026-08): zeigt ein Upstream-Client auf eine beim Shutdown BEREITS
+      // gestoppte VM (die Sandboxes werden VOR dem Gateway beendet), settelt
+      // das Promise von `server.stop(true)` nicht — der ausgehende Client hält
+      // es offen, auch wenn er längst geschlossen ist. Genau das hing zuvor
+      // >45 s und liess den Abschaltschritt in seine Frist laufen. Der Stopp
+      // wird angestossen; der Prozess endet ohnehin direkt danach und gibt den
+      // Port frei, deshalb darf ein klemmender Bun-Client den Abgang nicht
+      // aufhalten.
+      await Promise.race([server.stop(true), Bun.sleep(STOP_DRAIN_BUDGET_MS)]);
+    },
   };
 }

@@ -134,6 +134,38 @@ describe('ShutdownSequence: hängender Schritt macht den Prozess nicht unbeendba
     expect(eintraege).toEqual(['sandboxes', 'exit']);
   });
 
+  test('respektiert eine per-Schritt konfigurierte Frist statt der Default-Frist', async () => {
+    // Kern der Fristen-Lösung (Live-Befund 2026-08): Schritte bekommen einzeln
+    // eine Frist. Ein knapp befristeter Schritt wird übersprungen, während ein
+    // großzügig befristeter (der Auto-Commit) fertig laufen darf — auch wenn er
+    // länger braucht als die knappe Frist des anderen.
+    const { eintraege, notiere } = protokoll();
+    const sequenz = new ShutdownSequence({
+      exit: () => notiere('exit'),
+      log: () => {},
+      // Default absichtlich winzig: würde er (statt der per-Schritt-Frist)
+      // greifen, würde der Auto-Commit fälschlich übersprungen.
+      stepTimeoutMs: 5,
+    });
+
+    // Zuletzt registriert = zuerst gestoppt.
+    sequenz.register(
+      'Auto-Commit',
+      async () => {
+        await Bun.sleep(40);
+        notiere('auto-commit');
+      },
+      1_000, // großzügige eigene Frist
+    );
+    sequenz.register('haengt', () => new Promise<void>(() => {}), 20); // knappe eigene Frist
+
+    await sequenz.handle('SIGTERM');
+
+    // Der hängende Schritt wird nach seiner 20-ms-Frist übersprungen; der
+    // Auto-Commit läuft trotz der 5-ms-Default-Frist bis zu seinen 40 ms durch.
+    expect(eintraege).toEqual(['auto-commit', 'exit']);
+  });
+
   test('ein zweites Signal schneidet einen laufenden Schritt NICHT ab', async () => {
     // Ein zweiter Ctrl-C darf keinen Notausstieg auslösen: er würde einen gerade
     // laufenden Auto-Commit (Release, während jemand in der Sandbox arbeitet)

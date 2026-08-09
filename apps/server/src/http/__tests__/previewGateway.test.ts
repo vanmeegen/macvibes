@@ -349,6 +349,62 @@ describe('startPreviewGateway (Integration mit Fake-Upstream)', () => {
     expect(seenCookie ?? '').toContain('app_theme=dark');
   });
 
+  test('stop() löst zügig auf, auch wenn die VM einer offenen HMR-WS schon weg ist', async () => {
+    // Regression (Live-Befund 2026-08): Beim SIGTERM hing der Abschaltschritt
+    // „Preview-Gateway" >45 s. Pro HMR-Verbindung öffnet das Gateway einen
+    // EIGENEN Upstream-Client (ws://127.0.0.1:<vmPort>). Beim Herunterfahren
+    // werden die Sandboxes (VMs) VOR dem Gateway gestoppt — der Upstream zeigt
+    // also auf einen toten Peer. server.stop(true) wartete dann bis zum
+    // TCP-Timeout auf diese Verbindung. stop() muss die selbst geöffneten
+    // Upstreams selbst schliessen und darf nicht auf sie warten.
+    const localUpstream = Bun.serve({
+      port: 0,
+      fetch(req, srv): Response | undefined {
+        if (srv.upgrade(req, { data: undefined })) return undefined;
+        return new Response('nope');
+      },
+      websocket: {
+        message(ws, msg): void {
+          ws.send(`echo:${msg as string}`);
+        },
+      },
+    });
+    const vmPort = localUpstream.port ?? null;
+    const gw = startPreviewGateway({
+      port: 0,
+      previewPortFor: () => vmPort,
+      authenticate: async () => true,
+    });
+
+    // Echte proxied Verbindung aufbauen und einen Roundtrip abwarten, damit der
+    // Upstream-Client garantiert OPEN ist.
+    const client = new WebSocket(`ws://127.0.0.1:${gw.port}/p/proj-1/`);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('WS-Timeout')), 5000);
+      client.addEventListener('open', () => client.send('ping'));
+      client.addEventListener('message', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      client.addEventListener('error', () => {
+        clearTimeout(timer);
+        reject(new Error('WS-Fehler'));
+      });
+    });
+
+    // Die „VM" verschwindet abrupt — genau die Reihenfolge beim Shutdown.
+    localUpstream.stop(true);
+    await Bun.sleep(100);
+
+    // stop() muss zügig auflösen — vor dem Fix hängt es bis zum TCP-Timeout.
+    const ergebnis = await Promise.race([
+      gw.stop().then(() => 'gestoppt' as const),
+      Bun.sleep(3000).then(() => 'timeout' as const),
+    ]);
+    client.close();
+    expect(ergebnis).toBe('gestoppt');
+  });
+
   test('HMR-WebSocket wird bidirektional zum VM-Dev-Server gebrückt', async () => {
     // Fake-Upstream mit WS-Echo (steht für den HMR-Endpunkt des Dev-Servers).
     upstream = Bun.serve({

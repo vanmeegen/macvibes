@@ -22,20 +22,35 @@ export interface ShutdownSequenceOptions {
   exit?: ((code: number) => void) | undefined;
   log?: ((message: string) => void) | undefined;
   /**
-   * Frist pro Schritt in ms. Ein Schritt, der länger braucht, wird
-   * übersprungen, damit ein einzelner Hänger den ganzen Abgang nicht blockiert.
-   * Default 45 s — dieselbe Grosszügigkeit wie `MACVIBES_SHUTDOWN_GRACE` in
-   * shutdown.sh, damit ein echter Auto-Commit Zeit hat.
+   * Default-Frist pro Schritt in ms — greift nur für Schritte, die bei
+   * `register()` KEINE eigene Frist mitbekommen. Ein Schritt, der länger
+   * braucht, wird übersprungen, damit ein einzelner Hänger den ganzen Abgang
+   * nicht blockiert.
+   *
+   * WICHTIG (Live-Befund 2026-08): Die Fristen stehen in einem festen
+   * Verhältnis zur Gesamt-Grace des Shutdown-Skripts (`scripts/shutdown.ts`) —
+   * die Summe aller Schritt-Fristen muss KLEINER sein als diese Grace, sonst
+   * frisst ein einziger Hänger das ganze Skript-Budget und schneidet den
+   * Auto-Commit ab. Die tatsächlich genutzten Fristen kommen darum aus EINER
+   * Quelle: `SHUTDOWN_STEP_TIMEOUTS_MS` in `@macvibes/shared` (dort auch die
+   * maschinell bewachte Invariante). `index.ts` setzt sie pro Schritt.
    */
   stepTimeoutMs?: number | undefined;
 }
 
-/** Default-Frist pro Abschaltschritt. */
-const DEFAULT_STEP_TIMEOUT_MS = 45_000;
+/**
+ * Default-Frist pro Abschaltschritt, wenn `register()` keine eigene bekommt und
+ * die Optionen keine setzen. Bewusst knapp gehalten — die echten, gestaffelten
+ * Fristen kommen aus `@macvibes/shared` und werden pro Schritt gesetzt; dieser
+ * Wert ist nur ein sicherer Rückfall, der keinen Abgang lange blockiert.
+ */
+const DEFAULT_STEP_TIMEOUT_MS = 10_000;
 
 interface ShutdownStep {
   name: string;
   run: ShutdownStepFn;
+  /** Frist dieses Schritts in ms — eigene aus `register()` oder der Default. */
+  timeoutMs: number;
 }
 
 export class ShutdownSequence {
@@ -52,9 +67,14 @@ export class ShutdownSequence {
     this.stepTimeoutMs = options.stepTimeoutMs ?? DEFAULT_STEP_TIMEOUT_MS;
   }
 
-  /** Registriert einen Abschaltschritt. Später registriert = früher gestoppt. */
-  register(name: string, run: ShutdownStepFn): void {
-    this.steps.push({ name, run });
+  /**
+   * Registriert einen Abschaltschritt. Später registriert = früher gestoppt.
+   * `timeoutMs` setzt die Frist genau für diesen Schritt (sonst der Default) —
+   * so bekommt der Auto-Commit bewusst mehr Zeit als die schnellen Schritte,
+   * ohne deren Frist aufzublähen.
+   */
+  register(name: string, run: ShutdownStepFn, timeoutMs?: number): void {
+    this.steps.push({ name, run, timeoutMs: timeoutMs ?? this.stepTimeoutMs });
   }
 
   /**
@@ -94,9 +114,9 @@ export class ShutdownSequence {
   private runStep(step: ShutdownStep): Promise<void> {
     return new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
-        this.log(`Abschaltschritt „${step.name}" hängt (>${this.stepTimeoutMs}ms) — übersprungen.`);
+        this.log(`Abschaltschritt „${step.name}" hängt (>${step.timeoutMs}ms) — übersprungen.`);
         resolve();
-      }, this.stepTimeoutMs);
+      }, step.timeoutMs);
       // async-Wrapper fängt auch synchrone Würfe; der Reject-Zweig fängt einen
       // späten Fehler nach dem Timeout ab, sodass keine unhandled rejection
       // entsteht.
