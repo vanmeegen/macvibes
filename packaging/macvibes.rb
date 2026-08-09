@@ -19,7 +19,7 @@ class Macvibes < Formula
   desc "Lokale Vibe-Coding-Plattform: Claude-Code-Sessions in MicroVMs"
   homepage "https://github.com/vanmeegen/macvibes"
   url "https://github.com/vanmeegen/macvibes/archive/refs/tags/v0.9.1.tar.gz"
-  sha256 "cbfdbe1408900254f8049718fd779b18a8eeae6b7ef4b3d61e3cd38c0e733105"
+  sha256 "7b44761d07829faea44186ba713788c77b4e0a8dd59458db856dd4fc424259d1"
   license "MIT"
   head "https://github.com/vanmeegen/macvibes.git", branch: "main"
 
