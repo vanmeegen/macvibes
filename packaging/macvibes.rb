@@ -20,9 +20,7 @@ class Macvibes < Formula
   homepage "https://github.com/vanmeegen/macvibes"
   url "https://github.com/vanmeegen/macvibes/archive/refs/tags/v0.9.0.tar.gz"
   sha256 "b5fb545d4d1ccec2745cff76c607c21284b8295a590f0edb5c5d0a886678775d"
-  # TODO(owner): Lizenz festlegen und LICENSE-Datei ergänzen. Das Repo hat
-  # heute keine — Homebrew erwartet hier eine SPDX-Kennung (z. B. "MIT").
-  # Bewusst nicht geraten: die Lizenzwahl gehört dem Eigentümer.
+  license "MIT"
   head "https://github.com/vanmeegen/macvibes.git", branch: "main"
 
   # libkrun/HVF gibt es nur auf Apple Silicon; auf Intel liefe nur der
