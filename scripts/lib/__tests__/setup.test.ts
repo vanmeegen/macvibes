@@ -13,6 +13,7 @@ import {
   buildEnvContent,
   doctor,
   envQuote,
+  envZielPfad,
   mergeProviderEnv,
   providerEnv,
   sandboxModeFor,
@@ -300,6 +301,20 @@ describe('buildEnvContent — sperrt Werte aus, die Buns Parser korrumpieren wü
         providers: [{ kind: 'claude-apikey', apiKey: "sk-'-broken" }],
       }),
     ).toThrow(/ANTHROPIC_API_KEY/);
+  });
+});
+
+describe('envZielPfad — Dev-Checkout vs. installierte Fassung', () => {
+  test('Dev-Checkout (mit .git) → der Repo-Override apps/server/.env', () => {
+    expect(
+      envZielPfad({ istDevCheckout: true, repoRoot: '/repo', macvibesHome: '/home/macvibes' }),
+    ).toBe(join('/repo', 'apps', 'server', '.env'));
+  });
+
+  test('installierte Fassung (ohne .git) → die upgrade-feste <macvibesHome>/.env', () => {
+    expect(
+      envZielPfad({ istDevCheckout: false, repoRoot: '/libexec', macvibesHome: '/home/macvibes' }),
+    ).toBe(join('/home/macvibes', '.env'));
   });
 });
 

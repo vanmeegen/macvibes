@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadConfig, resolveDbPath } from '../config';
+import {
+  loadConfig,
+  loadHomeEnvFile,
+  parseEnvFile,
+  resolveDbPath,
+  resolveEnvPrecedence,
+} from '../config';
 import { PORT_DEFAULTS } from '../../../../scripts/lib/ports';
 import { createTempDir, removeDir } from '../services/__tests__/testUtils';
 
@@ -21,6 +27,11 @@ afterEach(async () => {
  * F7: Lag die DB unter dem Repo-Root, lieferte Vites /@fs/-Handler sie im LAN
  * aus — mitsamt der Session-Tokens. Neue Installationen legen sie deshalb ins
  * macvibes-Home; bestehende Installationen behalten ihren Pfad.
+ *
+ * Verpackungs-Fix: Der Legacy-Ort wird DETERMINISTISCH gegen das Server-Modul
+ * aufgelöst (Parameter serverRoot, Default = <serverRoot> via import.meta.url),
+ * NICHT mehr relativ zum cwd — sonst sah eine Homebrew-Installation (fremder
+ * cwd) die Bestandsdaten nicht und legte eine frische DB im Home an.
  */
 describe('resolveDbPath (F7)', () => {
   test('DB_PATH hat immer Vorrang', () => {
@@ -33,35 +44,121 @@ describe('resolveDbPath (F7)', () => {
     delete Bun.env.MACVIBES_TEST_MODE;
     const home = await createTempDir('macvibes-home-');
     tempDirs.push(home);
-    // In einem Verzeichnis OHNE ./data/app.db — sonst greift zu Recht der
-    // Bestandsschutz (der Testlauf selbst hat eine Alt-DB neben sich).
+    // serverRoot ohne data/ → kein Bestandsschutz, es greift der Home-Ort.
+    const serverRoot = await createTempDir('macvibes-server-');
+    tempDirs.push(serverRoot);
+    const path = resolveDbPath(home, serverRoot);
+    expect(path).toBe(join(home, 'data', 'app.db'));
+    expect(path.startsWith('./')).toBe(false);
+  });
+
+  test('das Ergebnis hängt NICHT am Arbeitsverzeichnis (aus zwei cwd gleich)', async () => {
+    delete Bun.env.DB_PATH;
+    delete Bun.env.MACVIBES_TEST_MODE;
+    const home = await createTempDir('macvibes-home-');
+    tempDirs.push(home);
+    const serverRoot = await createTempDir('macvibes-server-');
+    tempDirs.push(serverRoot);
     const cwd = process.cwd();
-    const leer = await createTempDir('macvibes-leer-');
-    tempDirs.push(leer);
-    process.chdir(leer);
+    const a = await createTempDir('macvibes-cwd-a-');
+    const b = await createTempDir('macvibes-cwd-b-');
+    tempDirs.push(a, b);
     try {
-      const path = resolveDbPath(home);
-      expect(path).toBe(join(home, 'data', 'app.db'));
-      expect(path.startsWith('./')).toBe(false);
+      process.chdir(a);
+      const ausA = resolveDbPath(home, serverRoot);
+      process.chdir(b);
+      const ausB = resolveDbPath(home, serverRoot);
+      expect(ausA).toBe(ausB);
+      expect(ausA).toBe(join(home, 'data', 'app.db'));
     } finally {
       process.chdir(cwd);
     }
   });
 
-  test('eine bestehende DB unter ./data wird weiter benutzt (Bestandsschutz)', async () => {
+  test('eine bestehende DB unter <serverRoot>/data wird weiter benutzt (Bestandsschutz, cwd-unabhängig)', async () => {
     delete Bun.env.DB_PATH;
     delete Bun.env.MACVIBES_TEST_MODE;
+    const serverRoot = await createTempDir('macvibes-server-');
+    tempDirs.push(serverRoot);
+    mkdirSync(join(serverRoot, 'data'), { recursive: true });
+    writeFileSync(join(serverRoot, 'data', 'app.db'), '');
     const cwd = process.cwd();
-    const sandbox = await createTempDir('macvibes-cwd-');
-    tempDirs.push(sandbox);
-    mkdirSync(join(sandbox, 'data'), { recursive: true });
-    writeFileSync(join(sandbox, 'data', 'app.db'), '');
-    process.chdir(sandbox);
+    const anderer = await createTempDir('macvibes-cwd-');
+    tempDirs.push(anderer);
+    process.chdir(anderer);
     try {
-      expect(resolveDbPath('/anderer/home')).toBe('./data/app.db');
+      // Trotz fremdem cwd gewinnt die Legacy-DB am Server-Modul-Ort.
+      expect(resolveDbPath('/anderer/home', serverRoot)).toBe(join(serverRoot, 'data', 'app.db'));
     } finally {
       process.chdir(cwd);
     }
+  });
+});
+
+/**
+ * Verpackungs-Fix Konfig-Vorrang: Eine installierte Fassung liest ihre Konfig
+ * aus <macvibesHome>/.env (upgrade-fest), ein Dev-Checkout aus apps/server/.env.
+ * Vorrang: (1) explizite Env > (2) apps/server/.env > (3) <macvibesHome>/.env.
+ * Die reine Auflösungslogik wird OHNE Prozess-Env-Mutation getestet.
+ */
+describe('Konfig-Vorrang: Env > Repo-.env > Home-.env', () => {
+  test('parseEnvFile: Kommentare/Leerzeilen ignoriert, Quotes entfernt, ohne $-Expansion', () => {
+    const parsed = parseEnvFile(
+      [
+        '# Kommentar',
+        '',
+        "MACVIBES_ADMIN_USERNAME='marco'",
+        'MACVIBES_SANDBOX=process',
+        'DOPPELT="wert"',
+        // $ bleibt literal — anders als Buns cwd-Autolader (keine Expansion hier).
+        "ROH='a$HOME'",
+      ].join('\n'),
+    );
+    expect(parsed['MACVIBES_ADMIN_USERNAME']).toBe('marco');
+    expect(parsed['MACVIBES_SANDBOX']).toBe('process');
+    expect(parsed['DOPPELT']).toBe('wert');
+    expect(parsed['ROH']).toBe('a$HOME');
+  });
+
+  test('resolveEnvPrecedence: explizite Env schlägt Repo-.env schlägt Home-.env', () => {
+    const merged = resolveEnvPrecedence(
+      { K: 'aus-env' },
+      { K: 'aus-repo', R: 'aus-repo' },
+      { K: 'aus-home', R: 'aus-home', H: 'aus-home' },
+    );
+    expect(merged['K']).toBe('aus-env'); // Regel 1 gewinnt
+    expect(merged['R']).toBe('aus-repo'); // Regel 2 vor Regel 3
+    expect(merged['H']).toBe('aus-home'); // nur in Home → übernommen
+  });
+
+  test('resolveEnvPrecedence: undefined in der Env verdeckt keinen Fallback', () => {
+    const merged = resolveEnvPrecedence({ K: undefined }, {}, { K: 'aus-home' });
+    expect(merged['K']).toBe('aus-home');
+  });
+
+  test('loadHomeEnvFile füllt nur fehlende Keys (Regel 1&2 bleiben unangetastet)', async () => {
+    const dir = await createTempDir('macvibes-homeenv-');
+    tempDirs.push(dir);
+    const KEY_GESETZT = 'MACVIBES_TEST_HOMEENV_GESETZT';
+    const KEY_FEHLT = 'MACVIBES_TEST_HOMEENV_FEHLT';
+    const saved = { g: Bun.env[KEY_GESETZT], f: Bun.env[KEY_FEHLT] };
+    try {
+      Bun.env[KEY_GESETZT] = 'bereits-gesetzt';
+      delete Bun.env[KEY_FEHLT];
+      writeFileSync(join(dir, '.env'), `${KEY_GESETZT}='aus-home'\n${KEY_FEHLT}='aus-home'\n`);
+      loadHomeEnvFile(join(dir, '.env'));
+      expect(Bun.env[KEY_GESETZT]).toBe('bereits-gesetzt'); // NICHT überschrieben
+      expect(Bun.env[KEY_FEHLT]).toBe('aus-home'); // Fallback geladen
+    } finally {
+      if (saved.g === undefined) delete Bun.env[KEY_GESETZT];
+      else Bun.env[KEY_GESETZT] = saved.g;
+      if (saved.f === undefined) delete Bun.env[KEY_FEHLT];
+      else Bun.env[KEY_FEHLT] = saved.f;
+    }
+  });
+
+  test('loadHomeEnvFile ohne Datei ist ein No-Op (kein Wurf)', () => {
+    expect(() => loadHomeEnvFile(join('/nicht/vorhanden', '.env'))).not.toThrow();
   });
 });
 

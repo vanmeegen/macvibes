@@ -1,4 +1,4 @@
-import { loadConfig } from './config';
+import { homeEnvPathFor, loadConfig, loadHomeEnvFile } from './config';
 import { createDb } from './db/client';
 import { runMigrations } from './db/migrate';
 import { createAnthropicProxy } from './http/anthropicProxy';
@@ -7,8 +7,7 @@ import { startPreviewGateway } from './http/previewGateway';
 import { createAppYoga } from './http/createAppYoga';
 import { serveWebUi } from './http/staticFiles';
 import { existsSync, statSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dirname, join, resolve } from 'node:path';
 import { AGENT_GATEWAY_PATH, AgentGateway } from './agent/agentGateway';
 import { ClaudeAgentRunner } from './agent/claudeRunner';
 import { buildDaemonBundle } from './agent/daemonBundle';
@@ -38,7 +37,17 @@ import { ShutdownSequence } from './shutdownSequence';
 import { SHUTDOWN_STEP_TIMEOUTS_MS } from '@macvibes/shared';
 import { projectRepoFor } from './core/workspaceService';
 
+// Fall 3 der Vorrangregel: die nutzereigene <macvibesHome>/.env laden, BEVOR die
+// Config gelesen wird. Bereits gesetzte Variablen (explizit oder aus der
+// cwd-.env, die Bun automatisch lädt) gewinnen — s. loadHomeEnvFile. Der
+// Seiteneffekt sitzt hier in der Composition Root, nicht in loadConfig().
+loadHomeEnvFile(homeEnvPathFor());
 const config = loadConfig();
+// Beim Start EINMAL den tatsächlich benutzten DB-Pfad (absolut) loggen: genau
+// diese Information fehlte beim Homebrew-Install-Test, als eine frische DB im
+// Home statt der Bestandsdaten benutzt wurde — mit dieser Zeile wäre der Fehler
+// sofort sichtbar gewesen.
+console.log(`SQLite-DB: ${resolve(config.dbPath)}`);
 const db = createDb(config.dbPath);
 runMigrations(db);
 // Bootstrap-Admin (optional per MACVIBES_ADMIN_USERNAME) freischalten/befördern.
@@ -380,8 +389,13 @@ const server = Bun.serve({
 });
 
 // F26: Die .env trägt den Claude-Token im Klartext. Nicht automatisch
-// korrigieren (es ist eine Nutzerdatei), aber unübersehbar melden.
-warnIfEnvFileReadable(fileURLToPath(new URL('../.env', import.meta.url)));
+// korrigieren (es ist eine Nutzerdatei), aber unübersehbar melden — und zwar
+// für die TATSÄCHLICH verwendeten Dateien: die cwd-.env, die Bun automatisch
+// lädt (im Repo apps/server/.env), UND die explizit geladene
+// <macvibesHome>/.env (Fall 3 der Vorrangregel). Doppelte Pfade nur einmal.
+for (const envFile of new Set([resolve('.env'), join(config.macvibesHome, '.env')])) {
+  warnIfEnvFileReadable(envFile);
+}
 
 console.log(`macvibes-Server läuft auf http://${server.hostname}:${server.port}`);
 console.log(`GraphQL: http://${server.hostname}:${server.port}/graphql`);

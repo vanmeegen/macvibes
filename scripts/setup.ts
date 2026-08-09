@@ -15,19 +15,22 @@
  */
 import { chmodSync, existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { usernameSchema } from '@macvibes/shared';
 import { druckeDoctorReport, erhebeDoctorInput } from './lib/doctorState';
 import {
   buildEnvContent,
   doctor,
   envWertIstUnsicher,
+  envZielPfad,
   sandboxModeFor,
   type ProviderChoice,
   type SetupAnswers,
 } from './lib/setup';
 
-const ENV_PFAD = join('apps', 'server', '.env');
+/** Repo-Root modul-relativ (scripts/ liegt direkt darunter) — cwd-unabhängig. */
+const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 /**
  * Kann das Dateisystem unter `dir` POSIX-Modes durchsetzen? Feature-Detection
@@ -238,10 +241,18 @@ async function main(): Promise<void> {
   const sandboxMode = sandboxModeFor(msbAvailable);
   const answers: SetupAnswers = { adminUsername, sandboxMode, providers };
 
-  if (existsSync(ENV_PFAD)) {
+  // Ziel-.env nach Betriebsart wählen: Dev-Checkout (mit .git) → der
+  // Repo-Override apps/server/.env; installierte Fassung (kein .git, z. B.
+  // Homebrew-libexec) → die upgrade-feste <macvibesHome>/.env. Sonst läge die
+  // Konfig (inkl. Token) in libexec und wäre nach jedem `brew upgrade` weg.
+  const macvibesHome = process.env['MACVIBES_HOME'] ?? join(homedir(), 'macvibes');
+  const istDevCheckout = existsSync(join(REPO_ROOT, '.git'));
+  const envPfad = envZielPfad({ istDevCheckout, repoRoot: REPO_ROOT, macvibesHome });
+
+  if (existsSync(envPfad)) {
     // Nicht-destruktiv: bestehendes .env NIE stillschweigend überschreiben.
     const wahl = (
-      prompt(`\n${ENV_PFAD} existiert bereits. [u]eberschreiben / [b]ehalten / [a]bbrechen? `) ?? ''
+      prompt(`\n${envPfad} existiert bereits. [u]eberschreiben / [b]ehalten / [a]bbrechen? `) ?? ''
     )
       .trim()
       .toLowerCase();
@@ -250,19 +261,18 @@ async function main(): Promise<void> {
       process.exit(0);
     }
     if (wahl === 'u' || wahl === 'ueberschreiben' || wahl === 'überschreiben') {
-      schreibeEnv(answers);
+      schreibeEnv(envPfad, answers);
     } else {
       // Nicht-destruktiv per Default: alles außer einem AUSDRÜCKLICHEN
       // „ueberschreiben" (auch ein Tippfehler oder leere Eingabe) behält die
       // bestehende Datei — sie wird nie stillschweigend überschrieben.
-      console.log(`→ ${ENV_PFAD} unverändert behalten (Anbieter-/Admin-Eingaben verworfen).`);
+      console.log(`→ ${envPfad} unverändert behalten (Anbieter-/Admin-Eingaben verworfen).`);
     }
   } else {
-    schreibeEnv(answers);
+    schreibeEnv(envPfad, answers);
   }
 
   // 5) ~/macvibes-Verzeichnisbaum anlegen (Home + data-Ordner für die DB).
-  const macvibesHome = process.env['MACVIBES_HOME'] ?? join(homedir(), 'macvibes');
   mkdirSync(join(macvibesHome, 'data'), { recursive: true });
   console.log(`→ Verzeichnisbaum bereit: ${macvibesHome} (inkl. data/)`);
 
@@ -300,17 +310,21 @@ async function main(): Promise<void> {
 }
 
 /** .env schreiben und (falls möglich) auf 0600 sperren — nie den Inhalt loggen. */
-function schreibeEnv(answers: SetupAnswers): void {
+function schreibeEnv(envPfad: string, answers: SetupAnswers): void {
+  // Zielverzeichnis sicherstellen: bei der installierten Fassung ist das
+  // <macvibesHome>, das erst weiter unten (Schritt 5) voll angelegt wird.
+  const ordner = dirname(envPfad);
+  mkdirSync(ordner, { recursive: true });
   // TOCTOU-Vermeidung: den Mode DIREKT beim Erzeugen setzen, damit die Datei mit
   // ihren Secrets nie — auch nicht kurz — mit Default-Rechten (0644) existiert.
   // Das nachträgliche chmod bleibt als defensiver Zweitschritt (u. a. falls die
   // Datei schon existierte und writeFileSync den Mode dann nicht mehr anpasst).
-  writeFileSync(ENV_PFAD, buildEnvContent(answers), { mode: 0o600 });
-  if (unterstuetztPosixModes('apps/server')) {
-    chmodSync(ENV_PFAD, 0o600);
-    console.log(`→ ${ENV_PFAD} geschrieben (chmod 600).`);
+  writeFileSync(envPfad, buildEnvContent(answers), { mode: 0o600 });
+  if (unterstuetztPosixModes(ordner)) {
+    chmodSync(envPfad, 0o600);
+    console.log(`→ ${envPfad} geschrieben (chmod 600).`);
   } else {
-    console.log(`→ ${ENV_PFAD} geschrieben (Datei enthält Secrets — Zugriff selbst einschränken).`);
+    console.log(`→ ${envPfad} geschrieben (Datei enthält Secrets — Zugriff selbst einschränken).`);
   }
 }
 

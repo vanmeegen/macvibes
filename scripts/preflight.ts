@@ -49,10 +49,11 @@ export async function preflight(): Promise<boolean> {
   const envDatei = join('apps', 'server', '.env');
   const adminName = process.env['MACVIBES_ADMIN_USERNAME'] ?? adminNameAusEnvDatei(envDatei);
 
-  // DB-Pfad wie resolveDbPath() in apps/server/src/config.ts. ACHTUNG: dessen
-  // Legacy-Zweig `./data/<name>` ist relativ zum Arbeitsverzeichnis des
-  // SERVERS (apps/server), dieses Skript läuft aber im Repo-Root — beide
-  // Varianten prüfen, sonst gilt eine bestehende Installation als frisch.
+  // DB-Pfad wie resolveDbPath() in apps/server/src/config.ts: der Legacy-Ort ist
+  // jetzt DETERMINISTISCH `<serverRoot>/data/<name>` (= apps/server/data/app.db),
+  // nicht mehr cwd-relativ. Dieses Skript läuft im Repo-Root, deshalb der
+  // apps/server/data-Kandidat; das ältere `data/app.db` bleibt als Sicherheit,
+  // der Home-Ort deckt installierte Fassungen ab.
   const kandidaten = [
     process.env['DB_PATH'] ?? '',
     join('apps', 'server', 'data', 'app.db'),

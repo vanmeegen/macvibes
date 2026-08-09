@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -155,6 +155,9 @@ const DEFAULT_TEMPLATES_DIR = resolve(
 );
 const DEFAULT_WEB_DIST_DIR = resolve(fileURLToPath(new URL('../../web/dist', import.meta.url)));
 
+/** <serverRoot> = apps/server (das Verzeichnis über src/), modul-relativ. */
+const SERVER_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
+
 /**
  * Pfad der SQLite-DB.
  *
@@ -163,14 +166,94 @@ const DEFAULT_WEB_DIST_DIR = resolve(fileURLToPath(new URL('../../web/dist', imp
  * über `/@fs/` alles unterhalb des Repos aus — inklusive der DB mit
  * Session-Tokens im Klartext. Eine vorhandene Alt-DB wird weiter benutzt,
  * damit niemand beim Update stillschweigend seine Daten verliert.
+ *
+ * Der Legacy-Ort wird DETERMINISTISCH gegen das Server-Modul aufgelöst
+ * (`<serverRoot>/data/<name>`), NICHT relativ zum cwd. Früher war er
+ * `./data/<name>`: bei `bun run start` (cd apps/server) traf das im Repo die
+ * echte DB, bei einer Homebrew-Installation (cwd `<libexec>/apps/server`) aber
+ * NICHTS — dort wurde deshalb eine frische DB im Home angelegt und die
+ * Bestandsdaten blieben unsichtbar. `serverRoot` ist nur für Tests injizierbar.
  */
-export function resolveDbPath(macvibesHome?: string): string {
+export function resolveDbPath(macvibesHome?: string, serverRoot: string = SERVER_ROOT): string {
   if (Bun.env.DB_PATH) return Bun.env.DB_PATH;
   const name = Bun.env.MACVIBES_TEST_MODE === '1' ? 'app-test.db' : 'app.db';
-  const legacy = `./data/${name}`;
+  const legacy = join(serverRoot, 'data', name);
   if (existsSync(legacy)) return legacy;
   const home = macvibesHome ?? Bun.env.MACVIBES_HOME ?? join(homedir(), 'macvibes');
   return join(home, 'data', name);
+}
+
+/**
+ * Minimaler Parser für die Home-Fallback-`.env` (`<macvibesHome>/.env`).
+ *
+ * Bewusst OHNE `$`-Expansion — anders als Buns cwd-Autolader, der `$VAR` auch in
+ * Single-Quotes expandiert (Quirk, dokumentiert in scripts/lib/setup.ts). Das
+ * Setup schreibt hier ohnehin nur single-quotierte Werte ohne `$`/`\`/`'`
+ * (envQuote lehnt die ab), deshalb ist literales Lesen korrekt und frei von
+ * Überraschungs-Expansion. Umschließende einfache/doppelte Quotes werden
+ * entfernt; Kommentar- und Leerzeilen ignoriert.
+ */
+export function parseEnvFile(content: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const raw of content.split('\n')) {
+    const line = raw.trim();
+    if (line === '' || line.startsWith('#')) continue;
+    const match = /^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+    if (!match) continue;
+    let value = (match[2] ?? '').trim();
+    if (
+      value.length >= 2 &&
+      ((value.startsWith("'") && value.endsWith("'")) ||
+        (value.startsWith('"') && value.endsWith('"')))
+    ) {
+      value = value.slice(1, -1);
+    }
+    out[match[1] as string] = value;
+  }
+  return out;
+}
+
+/**
+ * Reine Vorrang-Auflösung der drei Konfig-Quellen (OHNE Prozess-Env-Mutation,
+ * damit testbar). Später = höhere Priorität:
+ *   (3) homeEnv  <  (2) repoEnv  <  (1) explicitEnv
+ * Zur Laufzeit hat Bun explicitEnv und repoEnv (die cwd-`.env`) bereits in
+ * `Bun.env` verschmolzen — die explizite Env gewinnt dort schon (empirisch
+ * gegen Bun 1.3.14 verifiziert). `loadHomeEnvFile` füllt danach nur noch die in
+ * `Bun.env` FEHLENDEN Home-Keys, wodurch genau diese Ordnung entsteht.
+ */
+export function resolveEnvPrecedence(
+  explicitEnv: Record<string, string | undefined>,
+  repoEnv: Record<string, string>,
+  homeEnv: Record<string, string>,
+): Record<string, string> {
+  const merged: Record<string, string> = { ...homeEnv, ...repoEnv };
+  for (const [key, value] of Object.entries(explicitEnv)) {
+    if (value !== undefined) merged[key] = value;
+  }
+  return merged;
+}
+
+/**
+ * Fall 3 der Konfig-Vorrangregel: `<macvibesHome>/.env` als upgrade-feste
+ * Fallback-Datei laden. Bun lädt automatisch NUR die cwd-`.env` (Fall 2), dieser
+ * Ort muss EXPLIZIT geladen werden. Bereits gesetzte Variablen (explizit ODER
+ * aus der cwd-`.env`) werden NIE überschrieben — sonst kippte Regel 1/2. Damit
+ * läuft der Dev-Checkout dieser Maschine unverändert weiter: seine
+ * apps/server/.env (cwd-`.env`) gewinnt gegen jeden Home-Eintrag. Idempotent.
+ */
+export function loadHomeEnvFile(homeEnvPath: string): void {
+  if (!existsSync(homeEnvPath)) return;
+  let content: string;
+  try {
+    content = readFileSync(homeEnvPath, 'utf8');
+  } catch (error) {
+    console.warn(`Home-.env ${homeEnvPath} nicht lesbar — übersprungen:`, error);
+    return;
+  }
+  for (const [key, value] of Object.entries(parseEnvFile(content))) {
+    if (Bun.env[key] === undefined) Bun.env[key] = value;
+  }
 }
 
 /** MACVIBES_MODEL_ROUTES parsen — nie werfen, ungültige Werte klar melden. */
@@ -240,6 +323,19 @@ function parseAllowedOrigins(raw: string | undefined): string[] {
     .split(',')
     .map((o) => o.trim())
     .filter((o) => o.length > 0);
+}
+
+/**
+ * Pfad der nutzereigenen, upgrade-festen Konfiguration (Fall 3 der
+ * Vorrangregel). Die Composition Root lädt sie beim Start — bewusst NICHT
+ * `loadConfig()`: das Lesen mutiert `Bun.env` global, und ein Unit-Test, der
+ * nur die Config auflösen will, zöge sonst auf einer INSTALLIERTEN Maschine
+ * die echten Secrets des Nutzers in seine Prozessumgebung (und könnte damit
+ * Default-Tests kippen). Seiteneffekte gehören an den Rand, nicht in eine
+ * Auflösungsfunktion.
+ */
+export function homeEnvPathFor(macvibesHome?: string): string {
+  return join(macvibesHome ?? Bun.env.MACVIBES_HOME ?? homedir() + '/macvibes', '.env');
 }
 
 export function loadConfig(): ServerConfig {

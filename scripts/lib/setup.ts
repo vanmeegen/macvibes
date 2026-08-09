@@ -11,6 +11,7 @@
  *   CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, MACVIBES_ADMIN_USERNAME,
  *   MACVIBES_SANDBOX, MACVIBES_MODEL_ROUTES.
  */
+import { join } from 'node:path';
 
 /** Eine zusätzliche Modell-Route (OpenRouter-Stil), wie config.ts sie parst. */
 export interface ModelRoute {
@@ -217,6 +218,27 @@ export function buildEnvContent(answers: SetupAnswers): string {
   }
 
   return lines.join('\n') + '\n';
+}
+
+/**
+ * Wohin schreibt das Setup die `.env`?
+ *
+ * - Dev-Checkout (ein `.git` im Repo-Root) → der Repo-Override
+ *   `apps/server/.env`. Das ist die cwd-`.env`, die Bun automatisch lädt, und
+ *   die laut Vorrangregel gegen die Home-`.env` gewinnt — die laufende
+ *   Installation dieser Maschine bleibt damit unverändert.
+ * - Installierte Fassung (kein `.git`) → die upgrade-feste `<macvibesHome>/.env`.
+ *   Sie überlebt `brew upgrade` (das `libexec` ersetzt), weil sie im
+ *   Nutzer-Home neben DB, Bare-Repo und Volumes liegt.
+ */
+export function envZielPfad(opts: {
+  istDevCheckout: boolean;
+  repoRoot: string;
+  macvibesHome: string;
+}): string {
+  return opts.istDevCheckout
+    ? join(opts.repoRoot, 'apps', 'server', '.env')
+    : join(opts.macvibesHome, '.env');
 }
 
 /**
