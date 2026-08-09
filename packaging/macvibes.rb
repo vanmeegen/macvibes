@@ -34,11 +34,17 @@ class Macvibes < Formula
   # Projekt-Branches im Bare-Repo, Auto-Commit, GitHub-Mirror.
   depends_on "git"
   depends_on :macos
-  # MicroVM-Isolation — der eigentliche Produktzweck. Ohne msb fällt macvibes
-  # auf den Prozess-Modus zurück (kein Isolat, nur Dev); `macvibes setup`
-  # erkennt das und konfiguriert den Fallback ausdrücklich, statt zu scheitern.
-  # Der Tap muss vorhanden sein: brew tap superradcompany/tap
-  depends_on "superradcompany/tap/microsandbox" => :recommended
+
+  # microsandbox (msb) ist BEWUSST KEINE brew-Abhängigkeit, obwohl es der
+  # Produktzweck ist:
+  #   • Upstream liefert einen eigenen Installer (~/.microsandbox/bin/msb) und
+  #     empfiehlt ihn — eine brew-Kopie daneben kollidiert mit dessen Symlink
+  #     in /opt/homebrew/bin (im echten Install-Test aufgefallen).
+  #   • Der brew-Tap ist ein FREMDER Tap; als Abhängigkeit zwänge er jeden
+  #     Nutzer zu `brew trust`, nur um macvibes zu installieren.
+  #   • macvibes läuft auch ohne: `macvibes setup` richtet dann den
+  #     Prozess-Modus ein (ohne Isolat), statt zu scheitern.
+  # Geprüft wird es dort, wo es hingehört — zur Laufzeit von `macvibes doctor`.
 
   def install
     # Den kompletten Quellbaum nach libexec: macvibes läuft als Bun-TS-Source,
@@ -68,10 +74,11 @@ class Macvibes < Formula
 
   def caveats
     <<~EOS
-      microsandbox kommt aus einem fremden Tap. Homebrew verlangt dafür einmalig
-      eine ausdrückliche Freigabe — sonst bricht die Installation ab:
-        brew tap superradcompany/tap
-        brew trust superradcompany/tap
+      Für echte VM-Isolation zusätzlich microsandbox installieren (falls noch
+      nicht vorhanden) — entweder mit dem Installer von microsandbox.dev oder:
+        brew tap superradcompany/tap && brew trust superradcompany/tap
+        brew install superradcompany/tap/microsandbox
+      `macvibes doctor` sagt dir, ob es gefunden wurde.
 
       Erster Schritt — geführtes Setup (Anbieter, Admin, .env, Baselines):
         macvibes setup
