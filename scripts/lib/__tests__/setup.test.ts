@@ -107,6 +107,21 @@ describe('providerEnv — Anbieter-Wahl auf Env-Vars abbilden', () => {
       { prefix: 'or/', upstreamUrl: 'https://x' },
     ]);
   });
+
+  test('openrouter erzeugt KEINE model route, sondern NUR OPENROUTER_API_KEY', () => {
+    // Kern der Setup-Korrektur: OpenRouter spricht nur OpenAI-Format, eine rohe
+    // Route in MACVIBES_MODEL_ROUTES (Anthropic-/v1/messages) kann nicht
+    // funktionieren. Der Weg ist der LiteLLM-Router + der Key in der Env.
+    const env = providerEnv({ kind: 'openrouter', apiKey: 'sk-or-123' });
+    expect(env).toEqual({ OPENROUTER_API_KEY: 'sk-or-123' });
+    expect(env['MACVIBES_MODEL_ROUTES']).toBeUndefined();
+  });
+
+  test('openai erzeugt KEINE model route, sondern NUR OPENAI_API_KEY', () => {
+    const env = providerEnv({ kind: 'openai', apiKey: 'sk-oai-123' });
+    expect(env).toEqual({ OPENAI_API_KEY: 'sk-oai-123' });
+    expect(env['MACVIBES_MODEL_ROUTES']).toBeUndefined();
+  });
 });
 
 describe('mergeProviderEnv — kombinierbare Anbieter', () => {
@@ -133,6 +148,16 @@ describe('mergeProviderEnv — kombinierbare Anbieter', () => {
     const merged = mergeProviderEnv([{ kind: 'ollama' }]);
     expect(merged['CLAUDE_CODE_OAUTH_TOKEN']).toBeUndefined();
     expect(merged['ANTHROPIC_API_KEY']).toBeUndefined();
+    expect(merged['MACVIBES_MODEL_ROUTES']).toBeUndefined();
+  });
+
+  test('Claude + OpenRouter: OPENROUTER_API_KEY steht neben dem Claude-Key, ohne Route', () => {
+    const merged = mergeProviderEnv([
+      { kind: 'claude-oauth', token: 'tok' },
+      { kind: 'openrouter', apiKey: 'sk-or' },
+    ]);
+    expect(merged['CLAUDE_CODE_OAUTH_TOKEN']).toBe('tok');
+    expect(merged['OPENROUTER_API_KEY']).toBe('sk-or');
     expect(merged['MACVIBES_MODEL_ROUTES']).toBeUndefined();
   });
 });
@@ -180,6 +205,28 @@ describe('buildEnvContent — .env-Inhalt aus den Antworten', () => {
     expect(content).toContain("ANTHROPIC_API_KEY='sk-ant'");
     expect(content).toContain("MACVIBES_MODEL_ROUTES='");
     expect(content).toContain('openrouter.ai');
+  });
+
+  test('OpenRouter: OPENROUTER_API_KEY landet single-quoted in der Datei, keine Route', () => {
+    const content = buildEnvContent({
+      adminUsername: 'marco',
+      sandboxMode: 'process',
+      providers: [
+        { kind: 'claude-apikey', apiKey: 'sk-ant' },
+        { kind: 'openrouter', apiKey: 'sk-or' },
+      ],
+    });
+    expect(content).toContain("OPENROUTER_API_KEY='sk-or'");
+    expect(content).not.toContain('MACVIBES_MODEL_ROUTES=');
+  });
+
+  test('OpenAI: OPENAI_API_KEY landet single-quoted in der Datei', () => {
+    const content = buildEnvContent({
+      adminUsername: 'marco',
+      sandboxMode: 'process',
+      providers: [{ kind: 'openai', apiKey: 'sk-oai' }],
+    });
+    expect(content).toContain("OPENAI_API_KEY='sk-oai'");
   });
 
   test('nur lokal, kein Claude: klarer Hinweis statt stiller Leere', () => {

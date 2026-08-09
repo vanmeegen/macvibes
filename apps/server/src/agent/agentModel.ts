@@ -21,6 +21,21 @@ export interface AgentModelInfo {
   slow: boolean;
 }
 
+/**
+ * Eigene Modelle (OpenRouter / OpenAI) hier ergänzen, um sie im Chat-Dropdown
+ * wählbar zu machen. Zwei Schritte, beide nötig:
+ *   1) Modell im LiteLLM-Router als `model_name` führen
+ *      (apps/server/local-router/litellm_config.yaml) und den Anbieter-Key
+ *      setzen (OPENROUTER_API_KEY / OPENAI_API_KEY in apps/server/.env).
+ *   2) HIER einen Eintrag mit exakt DIESEM `model_name` als `id` ergänzen.
+ * Beispiel (auskommentiert, damit es ohne gesetzten Key nicht als tote — beim
+ * Aufruf 401-liefernde — Option im Dropdown steht):
+ *   { id: 'openrouter/qwen/qwen3-coder', label: 'Qwen3 Coder (OpenRouter)', slow: true },
+ *   { id: 'openai/gpt-4o', label: 'GPT-4o (OpenAI)', slow: true },
+ * Die `id` darf NICHT mit "claude" beginnen (sonst routet der Proxy sie an die
+ * Anthropic-API statt an den lokalen Router). `slow: true` gibt Fremdmodellen
+ * großzügige Timeouts (agentTimeoutsFor behandelt unbekannte Modelle ohnehin so).
+ */
 export const AGENT_MODELS: readonly AgentModelInfo[] = [
   { id: 'claude-sonnet-5', label: 'Claude Sonnet 5', slow: false },
   { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5', slow: false },

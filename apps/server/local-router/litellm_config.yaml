@@ -24,6 +24,37 @@ model_list:
     litellm_params:
       model: ollama_chat/qwen3.6:35b-a3b-coding-mxfp8
       api_base: http://localhost:11434
+
+  # --- OpenRouter (optional) -------------------------------------------------
+  # OpenRouter bietet NUR einen OpenAI-kompatiblen Endpunkt; dieser Router
+  # übersetzt Anthropic-/v1/messages darauf. Der Eintrag ist AKTIV, stört den
+  # Start aber NICHT, solange OPENROUTER_API_KEY fehlt (empirisch verifiziert:
+  # LiteLLM startet, `os.environ/…` bleibt bis zum ersten Aufruf ungenutzt).
+  # Nutzen:
+  #   1) OPENROUTER_API_KEY in apps/server/.env setzen (`bun run setup` erledigt das).
+  #   2) Gewünschtes Modell hier als `model_name` führen (Slug von openrouter.ai).
+  #   3) Denselben `model_name` in src/agent/agentModel.ts in den Katalog
+  #      aufnehmen (slow: true empfohlen), damit er im Chat-Dropdown erscheint.
+  # Beispiel (Slug anpassen) — der `model_name` darf NICHT mit "claude" beginnen,
+  # sonst würde der Credential-Proxy ihn an die Anthropic-API statt hierher routen:
+  - model_name: openrouter/qwen/qwen3-coder
+    litellm_params:
+      model: openrouter/qwen/qwen3-coder
+      api_key: os.environ/OPENROUTER_API_KEY
+  # Weiteres OpenRouter-Beispiel (Claude via OpenRouter, Slug prüfen/anpassen):
+  # - model_name: openrouter/anthropic/claude-sonnet-4.5
+  #   litellm_params:
+  #     model: openrouter/anthropic/claude-sonnet-4.5
+  #     api_key: os.environ/OPENROUTER_API_KEY
+
+  # --- OpenAI (optional) -----------------------------------------------------
+  # Gleiches Muster über OPENAI_API_KEY. Auch aktiv ohne gesetzten Key
+  # unbedenklich (erst der Aufruf braucht ihn).
+  - model_name: openai/gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
   # Catch-all: Claude Code ruft intern Hilfsmodelle auf (claude-*-haiku etc.).
   # Ohne diesen Eintrag antwortet der Router darauf mit 400 → der Agent stolpert.
   - model_name: '*'

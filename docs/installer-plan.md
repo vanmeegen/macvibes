@@ -71,13 +71,25 @@ Das Setup fragt den Anbieter ab statt Claude fest zu verdrahten:
     wird in `config.ts` automatisch erkannt und gestartet
     (`detectLocalRouterCommand`), lokale Modelle sind damit ohne Zutun aktiv.
     Nur ein abweichender Router-Befehl setzt `MACVIBES_LOCAL_ROUTER_CMD`.
-  - **OpenAI / OpenRouter / eigener Endpunkt** — je eine Route in
-    `MACVIBES_MODEL_ROUTES` (`[{prefix, upstreamUrl, apiKey?}]`, existiert in
-    `config.ts`). WICHTIG: Der Proxy hängt den Request-Pfad an `upstreamUrl` an
-    (`anthropicProxy.ts:360`), der Endpunkt muss also Anthropics
-    `/v1/messages`-Format sprechen — rohe OpenAI/OpenRouter-URLs brauchen einen
-    LiteLLM-Shim davor (Anthropic↔OpenAI-Übersetzung). Das Setup verdrahtet nur
-    die Route; das Aufsetzen des Shims bleibt ein separater Schritt.
+  - **OpenRouter / OpenAI** — laufen über **denselben** LiteLLM-Router. WARUM
+    nicht als `MACVIBES_MODEL_ROUTES`: OpenRouter/OpenAI bieten NUR einen
+    OpenAI-kompatiblen Endpunkt, der Credential-Proxy hängt aber den
+    Request-Pfad an `upstreamUrl` an und schickt Anthropics `/v1/messages`
+    (`anthropicProxy.ts`) — eine rohe Anbieter-URL scheitert am Format-Mismatch.
+    Das Setup setzt deshalb **nur den Key** (`OPENROUTER_API_KEY` bzw.
+    `OPENAI_API_KEY`); der Router liest ihn per `os.environ` und übersetzt
+    Anthropic↔OpenAI. Der Router führt bereits aktive Beispiel-Aliase
+    (`litellm_config.yaml`) — verifiziert: LiteLLM startet auch OHNE gesetzten
+    Key (der Alias wird erst beim Aufruf gebraucht). Das Setup fasst die YAML
+    NICHT an (robuster: statische, versionierte Config; nur die `.env` wird über
+    den gehärteten Schreibpfad angefasst) und weist auf die zwei manuellen
+    Schritte hin: gewünschtes Modell als `model_name` in `litellm_config.yaml`
+    führen und mit demselben Namen in `agentModel.ts` in den Katalog aufnehmen.
+  - **Eigener Endpunkt (custom)** — bleibt eine echte Route in
+    `MACVIBES_MODEL_ROUTES` (`[{prefix, upstreamUrl, apiKey?}]`). Der Prompt
+    stellt klar: der Endpunkt MUSS Anthropics `/v1/messages`-Format sprechen
+    (z. B. ein selbst betriebener LiteLLM-Shim).
+
     Claude und Zusatz-Anbieter schließen sich nicht aus — der Credential-Proxy
     routet pro Request nach dem `model` im Body. „Nur lokal, kein Claude" ist
     ebenfalls erlaubt (dann Warnung statt Abbruch, Fallback lokaler Router).

@@ -85,6 +85,49 @@ Gateway auf einem festen Port (`MACVIBES_PREVIEW_GATEWAY_PORT`, Default **4173**
 Damit die Preview von unterwegs sichtbar ist, muss neben der UI (5173 bzw. prod 4000) **einmalig auch Port 4173** im Router/WireGuard geforwardet werden — die
 dynamischen VM-Ports müssen dann nicht mehr freigegeben werden.
 
+## Andere Modelle (OpenRouter & Co.)
+
+Neben Claude (Anthropic) und lokalen Ollama-Modellen lassen sich Anbieter wie
+**OpenRouter** oder **OpenAI** einhängen. Das läuft **immer über den
+mitgelieferten LiteLLM-Router** (`apps/server/local-router/`, Autostart), weil
+der Credential-Proxy Anthropics `/v1/messages`-Format spricht: er hängt den
+Request-Pfad an die Ziel-URL an und schickt Anthropic-JSON. OpenRouter und
+OpenAI bieten aber **nur** einen OpenAI-kompatiblen Endpunkt
+(`/chat/completions`) — eine rohe Anbieter-URL in `MACVIBES_MODEL_ROUTES`
+funktioniert deshalb **nicht** (Format-Mismatch). Der LiteLLM-Router übersetzt
+Anthropic↔OpenAI und liest den Anbieter-Key aus der Env.
+
+`bun run setup` fragt OpenRouter/OpenAI direkt ab (setzt nur den Key). Manuell
+in drei Schritten (Beispiel OpenRouter):
+
+```bash
+# 1) Key in apps/server/.env
+OPENROUTER_API_KEY='sk-or-...'
+```
+
+```yaml
+# 2) Modell im Router führen — apps/server/local-router/litellm_config.yaml
+#    (ein Beispiel-Eintrag ist bereits aktiv; Slug von openrouter.ai anpassen).
+#    Der model_name darf NICHT mit "claude" beginnen, sonst routet der Proxy ihn
+#    an die Anthropic-API statt an den lokalen Router.
+- model_name: openrouter/qwen/qwen3-coder
+  litellm_params:
+    model: openrouter/qwen/qwen3-coder
+    api_key: os.environ/OPENROUTER_API_KEY
+```
+
+```ts
+// 3) Modell im Chat-Dropdown wählbar machen —
+//    apps/server/src/agent/agentModel.ts, exakt derselbe Name als id:
+{ id: 'openrouter/qwen/qwen3-coder', label: 'Qwen3 Coder (OpenRouter)', slow: true },
+```
+
+Danach das Modell im Chat auswählen. Für OpenAI identisch mit
+`OPENAI_API_KEY` und dem Präfix `openai/`. Ein **eigener** Endpunkt, der bereits
+Anthropics `/v1/messages` spricht (z. B. ein selbst betriebener LiteLLM-Shim),
+kann alternativ direkt über `MACVIBES_MODEL_ROUTES` eingehängt werden (siehe
+`apps/server/.env.example`).
+
 ## HTTPS im LAN (Caddy — nötig für Mikrofon/Web Audio)
 
 Browser geben Mikrofon, AudioWorklet & Co. nur in einem **Secure Context**

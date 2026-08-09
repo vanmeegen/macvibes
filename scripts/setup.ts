@@ -153,23 +153,46 @@ function anbieterWaehlen(): ProviderChoice[] {
       if (wahl === 'ollama') {
         providers.push({ kind: 'ollama' });
         console.log('  ✓ Ollama (lokal) — der mitgelieferte LiteLLM-Router startet automatisch.');
-      } else if (wahl === 'openai' || wahl === 'openrouter' || wahl === 'custom') {
-        const preset =
-          wahl === 'openai'
-            ? { prefix: 'gpt-', upstreamUrl: 'https://api.openai.com' }
-            : wahl === 'openrouter'
-              ? { prefix: 'or/', upstreamUrl: 'https://openrouter.ai/api' }
-              : { prefix: '', upstreamUrl: '' };
-        const prefix =
-          (
-            prompt(`    Modell-Prefix (matcht das \`model\` im Body) [${preset.prefix}]: `) ?? ''
-          ).trim() || preset.prefix;
-        const upstreamUrl =
-          (
-            prompt(
-              `    Base-URL des Anthropic-/v1/messages-kompatiblen Endpunkts [${preset.upstreamUrl}]: `,
-            ) ?? ''
-          ).trim() || preset.upstreamUrl;
+      } else if (wahl === 'openrouter' || wahl === 'openai') {
+        // OpenRouter/OpenAI sprechen NUR OpenAI-Format. Sie laufen über den
+        // mitgelieferten LiteLLM-Router (Anthropic→OpenAI-Übersetzung), der den
+        // Key aus der Env liest — NICHT über eine rohe MACVIBES_MODEL_ROUTES-URL
+        // (die schickt Anthropic-/v1/messages und würde am Format-Mismatch
+        // scheitern). Deshalb hier nur nach dem Key fragen.
+        const anbieter = wahl === 'openrouter' ? 'OpenRouter' : 'OpenAI';
+        const keyName = wahl === 'openrouter' ? 'OPENROUTER_API_KEY' : 'OPENAI_API_KEY';
+        const beispiel = wahl === 'openrouter' ? 'openrouter/qwen/qwen3-coder' : 'openai/gpt-4o';
+        const apiKey = leseSecret(`    ${keyName} (${anbieter}-Dashboard): `);
+        if (apiKey === '') {
+          console.log(`    ⚠ Ohne ${keyName} kein ${anbieter}-Zugang — Eintrag übersprungen.`);
+          continue;
+        }
+        providers.push(
+          wahl === 'openrouter' ? { kind: 'openrouter', apiKey } : { kind: 'openai', apiKey },
+        );
+        console.log(`    ✓ ${anbieter} über den LiteLLM-Router (${keyName} gesetzt).`);
+        // Modell wählbar machen: der Router führt Beispiel-Aliase, der UI-Katalog
+        // nicht (sonst 401 für alle ohne Key). Deshalb den Weg konkret ausgeben.
+        console.log(
+          `      → Modell auswählbar machen: gewünschtes Modell in\n` +
+            `        apps/server/local-router/litellm_config.yaml als model_name führen\n` +
+            `        (Beispiel liegt bei: ${beispiel}) und denselben Namen in\n` +
+            `        apps/server/src/agent/agentModel.ts in den Katalog aufnehmen.`,
+        );
+      } else if (wahl === 'custom') {
+        // Eigener Endpunkt: bleibt eine echte MACVIBES_MODEL_ROUTES-Route — der
+        // MUSS aber Anthropic-/v1/messages sprechen (der Proxy hängt den Pfad an
+        // die upstreamUrl an und schickt Anthropic-Format).
+        console.log(
+          '    Hinweis: Der Endpunkt MUSS Anthropics /v1/messages-Format sprechen\n' +
+            '    (rohe OpenAI-URLs gehören zu openrouter/openai, nicht hierher).',
+        );
+        const prefix = (
+          prompt('    Modell-Prefix (matcht das `model` im Body, z. B. my-): ') ?? ''
+        ).trim();
+        const upstreamUrl = (
+          prompt('    Base-URL des Anthropic-/v1/messages-kompatiblen Endpunkts: ') ?? ''
+        ).trim();
         if (envWertIstUnsicher(prefix) || envWertIstUnsicher(upstreamUrl)) {
           console.log(
             "    ⚠ Prefix und Base-URL dürfen kein ' \\ $ oder Steuerzeichen enthalten — Eintrag übersprungen.",
