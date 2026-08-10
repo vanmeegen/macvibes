@@ -1,7 +1,13 @@
 # Lokaler Modell-Router (LiteLLM): bietet einen Anthropic-/v1/messages-Endpunkt
 # und übersetzt Requests (inkl. Streaming + Tool-Calling) auf lokale Ollama-
 # Modelle. Wird von macvibes automatisch mitgestartet (localRouterService);
-# die Modell-Aliase hier müssen zum Katalog in src/agent/agentModel.ts passen.
+# die Modell-Aliase hier müssen zum Modellkatalog passen (eingebaute Modelle in
+# src/agent/agentModel.ts + eigene in ~/macvibes/models.json).
+#
+# EIGENE Änderungen gehören nicht hierher, sondern in eine Kopie unter
+# ~/macvibes/litellm.yaml (existiert sie, nutzt der Router NUR noch sie;
+# expliziter Pfad via MACVIBES_LOCAL_ROUTER_CONFIG): diese Datei liegt bei
+# einer Installation in libexec und wird bei jedem brew upgrade ersetzt.
 
 model_list:
   # qwen3.6-coder-fixed = unsloth-GGUF mit gepatchtem Chat-Template
@@ -33,8 +39,8 @@ model_list:
   # Nutzen:
   #   1) OPENROUTER_API_KEY in apps/server/.env setzen (`bun run setup` erledigt das).
   #   2) Gewünschtes Modell hier als `model_name` führen (Slug von openrouter.ai).
-  #   3) Denselben `model_name` in src/agent/agentModel.ts in den Katalog
-  #      aufnehmen (slow: true empfohlen), damit er im Chat-Dropdown erscheint.
+  #   3) Denselben `model_name` in ~/macvibes/models.json aufnehmen
+  #      ("slow": true empfohlen), damit er im Chat-Dropdown erscheint.
   # Beispiel (Slug anpassen) — der `model_name` darf NICHT mit "claude" beginnen,
   # sonst würde der Credential-Proxy ihn an die Anthropic-API statt hierher routen:
   - model_name: openrouter/qwen/qwen3-coder

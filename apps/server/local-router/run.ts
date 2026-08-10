@@ -10,14 +10,31 @@
  * Plattform-Weiche. Die Python-venv lebt AUSSERHALB des Repos
  * (~/macvibes/local-router-venv) und wird beim allerersten Start automatisch
  * angelegt (dauert einmalig ~1–2 min).
+ *
+ * Config-Datei: die mitgelieferte `litellm_config.yaml` liegt bei einer
+ * Homebrew-Installation in `<libexec>` und wird bei jedem `brew upgrade`
+ * ersetzt — nutzereigene Router-Config gehört deshalb nach
+ * `<macvibesHome>/litellm.yaml` (oder explizit via
+ * MACVIBES_LOCAL_ROUTER_CONFIG). Auflösung: configPath.ts.
  */
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { resolveRouterConfigPath } from './configPath';
 
 const hier = import.meta.dir;
 const port = process.env['MACVIBES_LOCAL_ROUTER_PORT'] ?? '8787';
-const venv = join(process.env['MACVIBES_HOME'] ?? join(homedir(), 'macvibes'), 'local-router-venv');
+const macvibesHome = process.env['MACVIBES_HOME'] ?? join(homedir(), 'macvibes');
+const venv = join(macvibesHome, 'local-router-venv');
+// Upgrade-feste Router-Config: MACVIBES_LOCAL_ROUTER_CONFIG >
+// <macvibesHome>/litellm.yaml > mitgelieferte Datei — Begründung in configPath.ts
+// (die mitgelieferte liegt bei einer Installation in libexec und überlebt kein
+// brew upgrade).
+const configPfad = resolveRouterConfigPath({
+  envPath: process.env['MACVIBES_LOCAL_ROUTER_CONFIG'],
+  macvibesHome,
+  bundledDir: hier,
+});
 
 /** venv-Binary per Layout-Detection: POSIX `bin/`, Windows `Scripts/`. */
 function venvBinary(name: string): string | null {
@@ -69,8 +86,9 @@ if (litellm === null) {
 
 // Kein `exec`-Ersatz nötig: der localRouterService beendet bei Bedarf den
 // ganzen Prozessbaum (tree-kill); manuell gestartet reicht Ctrl+C.
-const router = Bun.spawn(
-  [litellm, '--config', join(hier, 'litellm_config.yaml'), '--port', port, '--host', '127.0.0.1'],
-  { stdout: 'inherit', stderr: 'inherit' },
-);
+console.log(`LiteLLM-Config: ${configPfad}`);
+const router = Bun.spawn([litellm, '--config', configPfad, '--port', port, '--host', '127.0.0.1'], {
+  stdout: 'inherit',
+  stderr: 'inherit',
+});
 process.exit(await router.exited);

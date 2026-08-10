@@ -9,6 +9,7 @@ import { serveWebUi } from './http/staticFiles';
 import { existsSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { AGENT_GATEWAY_PATH, AgentGateway } from './agent/agentGateway';
+import { loadUserAgentModels } from './agent/agentModel';
 import { ClaudeAgentRunner } from './agent/claudeRunner';
 import { buildDaemonBundle } from './agent/daemonBundle';
 import { DaemonAgentRunner } from './agent/daemonRunner';
@@ -43,6 +44,15 @@ import { projectRepoFor } from './core/workspaceService';
 // Seiteneffekt sitzt hier in der Composition Root, nicht in loadConfig().
 loadHomeEnvFile(homeEnvPathFor());
 const config = loadConfig();
+// Nutzereigene Modelle aus <macvibesHome>/models.json in den Katalog mischen.
+// Der Dateizugriff sitzt bewusst HIER (Composition Root, wie loadHomeEnvFile
+// darüber) statt beim Modul-Import von agentModel.ts: sonst hinge jeder
+// Unit-Test, der den Katalog importiert, vom Nutzer-Home der Maschine ab.
+// Kaputte/fehlende Datei warnt nur — der Serverstart darf daran nie scheitern.
+const nutzerModelle = loadUserAgentModels(join(config.macvibesHome, 'models.json'));
+if (nutzerModelle > 0) {
+  console.log(`${nutzerModelle} Nutzer-Modell(e) aus ${join(config.macvibesHome, 'models.json')}`);
+}
 // Beim Start EINMAL den tatsächlich benutzten DB-Pfad (absolut) loggen: genau
 // diese Information fehlte beim Homebrew-Install-Test, als eine frische DB im
 // Home statt der Bestandsdaten benutzt wurde — mit dieser Zeile wäre der Fehler

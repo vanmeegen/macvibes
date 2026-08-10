@@ -23,30 +23,50 @@ export interface ModelRoute {
 /**
  * Anbieter-Wahl. Kombinierbar — Claude und Zusatz-Anbieter schließen sich
  * NICHT aus (der Credential-Proxy routet pro Request nach dem `model` im Body).
- *   - claude-oauth : Abo-Token (claude setup-token), bevorzugt
- *   - claude-apikey: klassischer Anthropic-API-Key
- *   - ollama       : lokale Modelle über den mitgelieferten LiteLLM-Router
- *   - openrouter   : OpenRouter über den LiteLLM-Router (Format-Übersetzung!)
- *   - openai       : OpenAI über den LiteLLM-Router (Format-Übersetzung!)
- *   - route        : eigener, ANTHROPIC-/v1/messages-kompatibler Endpunkt
+ *   - claude-oauth     : Abo-Token (claude setup-token), bevorzugt
+ *   - claude-apikey    : klassischer Anthropic-API-Key
+ *   - ollama           : lokale Modelle über den mitgelieferten LiteLLM-Router
+ *   - custom-anthropic : eigener Anbieter, dessen Endpunkt die Format-PROBE
+ *                        (lib/providerProbe) als Anthropic-/v1/messages-
+ *                        kompatibel erkannt hat → direkte Modell-Route
+ *   - custom-openai    : eigener Anbieter mit OpenAI-Format (/chat/completions)
+ *                        → läuft über den LiteLLM-Router (Format-Übersetzung)
  *
- * WARUM openrouter/openai NICHT als `route`: OpenRouter und OpenAI bieten NUR
- * einen OpenAI-kompatiblen Endpunkt (`/chat/completions`), KEIN Anthropic
- * `/v1/messages`. Der Credential-Proxy hängt aber den Request-Pfad an die
- * `upstreamUrl` einer Route an und schickt Anthropic-Format (anthropicProxy.ts)
- * — eine rohe OpenRouter/OpenAI-URL in MACVIBES_MODEL_ROUTES kann deshalb NICHT
- * funktionieren (Format-Mismatch). Der korrekte Weg ist der mitgelieferte
- * LiteLLM-Router (Anthropic→OpenAI-Übersetzung); er liest den Anbieter-Key aus
- * der Env (`os.environ/OPENROUTER_API_KEY` bzw. `OPENAI_API_KEY`). Deshalb
- * setzen diese Optionen NUR den Key, keine Modell-Route.
+ * WARUM custom-openai NICHT als Modell-Route: der Credential-Proxy hängt den
+ * Request-Pfad an die `upstreamUrl` einer Route an und schickt Anthropic-Format
+ * (anthropicProxy.ts) — eine rohe OpenAI-URL in MACVIBES_MODEL_ROUTES kann
+ * deshalb NICHT funktionieren (Format-Mismatch). Der Weg ist der mitgelieferte
+ * LiteLLM-Router; er liest den Anbieter-Key aus der Env (`os.environ/<envVar>`,
+ * Name abgeleitet aus dem Anzeigenamen, s. lib/providerWiring.envVarName).
+ * Der Nutzer muss den Unterschied NICHT kennen — die Probe entscheidet.
  */
 export type ProviderChoice =
   | { kind: 'claude-oauth'; token: string }
   | { kind: 'claude-apikey'; apiKey: string }
   | { kind: 'ollama' }
-  | { kind: 'openrouter'; apiKey: string }
-  | { kind: 'openai'; apiKey: string }
-  | { kind: 'route'; prefix: string; upstreamUrl: string; apiKey?: string };
+  | {
+      kind: 'custom-anthropic';
+      /** Anzeigename des Anbieters (nur für Kommentare/Meldungen). */
+      name: string;
+      /** Modell-ID = Routen-Prefix (der Proxy matcht das `model` im Body). */
+      modelId: string;
+      /** Anzeigename des Modells fürs Chat-Dropdown (models.json). */
+      label: string;
+      /** Basis-URL des Endpunkts (der Proxy hängt /v1/messages an). */
+      url: string;
+      token?: string;
+    }
+  | {
+      kind: 'custom-openai';
+      name: string;
+      modelId: string;
+      label: string;
+      /** api_base für LiteLLM — exakt die Basis, auf die die Probe ansprang. */
+      apiBase: string;
+      /** Abgeleiteter Env-Name (providerWiring.envVarName), z. B. ACME_API_KEY. */
+      envVar: string;
+      token: string;
+    };
 
 /** Sandbox-Backend, exakt die Werte, die config.ts akzeptiert. */
 export type SandboxMode = 'auto' | 'process' | 'microsandbox';
@@ -76,22 +96,22 @@ export function providerEnv(choice: ProviderChoice): Record<string, string> {
       return { ANTHROPIC_API_KEY: choice.apiKey };
     case 'ollama':
       return {};
-    case 'openrouter':
-      // KEINE Modell-Route (Format-Mismatch, s. ProviderChoice) — nur der Key,
-      // den der LiteLLM-Router via `os.environ/OPENROUTER_API_KEY` liest.
-      return { OPENROUTER_API_KEY: choice.apiKey };
-    case 'openai':
-      return { OPENAI_API_KEY: choice.apiKey };
-    case 'route': {
+    case 'custom-anthropic': {
+      // Direkte Route: der Proxy matcht das `model` im Body gegen den prefix —
+      // die Modell-ID selbst ist der präziseste Prefix (matcht genau sie).
       // exactOptionalPropertyTypes: apiKey nur aufnehmen, wenn wirklich gesetzt —
       // sonst serialisierte JSON.stringify `"apiKey":undefined` weg, aber der Typ
       // ModelRoute verböte das undefined-Feld.
       const route: ModelRoute =
-        choice.apiKey === undefined
-          ? { prefix: choice.prefix, upstreamUrl: choice.upstreamUrl }
-          : { prefix: choice.prefix, upstreamUrl: choice.upstreamUrl, apiKey: choice.apiKey };
+        choice.token === undefined || choice.token === ''
+          ? { prefix: choice.modelId, upstreamUrl: choice.url }
+          : { prefix: choice.modelId, upstreamUrl: choice.url, apiKey: choice.token };
       return { MACVIBES_MODEL_ROUTES: JSON.stringify([route]) };
     }
+    case 'custom-openai':
+      // KEINE Modell-Route (Format-Mismatch, s. ProviderChoice) — nur der Key,
+      // den der LiteLLM-Router via `os.environ/<envVar>` liest.
+      return { [choice.envVar]: choice.token };
   }
 }
 
@@ -215,42 +235,41 @@ export function buildEnvContent(answers: SetupAnswers): string {
     lines.push('# Claude-API-Key (Anthropic Console) — verlässt den Host nie.');
     lines.push(`ANTHROPIC_API_KEY=${envQuote(apiKey, 'ANTHROPIC_API_KEY')}`);
   }
-  const openrouterKey = env['OPENROUTER_API_KEY'];
-  if (openrouterKey !== undefined) {
+  // Eigene OpenAI-kompatible Anbieter: je ein abgeleiteter Key (envVar) — der
+  // LiteLLM-Router liest ihn per os.environ/<envVar>. Die Schleife läuft über
+  // die providers (nicht die Env-Map), damit der Kommentar den Anbieter und
+  // sein Modell benennen kann.
+  for (const provider of answers.providers) {
+    if (provider.kind !== 'custom-openai') continue;
     lines.push('');
-    lines.push('# OpenRouter — läuft über den mitgelieferten LiteLLM-Router, der');
-    lines.push('# Anthropic-/v1/messages auf OpenRouters OpenAI-Format übersetzt (eine rohe');
-    lines.push('# OpenRouter-URL in MACVIBES_MODEL_ROUTES funktioniert NICHT). Modelle');
-    lines.push('# einhängen + im Chat wählbar machen: litellm_config.yaml + agentModel.ts.');
-    lines.push(`OPENROUTER_API_KEY=${envQuote(openrouterKey, 'OPENROUTER_API_KEY')}`);
-  }
-  const openaiKey = env['OPENAI_API_KEY'];
-  if (openaiKey !== undefined) {
-    lines.push('');
-    lines.push('# OpenAI — ebenfalls über den LiteLLM-Router (Anthropic→OpenAI-Übersetzung).');
-    lines.push('# Modelle einhängen + wählbar machen: litellm_config.yaml + agentModel.ts.');
-    lines.push(`OPENAI_API_KEY=${envQuote(openaiKey, 'OPENAI_API_KEY')}`);
+    lines.push(`# ${provider.name} (OpenAI-kompatibel, von der Setup-Probe erkannt) — läuft über`);
+    lines.push(
+      `# den LiteLLM-Router (Anthropic→OpenAI-Übersetzung). Modell "${provider.modelId}":`,
+    );
+    lines.push('# eingetragen in ~/macvibes/litellm.yaml + ~/macvibes/models.json.');
+    lines.push(`${provider.envVar}=${envQuote(env[provider.envVar] ?? '', provider.envVar)}`);
   }
   const routes = env['MACVIBES_MODEL_ROUTES'];
   if (routes !== undefined) {
     lines.push('');
-    lines.push('# Zusätzliche Modell-Routen (eigener Endpunkt), matchen VOR den Defaults.');
-    lines.push('# Der Endpunkt MUSS das Anthropic-/v1/messages-Format sprechen (NICHT die');
-    lines.push('# rohe OpenAI-URL von OpenRouter/OpenAI — dafür den LiteLLM-Router nutzen).');
+    lines.push('# Direkt angebundene Anthropic-kompatible Anbieter (von der Setup-Probe');
+    lines.push('# erkannt) — matchen VOR den Defaults. Der Endpunkt spricht Anthropics');
+    lines.push('# /v1/messages; OpenAI-Format liefe stattdessen über den LiteLLM-Router.');
     lines.push('# Format: [{prefix, upstreamUrl, apiKey?}].');
     lines.push(`MACVIBES_MODEL_ROUTES=${envQuote(routes, 'MACVIBES_MODEL_ROUTES')}`);
   }
 
-  // Alle Nicht-Claude-Anbieter laufen über denselben LiteLLM-Router — er startet
-  // automatisch (MACVIBES_LOCAL_ROUTER_CMD-Default), braucht keine weitere Env.
+  // Ollama und OpenAI-kompatible Anbieter laufen über denselben LiteLLM-Router —
+  // er startet automatisch (MACVIBES_LOCAL_ROUTER_CMD-Default), keine weitere Env.
   const nutztRouter = answers.providers.some(
-    (p) => p.kind === 'ollama' || p.kind === 'openrouter' || p.kind === 'openai',
+    (p) => p.kind === 'ollama' || p.kind === 'custom-openai',
   );
   if (nutztRouter) {
     lines.push('');
-    lines.push('# Lokaler LiteLLM-Router (Ollama/OpenRouter/OpenAI) — startet automatisch');
-    lines.push('# (MACVIBES_LOCAL_ROUTER_CMD-Default), keine Env nötig.');
-    lines.push('# Modell-Aliase: apps/server/local-router/litellm_config.yaml');
+    lines.push('# Lokaler LiteLLM-Router (Ollama / OpenAI-kompatible Anbieter) — startet');
+    lines.push('# automatisch (MACVIBES_LOCAL_ROUTER_CMD-Default), keine Env nötig.');
+    lines.push('# Modell-Aliase: ~/macvibes/litellm.yaml (sonst die mitgelieferte');
+    lines.push('# apps/server/local-router/litellm_config.yaml).');
   }
 
   const hatClaude = oauth !== undefined || apiKey !== undefined;

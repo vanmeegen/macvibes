@@ -13,12 +13,22 @@
  *   Doctor → Anbieter-Wahl → Admin (Pflicht) → .env schreiben (chmod 600) →
  *   ~/macvibes-Baum → Baselines (msb) / Prozess-Fallback → Abschluss-Hinweis.
  */
-import { chmodSync, existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { usernameSchema } from '@macvibes/shared';
 import { druckeDoctorReport, erhebeDoctorInput } from './lib/doctorState';
+import { erkenneAnbieterFormat, type FormatDiagnose } from './lib/providerProbe';
+import { envVarName, litellmYamlMitEintrag, modelsJsonMitEintrag } from './lib/providerWiring';
 import {
   buildEnvContent,
   doctor,
@@ -28,6 +38,9 @@ import {
   type ProviderChoice,
   type SetupAnswers,
 } from './lib/setup';
+
+/** Eigene Anbieter (aus der Format-Probe) — brauchen models.json/litellm.yaml. */
+type EigenerAnbieter = Extract<ProviderChoice, { kind: 'custom-anthropic' | 'custom-openai' }>;
 
 /** Repo-Root modul-relativ (scripts/ liegt direkt darunter) — cwd-unabhängig. */
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -118,11 +131,174 @@ function leseSecret(frage: string): string {
   }
 }
 
+/** Basis-URL lesen — nur http(s)-URLs, sonst kann die Probe nichts anfangen. */
+function leseBasisUrl(): string {
+  for (;;) {
+    const url = pflichtEingabe('    Basis-URL (z. B. https://openrouter.ai/api/v1): ');
+    if (!/^https?:\/\//.test(url)) {
+      console.log('    ⚠ Bitte eine vollständige http(s)://-URL angeben.');
+      continue;
+    }
+    // Unverschlüsseltes http zu einem ENTFERNTEN Host: der Token ginge im
+    // Klartext übers Netz. Lokale Shims (localhost) sind der legitime
+    // Normalfall und bleiben unkommentiert.
+    if (
+      url.startsWith('http://') &&
+      !/^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/.test(url)
+    ) {
+      console.log(
+        '    ⚠ Unverschlüsseltes http:// zu einem entfernten Host — der Token ginge im Klartext übers Netz.',
+      );
+      if (!confirm('    Trotzdem verwenden?')) continue;
+    }
+    return url;
+  }
+}
+
 /**
- * Anbieter-Wahl. Claude ist Default; zusätzliche Systeme (LiteLLM) sind optional
- * und kombinierbar. „Nur lokal, kein Claude" ist erlaubt (Warnung, kein Abbruch).
+ * Modell-ID lesen. Das `claude`-Präfix ist reserviert: der Credential-Proxy
+ * routet solche ids IMMER an die Anthropic-API — ein eigener Anbieter käme nie
+ * an den Request (agentModel.ts lehnt solche Einträge beim Laden ohnehin ab).
  */
-function anbieterWaehlen(): ProviderChoice[] {
+function leseModellId(): string {
+  for (;;) {
+    const modelId = pflichtEingabe('    Modell-ID beim Anbieter (z. B. qwen/qwen3-coder): ');
+    if (modelId.startsWith('claude')) {
+      console.log(
+        '    ⚠ ids mit "claude"-Präfix sind reserviert (der Proxy routet sie an die Anthropic-API) — bitte anders benennen.',
+      );
+      continue;
+    }
+    return modelId;
+  }
+}
+
+/**
+ * EIN geführter Weg für eigene Anbieter: Anzeigename → URL → Token → Modell-ID,
+ * dann entscheidet die Format-PROBE (lib/providerProbe), ob der Endpunkt
+ * Anthropic- oder OpenAI-Format spricht — der Nutzer muss das nicht wissen.
+ * Bei Misserfolg: erneut versuchen oder überspringen — NIE halb konfigurieren
+ * (null = es wird nichts eingetragen, keine Datei angefasst).
+ */
+async function eigenenAnbieterErfassen(
+  bisherige: ProviderChoice[],
+): Promise<ProviderChoice | null> {
+  console.log(
+    '    Bekannte Basis-URLs als Anhalt: OpenRouter https://openrouter.ai/api/v1 ·\n' +
+      '    OpenAI https://api.openai.com/v1 · eigener Shim z. B. http://localhost:8080\n' +
+      '    Ob der Anbieter Anthropic- oder OpenAI-Format spricht, erkennt die Probe selbst.',
+  );
+  for (;;) {
+    const name = pflichtEingabe('    Anzeigename des Anbieters (z. B. OpenRouter): ');
+    const url = leseBasisUrl();
+    const token = leseSecret('    Token/API-Key (leer, falls keiner nötig): ');
+    const modelId = leseModellId();
+
+    console.log('    → Prüfe den Endpunkt (je eine Mini-Anfrage pro Format, max_tokens: 1) …');
+    let diagnose: FormatDiagnose;
+    try {
+      diagnose = await erkenneAnbieterFormat(url, token, modelId);
+    } catch (error) {
+      // Darf praktisch nicht passieren (die Probe fängt Netzfehler selbst) —
+      // aber nie verschlucken und nie halb konfigurieren.
+      console.log(`    ✗ Probe fehlgeschlagen: ${error}`);
+      if (nochmal()) continue;
+      return null;
+    }
+    console.log(
+      `    ${diagnose.art === 'anthropic' || diagnose.art === 'openai' ? '✓' : '✗'} ${diagnose.meldung}`,
+    );
+
+    const label = `${modelId} (${name})`;
+    if (diagnose.art === 'anthropic') {
+      return token === ''
+        ? { kind: 'custom-anthropic', name, modelId, label, url }
+        : { kind: 'custom-anthropic', name, modelId, label, url, token };
+    }
+    if (diagnose.art === 'openai') {
+      return baueOpenaiAnbieter(bisherige, {
+        name,
+        modelId,
+        label,
+        apiBase: diagnose.apiBase,
+        token,
+      });
+    }
+    if (diagnose.art === 'modell-strittig') {
+      // Format steht fest, nur das Modell ist strittig — Übernahme erlaubt,
+      // aber bewusst (vielleicht mag der Anbieter nur den Minimal-Body nicht).
+      const wahl = (
+        prompt('    [u]ebernehmen trotzdem / [e]rneut eingeben / [s = überspringen]? ') ?? ''
+      )
+        .trim()
+        .toLowerCase();
+      if (wahl === 'u' || wahl === 'uebernehmen' || wahl === 'übernehmen') {
+        if (diagnose.format === 'anthropic') {
+          return token === ''
+            ? { kind: 'custom-anthropic', name, modelId, label, url }
+            : { kind: 'custom-anthropic', name, modelId, label, url, token };
+        }
+        return baueOpenaiAnbieter(bisherige, {
+          name,
+          modelId,
+          label,
+          apiBase: diagnose.apiBase ?? url,
+          token,
+        });
+      }
+      if (wahl === 'e' || wahl === 'erneut') continue;
+      console.log('    → Übersprungen — es wurde nichts konfiguriert.');
+      return null;
+    }
+    // token-abgelehnt / nicht-erreichbar / kein-format → nie halb konfigurieren.
+    if (nochmal()) continue;
+    console.log('    → Übersprungen — es wurde nichts konfiguriert.');
+    return null;
+  }
+}
+
+/** „[e]rneut versuchen / [s] überspringen?" — true = noch eine Runde. */
+function nochmal(): boolean {
+  const wahl = (prompt('    [e]rneut versuchen / [s = überspringen]? ') ?? '').trim().toLowerCase();
+  return wahl === 'e' || wahl === 'erneut';
+}
+
+/**
+ * OpenAI-kompatiblen Anbieter fertig bauen: Env-Namen aus dem Anzeigenamen
+ * ableiten (Kollisionen mit schon gewählten Anbietern vermeiden). Ohne Token
+ * bekommt die Env einen Platzhalter — LiteLLM verlangt einen api_key-Wert,
+ * der Endpunkt ignoriert ihn dann einfach.
+ */
+function baueOpenaiAnbieter(
+  bisherige: ProviderChoice[],
+  daten: { name: string; modelId: string; label: string; apiBase: string; token: string },
+): ProviderChoice {
+  const vergeben = new Set<string>();
+  for (const p of bisherige) if (p.kind === 'custom-openai') vergeben.add(p.envVar);
+  const envVar = envVarName(daten.name, vergeben);
+  const token = daten.token === '' ? 'unbenutzt' : daten.token;
+  if (daten.token === '') {
+    console.log(`    (kein Token angegeben — ${envVar} bekommt den Platzhalter 'unbenutzt'.)`);
+  }
+  console.log(`    ✓ ${daten.name}: Key landet als ${envVar} in der .env.`);
+  return {
+    kind: 'custom-openai',
+    name: daten.name,
+    modelId: daten.modelId,
+    label: daten.label,
+    apiBase: daten.apiBase,
+    envVar,
+    token,
+  };
+}
+
+/**
+ * Anbieter-Wahl. Claude ist Default; zusätzliche Anbieter sind optional und
+ * kombinierbar — statt der früheren Format-Kunde (openrouter/openai/custom)
+ * gibt es EINEN Weg „eigenen Anbieter hinzufügen", die Format-Probe entscheidet.
+ * „Nur lokal, kein Claude" ist erlaubt (Warnung, kein Abbruch).
+ */
+async function anbieterWaehlen(): Promise<ProviderChoice[]> {
   const providers: ProviderChoice[] = [];
 
   if (confirm('Claude (Anthropic) als Modell-Anbieter nutzen? (empfohlen)')) {
@@ -140,78 +316,22 @@ function anbieterWaehlen(): ProviderChoice[] {
 
   if (
     confirm(
-      'Weitere KI-Systeme über LiteLLM hinzufügen? (Ollama lokal / OpenAI / OpenRouter / eigener Endpunkt)',
+      'Weitere KI-Anbieter hinzufügen? (Ollama lokal / eigener Anbieter per URL + Token, z. B. OpenRouter, OpenAI)',
     )
   ) {
     for (;;) {
-      const wahl = (
-        prompt('  Backend? [ollama | openai | openrouter | custom] (leer = fertig): ') ?? ''
-      )
+      const wahl = (prompt('  Was hinzufügen? [ollama | anbieter] (leer = fertig): ') ?? '')
         .trim()
         .toLowerCase();
       if (wahl === '') break;
       if (wahl === 'ollama') {
         providers.push({ kind: 'ollama' });
         console.log('  ✓ Ollama (lokal) — der mitgelieferte LiteLLM-Router startet automatisch.');
-      } else if (wahl === 'openrouter' || wahl === 'openai') {
-        // OpenRouter/OpenAI sprechen NUR OpenAI-Format. Sie laufen über den
-        // mitgelieferten LiteLLM-Router (Anthropic→OpenAI-Übersetzung), der den
-        // Key aus der Env liest — NICHT über eine rohe MACVIBES_MODEL_ROUTES-URL
-        // (die schickt Anthropic-/v1/messages und würde am Format-Mismatch
-        // scheitern). Deshalb hier nur nach dem Key fragen.
-        const anbieter = wahl === 'openrouter' ? 'OpenRouter' : 'OpenAI';
-        const keyName = wahl === 'openrouter' ? 'OPENROUTER_API_KEY' : 'OPENAI_API_KEY';
-        const beispiel = wahl === 'openrouter' ? 'openrouter/qwen/qwen3-coder' : 'openai/gpt-4o';
-        const apiKey = leseSecret(`    ${keyName} (${anbieter}-Dashboard): `);
-        if (apiKey === '') {
-          console.log(`    ⚠ Ohne ${keyName} kein ${anbieter}-Zugang — Eintrag übersprungen.`);
-          continue;
-        }
-        providers.push(
-          wahl === 'openrouter' ? { kind: 'openrouter', apiKey } : { kind: 'openai', apiKey },
-        );
-        console.log(`    ✓ ${anbieter} über den LiteLLM-Router (${keyName} gesetzt).`);
-        // Modell wählbar machen: der Router führt Beispiel-Aliase, der UI-Katalog
-        // nicht (sonst 401 für alle ohne Key). Deshalb den Weg konkret ausgeben.
-        console.log(
-          `      → Modell auswählbar machen: gewünschtes Modell in\n` +
-            `        apps/server/local-router/litellm_config.yaml als model_name führen\n` +
-            `        (Beispiel liegt bei: ${beispiel}) und denselben Namen in\n` +
-            `        apps/server/src/agent/agentModel.ts in den Katalog aufnehmen.`,
-        );
-      } else if (wahl === 'custom') {
-        // Eigener Endpunkt: bleibt eine echte MACVIBES_MODEL_ROUTES-Route — der
-        // MUSS aber Anthropic-/v1/messages sprechen (der Proxy hängt den Pfad an
-        // die upstreamUrl an und schickt Anthropic-Format).
-        console.log(
-          '    Hinweis: Der Endpunkt MUSS Anthropics /v1/messages-Format sprechen\n' +
-            '    (rohe OpenAI-URLs gehören zu openrouter/openai, nicht hierher).',
-        );
-        const prefix = (
-          prompt('    Modell-Prefix (matcht das `model` im Body, z. B. my-): ') ?? ''
-        ).trim();
-        const upstreamUrl = (
-          prompt('    Base-URL des Anthropic-/v1/messages-kompatiblen Endpunkts: ') ?? ''
-        ).trim();
-        if (envWertIstUnsicher(prefix) || envWertIstUnsicher(upstreamUrl)) {
-          console.log(
-            "    ⚠ Prefix und Base-URL dürfen kein ' \\ $ oder Steuerzeichen enthalten — Eintrag übersprungen.",
-          );
-          continue;
-        }
-        const apiKey = leseSecret('    API-Key (leer, falls keiner nötig): ');
-        if (prefix === '' || upstreamUrl === '') {
-          console.log('    ⚠ Prefix und Base-URL sind nötig — Eintrag übersprungen.');
-        } else {
-          providers.push(
-            apiKey === ''
-              ? { kind: 'route', prefix, upstreamUrl }
-              : { kind: 'route', prefix, upstreamUrl, apiKey },
-          );
-          console.log(`    ✓ Route ${prefix} → ${upstreamUrl}`);
-        }
+      } else if (wahl === 'anbieter') {
+        const neu = await eigenenAnbieterErfassen(providers);
+        if (neu !== null) providers.push(neu);
       } else {
-        console.log('  Unbekannte Wahl — bitte ollama, openai, openrouter oder custom.');
+        console.log('  Unbekannte Wahl — bitte ollama oder anbieter.');
       }
     }
   }
@@ -241,7 +361,7 @@ async function main(): Promise<void> {
   }
 
   // 2) Anbieter-Wahl.
-  const providers = anbieterWaehlen();
+  const providers = await anbieterWaehlen();
   if (providers.length === 0) {
     console.log(
       '\n⚠ Kein Anbieter gewählt — Fallback auf lokale Modelle (Ollama). Ohne laufendes Ollama/Modell antwortet der Agent nicht.',
@@ -272,6 +392,7 @@ async function main(): Promise<void> {
   const istDevCheckout = existsSync(join(REPO_ROOT, '.git'));
   const envPfad = envZielPfad({ istDevCheckout, repoRoot: REPO_ROOT, macvibesHome });
 
+  let envGeschrieben = false;
   if (existsSync(envPfad)) {
     // Nicht-destruktiv: bestehendes .env NIE stillschweigend überschreiben.
     const wahl = (
@@ -285,6 +406,7 @@ async function main(): Promise<void> {
     }
     if (wahl === 'u' || wahl === 'ueberschreiben' || wahl === 'überschreiben') {
       schreibeEnv(envPfad, answers);
+      envGeschrieben = true;
     } else {
       // Nicht-destruktiv per Default: alles außer einem AUSDRÜCKLICHEN
       // „ueberschreiben" (auch ein Tippfehler oder leere Eingabe) behält die
@@ -293,11 +415,28 @@ async function main(): Promise<void> {
     }
   } else {
     schreibeEnv(envPfad, answers);
+    envGeschrieben = true;
   }
 
   // 5) ~/macvibes-Verzeichnisbaum anlegen (Home + data-Ordner für die DB).
   mkdirSync(join(macvibesHome, 'data'), { recursive: true });
   console.log(`→ Verzeichnisbaum bereit: ${macvibesHome} (inkl. data/)`);
+
+  // 5b) Eigene Anbieter verdrahten: models.json (Chat-Dropdown) und — für
+  // OpenAI-kompatible — litellm.yaml. NUR wenn auch die .env geschrieben wurde:
+  // sonst stünden Modelle im Katalog, deren Route/Key fehlt (halb konfiguriert).
+  const eigene = providers.filter(
+    (p): p is EigenerAnbieter => p.kind === 'custom-anthropic' || p.kind === 'custom-openai',
+  );
+  if (eigene.length > 0) {
+    if (envGeschrieben) {
+      verdrahteEigeneAnbieter(macvibesHome, eigene);
+    } else {
+      console.log(
+        '→ Eigene Anbieter NICHT verdrahtet (die bestehende .env wurde behalten) — models.json/litellm.yaml unverändert.',
+      );
+    }
+  }
 
   // 6) Baselines bauen (braucht laufendes msb) — sonst klar benannter Fallback.
   if (msbAvailable) {
@@ -330,6 +469,81 @@ async function main(): Promise<void> {
   console.log(
     `  Danach registrieren als „${adminUsername}" — dieser Nutzer wird automatisch Admin.`,
   );
+}
+
+/**
+ * Eigene Anbieter in die Nutzer-Dateien unter `<macvibesHome>` eintragen:
+ *   - `models.json`  — Modell fürs Chat-Dropdown (alle eigenen Anbieter);
+ *     `slow: true`, weil Latenz fremder Endpunkte unbekannt ist — lieber
+ *     großzügige Timeouts als abgebrochene Turns (agentTimeoutsFor behandelt
+ *     Unbekanntes ohnehin so).
+ *   - `litellm.yaml` — Router-Alias (nur OpenAI-kompatible). Existiert die
+ *     Datei noch nicht, startet sie als Kopie der MITGELIEFERTEN
+ *     litellm_config.yaml: so behält der Nutzer die Ollama-Basis-Einträge und
+ *     den `'*'`-Catch-all (muss letzter Eintrag bleiben — providerWiring fügt
+ *     davor ein). Eine vorhandene Datei wird ERGÄNZT, nie überschrieben.
+ * Beides 0600 (defensiv; Secrets selbst stehen nur in der .env).
+ */
+function verdrahteEigeneAnbieter(macvibesHome: string, eigene: EigenerAnbieter[]): void {
+  const modelsPfad = join(macvibesHome, 'models.json');
+  let modelsRaw: string | null = existsSync(modelsPfad) ? readFileSync(modelsPfad, 'utf8') : null;
+  let modelsGeaendert = false;
+  for (const anbieter of eigene) {
+    const ergebnis = modelsJsonMitEintrag(modelsRaw, {
+      id: anbieter.modelId,
+      label: anbieter.label,
+      slow: true,
+    });
+    if (ergebnis.hinweis !== undefined) console.log(`  ⚠ ${ergebnis.hinweis}`);
+    if (ergebnis.geaendert) {
+      modelsRaw = ergebnis.inhalt;
+      modelsGeaendert = true;
+    }
+  }
+  if (modelsGeaendert && modelsRaw !== null) {
+    writeFileSync(modelsPfad, modelsRaw, { mode: 0o600 });
+    // mode greift nur bei Neuanlage — bestehende Datei explizit nachziehen.
+    chmodSync(modelsPfad, 0o600);
+    console.log(`→ ${modelsPfad} ergänzt — die Modelle erscheinen im Chat-Dropdown.`);
+  }
+
+  const openaiAnbieter = eigene.filter(
+    (p): p is Extract<EigenerAnbieter, { kind: 'custom-openai' }> => p.kind === 'custom-openai',
+  );
+  if (openaiAnbieter.length === 0) return;
+  const litellmPfad = join(macvibesHome, 'litellm.yaml');
+  const hatteDatei = existsSync(litellmPfad);
+  let yamlRaw = hatteDatei
+    ? readFileSync(litellmPfad, 'utf8')
+    : readFileSync(
+        join(REPO_ROOT, 'apps', 'server', 'local-router', 'litellm_config.yaml'),
+        'utf8',
+      );
+  // Eine frisch aus der Basis erzeugte Datei muss auch dann geschrieben werden,
+  // wenn ein Eintrag als Duplikat übersprungen wird.
+  let yamlGeaendert = !hatteDatei;
+  for (const anbieter of openaiAnbieter) {
+    const ergebnis = litellmYamlMitEintrag(yamlRaw, {
+      modelName: anbieter.modelId,
+      litellmModel: `openai/${anbieter.modelId}`,
+      apiBase: anbieter.apiBase,
+      apiKeyEnv: anbieter.envVar,
+      kommentar: anbieter.name,
+    });
+    if (ergebnis.hinweis !== undefined) console.log(`  ⚠ ${ergebnis.hinweis}`);
+    if (ergebnis.geaendert) {
+      yamlRaw = ergebnis.inhalt;
+      yamlGeaendert = true;
+    }
+  }
+  if (yamlGeaendert) {
+    writeFileSync(litellmPfad, yamlRaw, { mode: 0o600 });
+    // mode greift nur bei Neuanlage — bestehende Datei explizit nachziehen.
+    chmodSync(litellmPfad, 0o600);
+    console.log(
+      `→ ${litellmPfad} geschrieben — der Router nutzt ab jetzt DIESE Datei (Basis-Einträge + Catch-all bleiben erhalten).`,
+    );
+  }
 }
 
 /** .env schreiben und (falls möglich) auf 0600 sperren — nie den Inhalt loggen. */

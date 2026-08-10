@@ -7,7 +7,7 @@ import {
   projectNameSchema,
   resolveSlugCollision,
 } from '@macvibes/shared';
-import { AGENT_MODELS, DEFAULT_AGENT_MODEL, isKnownAgentModel } from '../agent/agentModel';
+import { DEFAULT_AGENT_MODEL, allAgentModels, isKnownAgentModel } from '../agent/agentModel';
 import type { Db } from '../db/client';
 import { projects, users, type ProjectRow, type UserRow } from '../db/schema';
 import { DomainError } from '../core/errors';
@@ -93,7 +93,11 @@ export async function setProjectAgentModel(
   const project = await getProjectOwned(db, currentUser, projectId);
   if (!isKnownAgentModel(model)) {
     throw new DomainError(
-      `Unbekanntes Modell "${model}" — wählbar sind: ${AGENT_MODELS.map((m) => m.id).join(', ')}`,
+      // allAgentModels statt AGENT_MODELS: auch Nutzer-Modelle (models.json)
+      // sind wählbar und gehören in die Fehlermeldung.
+      `Unbekanntes Modell "${model}" — wählbar sind: ${allAgentModels()
+        .map((m) => m.id)
+        .join(', ')}`,
     );
   }
   await db.update(projects).set({ agentModel: model }).where(eq(projects.id, projectId));

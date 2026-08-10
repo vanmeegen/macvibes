@@ -42,6 +42,7 @@ const RT_KEYS = [
   'CLAUDE_CODE_OAUTH_TOKEN',
   'ANTHROPIC_API_KEY',
   'MACVIBES_MODEL_ROUTES',
+  'ACME_API_KEY',
   'SENTINEL',
 ] as const;
 
@@ -89,57 +90,74 @@ describe('providerEnv — Anbieter-Wahl auf Env-Vars abbilden', () => {
     expect(providerEnv({ kind: 'ollama' })).toEqual({});
   });
 
-  test('route erzeugt einen MACVIBES_MODEL_ROUTES-Eintrag mit apiKey', () => {
+  test('custom-anthropic erzeugt eine MACVIBES_MODEL_ROUTES-Route (prefix = Modell-ID)', () => {
+    // Anthropic-kompatibel erkannt → direkt anbinden, ohne Übersetzer: der
+    // Credential-Proxy matcht das `model` im Body gegen den prefix.
     const env = providerEnv({
-      kind: 'route',
-      prefix: 'gpt-',
-      upstreamUrl: 'https://api.openai.com',
-      apiKey: 'sk-openai',
+      kind: 'custom-anthropic',
+      name: 'Mein Shim',
+      modelId: 'glm-4.7',
+      label: 'GLM 4.7 (Mein Shim)',
+      url: 'https://shim.example.com',
+      token: 'sk-shim',
     });
     expect(JSON.parse(env['MACVIBES_MODEL_ROUTES'] ?? '[]')).toEqual([
-      { prefix: 'gpt-', upstreamUrl: 'https://api.openai.com', apiKey: 'sk-openai' },
+      { prefix: 'glm-4.7', upstreamUrl: 'https://shim.example.com', apiKey: 'sk-shim' },
     ]);
   });
 
-  test('route ohne apiKey lässt das Feld weg (nicht undefined serialisieren)', () => {
-    const env = providerEnv({ kind: 'route', prefix: 'or/', upstreamUrl: 'https://x' });
+  test('custom-anthropic ohne Token lässt apiKey weg (nicht undefined serialisieren)', () => {
+    const env = providerEnv({
+      kind: 'custom-anthropic',
+      name: 'Lokal',
+      modelId: 'x-1',
+      label: 'X 1',
+      url: 'http://localhost:9999',
+    });
     expect(JSON.parse(env['MACVIBES_MODEL_ROUTES'] ?? '[]')).toEqual([
-      { prefix: 'or/', upstreamUrl: 'https://x' },
+      { prefix: 'x-1', upstreamUrl: 'http://localhost:9999' },
     ]);
   });
 
-  test('openrouter erzeugt KEINE model route, sondern NUR OPENROUTER_API_KEY', () => {
-    // Kern der Setup-Korrektur: OpenRouter spricht nur OpenAI-Format, eine rohe
-    // Route in MACVIBES_MODEL_ROUTES (Anthropic-/v1/messages) kann nicht
-    // funktionieren. Der Weg ist der LiteLLM-Router + der Key in der Env.
-    const env = providerEnv({ kind: 'openrouter', apiKey: 'sk-or-123' });
+  test('custom-openai erzeugt KEINE Route, nur den abgeleiteten Env-Key', () => {
+    // OpenAI-kompatibel erkannt → LiteLLM-Router übersetzt; er liest den Key
+    // per os.environ/<VAR>. Eine rohe Route (Anthropic-Format) würde am
+    // Format-Mismatch scheitern.
+    const env = providerEnv({
+      kind: 'custom-openai',
+      name: 'OpenRouter',
+      modelId: 'qwen/qwen3-coder',
+      label: 'Qwen3 Coder (OpenRouter)',
+      apiBase: 'https://openrouter.ai/api/v1',
+      envVar: 'OPENROUTER_API_KEY',
+      token: 'sk-or-123',
+    });
     expect(env).toEqual({ OPENROUTER_API_KEY: 'sk-or-123' });
-    expect(env['MACVIBES_MODEL_ROUTES']).toBeUndefined();
-  });
-
-  test('openai erzeugt KEINE model route, sondern NUR OPENAI_API_KEY', () => {
-    const env = providerEnv({ kind: 'openai', apiKey: 'sk-oai-123' });
-    expect(env).toEqual({ OPENAI_API_KEY: 'sk-oai-123' });
     expect(env['MACVIBES_MODEL_ROUTES']).toBeUndefined();
   });
 });
 
+/** Kurzform für die Merge-Tests: ein Anthropic-kompatibler Anbieter. */
+function anthropicAnbieter(modelId: string, url: string, token: string): ProviderChoice {
+  return { kind: 'custom-anthropic', name: modelId, modelId, label: modelId, url, token };
+}
+
 describe('mergeProviderEnv — kombinierbare Anbieter', () => {
-  test('Claude + OpenRouter kombiniert: beide Env-Keys stehen nebeneinander', () => {
+  test('Claude + eigener Anthropic-Anbieter: beide Env-Keys stehen nebeneinander', () => {
     const merged = mergeProviderEnv([
       { kind: 'claude-oauth', token: 'tok' },
-      { kind: 'route', prefix: 'or/', upstreamUrl: 'https://openrouter.ai/api', apiKey: 'sk-or' },
+      anthropicAnbieter('glm-4.7', 'https://shim.example.com', 'sk-or'),
     ]);
     expect(merged['CLAUDE_CODE_OAUTH_TOKEN']).toBe('tok');
     expect(JSON.parse(merged['MACVIBES_MODEL_ROUTES'] ?? '[]')).toEqual([
-      { prefix: 'or/', upstreamUrl: 'https://openrouter.ai/api', apiKey: 'sk-or' },
+      { prefix: 'glm-4.7', upstreamUrl: 'https://shim.example.com', apiKey: 'sk-or' },
     ]);
   });
 
-  test('mehrere Routen fließen in EIN JSON-Array zusammen', () => {
+  test('mehrere Anthropic-Anbieter fließen in EIN JSON-Array zusammen', () => {
     const merged = mergeProviderEnv([
-      { kind: 'route', prefix: 'gpt-', upstreamUrl: 'https://api.openai.com', apiKey: 'a' },
-      { kind: 'route', prefix: 'or/', upstreamUrl: 'https://openrouter.ai/api', apiKey: 'b' },
+      anthropicAnbieter('a-1', 'https://a.example.com', 'a'),
+      anthropicAnbieter('b-1', 'https://b.example.com', 'b'),
     ]);
     expect(JSON.parse(merged['MACVIBES_MODEL_ROUTES'] ?? '[]')).toHaveLength(2);
   });
@@ -151,10 +169,18 @@ describe('mergeProviderEnv — kombinierbare Anbieter', () => {
     expect(merged['MACVIBES_MODEL_ROUTES']).toBeUndefined();
   });
 
-  test('Claude + OpenRouter: OPENROUTER_API_KEY steht neben dem Claude-Key, ohne Route', () => {
+  test('Claude + OpenAI-kompatibler Anbieter: dessen Key steht neben dem Claude-Key', () => {
     const merged = mergeProviderEnv([
       { kind: 'claude-oauth', token: 'tok' },
-      { kind: 'openrouter', apiKey: 'sk-or' },
+      {
+        kind: 'custom-openai',
+        name: 'OpenRouter',
+        modelId: 'qwen/qwen3-coder',
+        label: 'Qwen3 Coder (OpenRouter)',
+        apiBase: 'https://openrouter.ai/api/v1',
+        envVar: 'OPENROUTER_API_KEY',
+        token: 'sk-or',
+      },
     ]);
     expect(merged['CLAUDE_CODE_OAUTH_TOKEN']).toBe('tok');
     expect(merged['OPENROUTER_API_KEY']).toBe('sk-or');
@@ -193,40 +219,69 @@ describe('buildEnvContent — .env-Inhalt aus den Antworten', () => {
     expect(content).not.toContain('ANTHROPIC_API_KEY=');
   });
 
-  test('Claude + OpenRouter: beide Keys stehen in der Datei', () => {
+  test('Claude + eigener Anthropic-Anbieter: beide Keys stehen in der Datei', () => {
     const content = buildEnvContent({
       adminUsername: 'marco',
       sandboxMode: 'process',
       providers: [
         { kind: 'claude-apikey', apiKey: 'sk-ant' },
-        { kind: 'route', prefix: 'or/', upstreamUrl: 'https://openrouter.ai/api', apiKey: 'sk-or' },
+        anthropicAnbieter('glm-4.7', 'https://shim.example.com', 'sk-shim'),
       ],
     });
     expect(content).toContain("ANTHROPIC_API_KEY='sk-ant'");
     expect(content).toContain("MACVIBES_MODEL_ROUTES='");
-    expect(content).toContain('openrouter.ai');
+    expect(content).toContain('shim.example.com');
   });
 
-  test('OpenRouter: OPENROUTER_API_KEY landet single-quoted in der Datei, keine Route', () => {
+  test('custom-openai: abgeleiteter Key single-quoted, Kommentar nennt den Anbieter', () => {
     const content = buildEnvContent({
       adminUsername: 'marco',
       sandboxMode: 'process',
       providers: [
         { kind: 'claude-apikey', apiKey: 'sk-ant' },
-        { kind: 'openrouter', apiKey: 'sk-or' },
+        {
+          kind: 'custom-openai',
+          name: 'OpenRouter',
+          modelId: 'qwen/qwen3-coder',
+          label: 'Qwen3 Coder (OpenRouter)',
+          apiBase: 'https://openrouter.ai/api/v1',
+          envVar: 'OPENROUTER_API_KEY',
+          token: 'sk-or',
+        },
       ],
     });
     expect(content).toContain("OPENROUTER_API_KEY='sk-or'");
+    expect(content).toContain('OpenRouter');
     expect(content).not.toContain('MACVIBES_MODEL_ROUTES=');
   });
 
-  test('OpenAI: OPENAI_API_KEY landet single-quoted in der Datei', () => {
+  test('mehrere custom-openai-Anbieter: jeder Key erscheint genau einmal', () => {
     const content = buildEnvContent({
       adminUsername: 'marco',
       sandboxMode: 'process',
-      providers: [{ kind: 'openai', apiKey: 'sk-oai' }],
+      providers: [
+        {
+          kind: 'custom-openai',
+          name: 'Acme',
+          modelId: 'acme-1',
+          label: 'Acme 1 (Acme)',
+          apiBase: 'https://api.acme.example',
+          envVar: 'ACME_API_KEY',
+          token: 'sk-acme',
+        },
+        {
+          kind: 'custom-openai',
+          name: 'Beta AI',
+          modelId: 'beta-1',
+          label: 'Beta 1 (Beta AI)',
+          apiBase: 'https://api.beta.example/v1',
+          envVar: 'BETA_AI_API_KEY',
+          token: 'sk-beta',
+        },
+      ],
     });
-    expect(content).toContain("OPENAI_API_KEY='sk-oai'");
+    expect(content).toContain("ACME_API_KEY='sk-acme'");
+    expect(content).toContain("BETA_AI_API_KEY='sk-beta'");
   });
 
   test('nur lokal, kein Claude: klarer Hinweis statt stiller Leere', () => {
@@ -247,7 +302,7 @@ describe('buildEnvContent — .env-Inhalt aus den Antworten', () => {
 });
 
 describe('buildEnvContent — echter Round-Trip gegen Buns .env-Parser (kein Hand-Modell)', () => {
-  test('#-haltige Token/Route-apiKey/Admin kommen EXAKT zurück, SENTINEL-Folgezeile intakt', () => {
+  test('#-haltige Token/Anbieter-Keys/Admin kommen EXAKT zurück, SENTINEL-Folgezeile intakt', () => {
     // Ohne Quoting schneidet Bun jeden unquoted Wert am ersten `#` ab; plain
     // Single-Quotes machen ihn round-trip-fest, ohne die Folgezeile zu berühren.
     const env = roundTripViaBun(
@@ -256,17 +311,27 @@ describe('buildEnvContent — echter Round-Trip gegen Buns .env-Parser (kein Han
         sandboxMode: 'process',
         providers: [
           { kind: 'claude-oauth', token: 'oauth#tok#en' },
-          { kind: 'route', prefix: 'gpt-', upstreamUrl: 'https://api.openai.com', apiKey: 'k#1' },
+          anthropicAnbieter('glm-4.7', 'https://shim.example.com', 'k#1'),
+          {
+            kind: 'custom-openai',
+            name: 'Acme',
+            modelId: 'acme-1',
+            label: 'Acme 1 (Acme)',
+            apiBase: 'https://api.acme.example',
+            envVar: 'ACME_API_KEY',
+            token: 'sk#acme',
+          },
         ],
       }),
     );
     expect(env['CLAUDE_CODE_OAUTH_TOKEN']).toBe('oauth#tok#en');
     expect(env['MACVIBES_ADMIN_USERNAME']).toBe('admin-01');
+    expect(env['ACME_API_KEY']).toBe('sk#acme');
     expect(env['SENTINEL']).toBe('intact');
     // Das ganze MODEL_ROUTES-JSON (mit inneren `"` und `#` im apiKey) muss
     // literal durchkommen und wieder parsebar sein.
     expect(JSON.parse(env['MACVIBES_MODEL_ROUTES'] ?? 'null')).toEqual([
-      { prefix: 'gpt-', upstreamUrl: 'https://api.openai.com', apiKey: 'k#1' },
+      { prefix: 'glm-4.7', upstreamUrl: 'https://shim.example.com', apiKey: 'k#1' },
     ]);
   });
 
@@ -328,16 +393,34 @@ describe('buildEnvContent — sperrt Werte aus, die Buns Parser korrumpieren wü
     ).toThrow(/ANTHROPIC_API_KEY/);
   });
 
-  test('Route-apiKey mit Backslash wirft (würde die Folgezeile/nächstes Secret fressen)', () => {
+  test('Anbieter-Token mit Backslash wirft (würde die Folgezeile/nächstes Secret fressen)', () => {
+    expect(() =>
+      buildEnvContent({
+        adminUsername: 'admin-01',
+        sandboxMode: 'process',
+        providers: [anthropicAnbieter('glm-4.7', 'https://shim.example.com', 'k\\')],
+      }),
+    ).toThrow(/MACVIBES_MODEL_ROUTES/);
+  });
+
+  test('custom-openai-Token mit $ wirft mit dem Env-Namen als Label (kein Secret-Leak)', () => {
     expect(() =>
       buildEnvContent({
         adminUsername: 'admin-01',
         sandboxMode: 'process',
         providers: [
-          { kind: 'route', prefix: 'gpt-', upstreamUrl: 'https://api.openai.com', apiKey: 'k\\' },
+          {
+            kind: 'custom-openai',
+            name: 'Acme',
+            modelId: 'acme-1',
+            label: 'Acme 1 (Acme)',
+            apiBase: 'https://api.acme.example',
+            envVar: 'ACME_API_KEY',
+            token: 'sk-$HOME',
+          },
         ],
       }),
-    ).toThrow(/MACVIBES_MODEL_ROUTES/);
+    ).toThrow(/ACME_API_KEY/);
   });
 
   test('Wert mit einfachem Anführungszeichen wird klar abgelehnt (statt still korrumpiert)', () => {

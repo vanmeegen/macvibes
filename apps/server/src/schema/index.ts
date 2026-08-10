@@ -14,7 +14,7 @@ import { releaseOnClose } from './releaseOnClose';
 import { revalidateStream } from './revalidateStream';
 import { DomainError } from '../core/errors';
 import { createRateLimiter, type RateLimiter } from '../services/rateLimiter';
-import { AGENT_MODELS, type AgentModelInfo } from '../agent/agentModel';
+import { allAgentModels, type AgentModelInfo } from '../agent/agentModel';
 import {
   copyProject,
   createProject,
@@ -176,7 +176,8 @@ builder.queryType({
       type: [AgentModelRef],
       resolve: (_root, _args, ctx) => {
         requireUser(ctx);
-        return [...AGENT_MODELS];
+        // Voller Katalog: eingebaute + Nutzer-Modelle (<macvibesHome>/models.json).
+        return [...allAgentModels()];
       },
     }),
     templates: t.field({

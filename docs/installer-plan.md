@@ -42,7 +42,7 @@ halb konfiguriert.
    Apple Silicon), freie Ports (4000/4010/4173, Web 5173). Fehlt etwas: klare,
    umsetzbare Meldung (welcher `brew install …`), kein stiller Abbruch.
 2. **Modell-Anbieter wählen** (siehe unten) — Claude als Default, optional
-   weitere Systeme über LiteLLM.
+   Ollama (lokal) oder eigene Anbieter per URL + Token (Format-Probe).
 3. **Admin festlegen** — `MACVIBES_ADMIN_USERNAME` ist **Pflicht**. Ohne
    Bootstrap-Admin kann niemand Nutzer freischalten → das ist die
    „sperr-dich-nicht-selbst-aus"-Absicherung. Der Preflight bricht heute schon
@@ -59,36 +59,47 @@ halb konfiguriert.
 6. **Start** — Server hoch, Browser öffnen; der Admin registriert sich, wird
    automatisch befördert und schaltet weitere Nutzer frei.
 
-## Modell-Anbieter im Setup (neu)
+## Modell-Anbieter im Setup
 
 Das Setup fragt den Anbieter ab statt Claude fest zu verdrahten:
 
 - **Default: Claude (Anthropic).** `CLAUDE_CODE_OAUTH_TOKEN` (via
   `claude setup-token`, für Max/Abo bevorzugt) **oder** `ANTHROPIC_API_KEY`.
-- **Optional ankreuzbar: andere KI-Systeme.** Wird es gewählt, fragt das Setup
-  nach dem Backend:
+- **Optional ankreuzbar: weitere Anbieter.** Wird es gewählt, gibt es zwei
+  Wege:
   - **Ollama (lokal)** — braucht KEINE Env: der mitgelieferte LiteLLM-Router
     wird in `config.ts` automatisch erkannt und gestartet
     (`detectLocalRouterCommand`), lokale Modelle sind damit ohne Zutun aktiv.
     Nur ein abweichender Router-Befehl setzt `MACVIBES_LOCAL_ROUTER_CMD`.
-  - **OpenRouter / OpenAI** — laufen über **denselben** LiteLLM-Router. WARUM
-    nicht als `MACVIBES_MODEL_ROUTES`: OpenRouter/OpenAI bieten NUR einen
-    OpenAI-kompatiblen Endpunkt, der Credential-Proxy hängt aber den
-    Request-Pfad an `upstreamUrl` an und schickt Anthropics `/v1/messages`
-    (`anthropicProxy.ts`) — eine rohe Anbieter-URL scheitert am Format-Mismatch.
-    Das Setup setzt deshalb **nur den Key** (`OPENROUTER_API_KEY` bzw.
-    `OPENAI_API_KEY`); der Router liest ihn per `os.environ` und übersetzt
-    Anthropic↔OpenAI. Der Router führt bereits aktive Beispiel-Aliase
-    (`litellm_config.yaml`) — verifiziert: LiteLLM startet auch OHNE gesetzten
-    Key (der Alias wird erst beim Aufruf gebraucht). Das Setup fasst die YAML
-    NICHT an (robuster: statische, versionierte Config; nur die `.env` wird über
-    den gehärteten Schreibpfad angefasst) und weist auf die zwei manuellen
-    Schritte hin: gewünschtes Modell als `model_name` in `litellm_config.yaml`
-    führen und mit demselben Namen in `agentModel.ts` in den Katalog aufnehmen.
-  - **Eigener Endpunkt (custom)** — bleibt eine echte Route in
-    `MACVIBES_MODEL_ROUTES` (`[{prefix, upstreamUrl, apiKey?}]`). Der Prompt
-    stellt klar: der Endpunkt MUSS Anthropics `/v1/messages`-Format sprechen
-    (z. B. ein selbst betriebener LiteLLM-Shim).
+  - **Eigener Anbieter (EIN Dialog statt Format-Kunde)** — der Nutzer gibt nur
+    **Anzeigename, Basis-URL, Token, Modell-ID** an (OpenRouter, OpenAI, ein
+    eigener Shim — egal). Ob der Endpunkt Anthropic- oder OpenAI-Format
+    spricht, erkennt eine **Format-Probe** (`scripts/lib/providerProbe.ts`):
+    je ein Minimal-Request (`max_tokens: 1`, Timeout 10 s pro Probe) an
+    `<url>/v1/messages` (Anthropic) und `<url>/chat/completions` bzw.
+    `<url>/v1/chat/completions` (OpenAI — Nutzer geben die Basis mal mit, mal
+    ohne `/v1` an). Die Auswertung ist eine reine, voll getestete Funktion:
+    2xx = erkannt; **401/403 = „Token abgelehnt" (KEIN Formatproblem —
+    zugleich starkes Format-Indiz)**; 400 = Format erkannt, Modell strittig;
+    404/405 = Pfad existiert nicht; Netzfehler/Timeout = „nicht erreichbar".
+    Verdrahtung nach Diagnose (`scripts/lib/providerWiring.ts`):
+    - **Anthropic-kompatibel** → direkte Route in `MACVIBES_MODEL_ROUTES`
+      (`prefix` = Modell-ID, ohne Übersetzer) + Eintrag in
+      `~/macvibes/models.json`.
+    - **OpenAI-kompatibel** → Eintrag in `~/macvibes/litellm.yaml`
+      (`model: openai/<id>`, `api_base` = die Basis, auf die die Probe
+      ansprang, `api_key: os.environ/<VAR>`) + Key in der `.env`
+      (`<VAR>` = `<ANZEIGENAME>_API_KEY`, nur `[A-Z0-9_]`, Kollisionen
+      bekommen `_2`-Suffixe) + Eintrag in `models.json`. Die `litellm.yaml`
+      wird aus der **mitgelieferten** `litellm_config.yaml` erzeugt bzw. eine
+      vorhandene ERGÄNZT — die Ollama-Basis-Einträge bleiben, der
+      `'*'`-Catch-all bleibt **letzter** Eintrag (sonst brechen Claude Codes
+      Hilfsmodell-Aufrufe und die lokalen Modelle verschwinden).
+
+    Bei Misserfolg bietet das Setup **erneut versuchen oder überspringen** an —
+    es wird NIE stillschweigend halb konfiguriert. Mehrere Anbieter
+    nacheinander sind möglich; alle Dateien werden nicht-destruktiv ergänzt
+    (`models.json`/`litellm.yaml` nie überschrieben, Duplikate nur gemeldet).
 
     Claude und Zusatz-Anbieter schließen sich nicht aus — der Credential-Proxy
     routet pro Request nach dem `model` im Body. „Nur lokal, kein Claude" ist

@@ -87,27 +87,52 @@ dynamischen VM-Ports müssen dann nicht mehr freigegeben werden.
 
 ## Andere Modelle (OpenRouter & Co.)
 
-Neben Claude (Anthropic) und lokalen Ollama-Modellen lassen sich Anbieter wie
-**OpenRouter** oder **OpenAI** einhängen. Das läuft **immer über den
-mitgelieferten LiteLLM-Router** (`apps/server/local-router/`, Autostart), weil
-der Credential-Proxy Anthropics `/v1/messages`-Format spricht: er hängt den
-Request-Pfad an die Ziel-URL an und schickt Anthropic-JSON. OpenRouter und
-OpenAI bieten aber **nur** einen OpenAI-kompatiblen Endpunkt
-(`/chat/completions`) — eine rohe Anbieter-URL in `MACVIBES_MODEL_ROUTES`
-funktioniert deshalb **nicht** (Format-Mismatch). Der LiteLLM-Router übersetzt
-Anthropic↔OpenAI und liest den Anbieter-Key aus der Env.
+Neben Claude (Anthropic) und lokalen Ollama-Modellen lässt sich **jeder
+weitere Anbieter** einhängen — OpenRouter, OpenAI oder ein eigener Endpunkt.
+Der einfachste Weg ist `bun run setup`: dort gibt man für einen eigenen
+Anbieter nur **Anzeigename, Basis-URL, Token und Modell-ID** an. Welches
+API-Format der Anbieter spricht, muss man **nicht wissen** — das Setup schickt
+je eine Mini-Probe (`max_tokens: 1`, Timeout 10 s) an Anthropics
+`/v1/messages` und OpenAIs `/chat/completions` (mit und ohne `/v1`) und sagt
+im Klartext, was es gefunden hat:
 
-`bun run setup` fragt OpenRouter/OpenAI direkt ab (setzt nur den Key). Manuell
-in drei Schritten (Beispiel OpenRouter):
+- **Anthropic-kompatibel** → direkte Route in `MACVIBES_MODEL_ROUTES` (ohne
+  Übersetzer) + Eintrag in `~/macvibes/models.json` (Chat-Dropdown).
+- **OpenAI-kompatibel** → Eintrag in `~/macvibes/litellm.yaml` (der
+  mitgelieferte LiteLLM-Router übersetzt Anthropic↔OpenAI), Key als
+  `<ANZEIGENAME>_API_KEY` in der `.env`, Eintrag in `models.json`. Die
+  erzeugte `litellm.yaml` enthält weiterhin die Ollama-Basis-Einträge und den
+  `'*'`-Catch-all als **letzten** Eintrag (ohne ihn brechen Claude Codes
+  Hilfsmodell-Aufrufe).
+- **Token abgelehnt (401/403)** → das ist **kein** Formatproblem; das Setup
+  meldet es genau so und bietet einen neuen Versuch an.
+- **Nicht erreichbar / kein Format** → klare Meldung, erneut versuchen oder
+  überspringen — es wird nie halb konfiguriert.
+
+Hintergrund: der Credential-Proxy spricht Anthropics `/v1/messages`-Format
+(er hängt den Request-Pfad an die Ziel-URL an). OpenRouter und OpenAI bieten
+nur einen OpenAI-kompatiblen Endpunkt — eine rohe Anbieter-URL in
+`MACVIBES_MODEL_ROUTES` scheitert dort am Format-Mismatch, deshalb führt der
+Weg für diese Anbieter über den LiteLLM-Router.
+
+Alle Konfigurationsorte sind **nutzereigene Dateien unter `~/macvibes`**
+(bzw. `MACVIBES_HOME`) — Quellcode muss dafür nicht angefasst werden, und bei
+einer Installation (Homebrew) überleben nur diese Dateien ein Upgrade (der
+Installationsbaum in `libexec` wird bei jedem `brew upgrade` ersetzt).
+
+Manuell geht es weiterhin in drei Schritten (Beispiel OpenRouter,
+OpenAI-kompatibel):
 
 ```bash
-# 1) Key in apps/server/.env
+# 1) Key in apps/server/.env (Repo-Betrieb) bzw. ~/macvibes/.env (Installation)
 OPENROUTER_API_KEY='sk-or-...'
 ```
 
 ```yaml
-# 2) Modell im Router führen — apps/server/local-router/litellm_config.yaml
-#    (ein Beispiel-Eintrag ist bereits aktiv; Slug von openrouter.ai anpassen).
+# 2) Modell im Router führen — ~/macvibes/litellm.yaml
+#    Beim ersten Mal die mitgelieferte apps/server/local-router/litellm_config.yaml
+#    dorthin kopieren (existiert ~/macvibes/litellm.yaml, nutzt der Router NUR
+#    noch sie; ein abweichender Pfad geht über MACVIBES_LOCAL_ROUTER_CONFIG).
 #    Der model_name darf NICHT mit "claude" beginnen, sonst routet der Proxy ihn
 #    an die Anthropic-API statt an den lokalen Router.
 - model_name: openrouter/qwen/qwen3-coder
@@ -116,13 +141,14 @@ OPENROUTER_API_KEY='sk-or-...'
     api_key: os.environ/OPENROUTER_API_KEY
 ```
 
-```ts
-// 3) Modell im Chat-Dropdown wählbar machen —
-//    apps/server/src/agent/agentModel.ts, exakt derselbe Name als id:
-{ id: 'openrouter/qwen/qwen3-coder', label: 'Qwen3 Coder (OpenRouter)', slow: true },
+```json
+// 3) Modell im Chat-Dropdown wählbar machen — ~/macvibes/models.json,
+//    ein JSON-Array, exakt derselbe Name als "id" ("slow": true empfohlen,
+//    großzügige Timeouts). Kaputte Einträge werden beim Start nur gewarnt.
+[{ "id": "openrouter/qwen/qwen3-coder", "label": "Qwen3 Coder (OpenRouter)", "slow": true }]
 ```
 
-Danach das Modell im Chat auswählen. Für OpenAI identisch mit
+Danach den Server neu starten und das Modell im Chat auswählen. Für OpenAI identisch mit
 `OPENAI_API_KEY` und dem Präfix `openai/`. Ein **eigener** Endpunkt, der bereits
 Anthropics `/v1/messages` spricht (z. B. ein selbst betriebener LiteLLM-Shim),
 kann alternativ direkt über `MACVIBES_MODEL_ROUTES` eingehängt werden (siehe
