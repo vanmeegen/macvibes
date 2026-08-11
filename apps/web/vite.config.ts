@@ -23,7 +23,16 @@ export default defineConfig({
     proxy: {
       '/graphql': {
         target: `http://localhost:${apiPort}`,
-        changeOrigin: true,
+        // changeOrigin BEWUSST aus: es überschriebe den Host-Header mit
+        // `localhost:<apiPort>`, und die Origin-Allowlist des Servers leitet
+        // die erlaubten Dev-Origins aus genau diesem Host ab (originPolicy).
+        // Damit wäre nur `localhost:5173` erlaubt — ein Zugriff vom Handy/iPad
+        // über die LAN-IP (oder per VPN) käme mit Origin `http://<ip>:5173`
+        // und liefe in ein 403. Ohne changeOrigin reicht Vite den echten Host
+        // durch, die Allowlist passt für localhost UND LAN-IP.
+        // Der Server bindet 0.0.0.0 und routet nicht nach Host — das
+        // Durchreichen ist deshalb unkritisch.
+        changeOrigin: false,
       },
     },
   },
