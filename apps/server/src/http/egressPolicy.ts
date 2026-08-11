@@ -80,15 +80,68 @@ export function isBlockedIp(ip: string): boolean {
   ) {
     return true; // ::1
   }
-  // IPv4-mapped ::ffff:a.b.c.d — auch in reiner Hex-Schreibweise.
-  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0xffff) {
-    return isBlockedIp(`${g6 >> 8}.${g6 & 0xff}.${g7 >> 8}.${g7 & 0xff}`);
-  }
+  // Nachschärfung von F9: NICHT nur IPv4-mapped (::ffff:…) trägt eine
+  // eingebettete IPv4 — auch IPv4-compatible (::/96), SIIT (::ffff:0:0/96),
+  // 6to4 (2002::/16) und NAT64 (64:ff9b::/96 bzw. 64:ff9b:1::/48) tun das,
+  // und alle vier liefen bisher an der Sperre vorbei. Auf DIESEM macOS/
+  // Bun-Stack ist das nicht ausnutzbar (empirisch geprüft: keine der vier
+  // Formen erreicht per Bun.connect einen IPv4-Loopback-Listener, die
+  // gemappten Formen schon) — auf anderen Plattformen (bestimmte
+  // Linux-sysctl, NAT64-Gateway im LAN) aber potenziell doch. Wir schließen
+  // die Lücke, weil diese Liste die autoritative Egress-Grenze der MicroVM
+  // ist, nicht weil heute ein Pfad offen wäre. Geprüft wird jeweils NUR die
+  // eingebettete Adresse — ein 6to4/NAT64-Ziel mit öffentlicher IPv4 bleibt
+  // erlaubt, sonst wäre der halbe Übergangsverkehr des Internets gesperrt.
+  const eingebettet = eingebetteteIpv4(g0, g1, g2, g3, g4, g5, g6, g7);
+  if (eingebettet !== null) return isBlockedIp(eingebettet);
   const erstesByte = g0 >> 8;
   if ((erstesByte & 0xfe) === 0xfc) return true; // fc00::/7 (ULA)
   if ((g0 & 0xffc0) === 0xfe80) return true; // fe80::/10 (Link-Local)
   if (erstesByte === 0xff) return true; // Multicast
   return false;
+}
+
+/**
+ * Extrahiert die eingebettete IPv4-Adresse aus den IPv6-Übergangsformen, die
+ * eine tragen — damit `isBlockedIp` sie einheitlich nach den IPv4-Regeln
+ * bewertet. `::` und `::1` sind vorher schon gefangen; sie fielen aber auch
+ * hier richtig aus (0.0.0.0 bzw. 0.0.0.1 liegen in 0.0.0.0/8 → blockiert),
+ * die Reihenfolge der Prüfungen ist also nicht tragend. Bewusst NICHT dabei:
+ * Teredo (2001::/32) bettet die IPv4 XOR-verschleiert ein und braucht ohnehin
+ * einen Relay — das wäre Scheingenauigkeit ohne realen Pfad.
+ */
+function eingebetteteIpv4(
+  g0: number,
+  g1: number,
+  g2: number,
+  g3: number,
+  g4: number,
+  g5: number,
+  g6: number,
+  g7: number,
+): string | null {
+  const v4 = (hi: number, lo: number): string => `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
+  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0) {
+    // ::ffff:a.b.c.d — IPv4-mapped (RFC 4291), der bisher einzige Fall.
+    if (g4 === 0 && g5 === 0xffff) return v4(g6, g7);
+    // ::a.b.c.d — IPv4-compatible (RFC 4291, deprecated, wird aber geparst).
+    if (g4 === 0 && g5 === 0) return v4(g6, g7);
+    // ::ffff:0:a.b.c.d — SIIT/„IPv4-translated" (RFC 2765).
+    if (g4 === 0xffff && g5 === 0) return v4(g6, g7);
+    return null;
+  }
+  // 2002:ab:cd:: — 6to4 (RFC 3056): die IPv4 steckt in den Gruppen 1+2.
+  if (g0 === 0x2002) return v4(g1, g2);
+  // 64:ff9b::a.b.c.d — NAT64 well-known prefix (RFC 6052). Das lokale
+  // 64:ff9b:1::/48 (RFC 8215) nehmen wir mit: ein NAT64-Gateway im LAN würde
+  // genau darüber interne IPv4-Ziele erreichbar machen. Wir prüfen die
+  // übliche /96-Einbettung (IPv4 in den letzten 32 Bit); das Operator-Suffix
+  // in den Gruppen 3–5 ist dafür beliebig.
+  if (g0 === 0x64 && g1 === 0xff9b) {
+    if (g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0) return v4(g6, g7);
+    if (g2 === 1) return v4(g6, g7);
+  }
+  return null;
 }
 
 /** Zerlegt eine IPv6-Adresse in ihre acht 16-Bit-Gruppen; null bei Unfug. */

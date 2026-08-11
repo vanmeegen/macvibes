@@ -86,3 +86,69 @@ describe('IPv6 wird numerisch geprüft, nicht als Text (F9)', () => {
     expect(isBlockedIp(ip)).toBe(false);
   });
 });
+
+/**
+ * Nachschärfung von F9: `isBlockedIp` führte NUR IPv4-mapped (::ffff:…) auf
+ * die IPv4-Prüfung zurück. Dieselbe eingebettete Adresse trug in vier weiteren
+ * Standardformen an der Sperre vorbei: IPv4-compatible (::/96), SIIT/
+ * IPv4-translated (::ffff:0:0/96), 6to4 (2002::/16) und NAT64
+ * (64:ff9b::/96 well-known, 64:ff9b:1::/48 lokal). Der Egress-Proxy ist die
+ * Sicherheitsgrenze der MicroVM — die Sperrliste muss autoritativ sein,
+ * unabhängig davon, ob die jeweilige Form auf DIESER Plattform routet.
+ */
+describe('IPv6-Formen mit eingebetteter IPv4 werden auf die IPv4-Prüfung zurückgeführt', () => {
+  test.each([
+    ['::7f00:1', 'IPv4-compatible 127.0.0.1 in Hex'],
+    ['::127.0.0.1', 'IPv4-compatible Loopback in Punktnotation'],
+    ['::0.0.0.1', 'IPv4-compatible „dieses Netz" — darf nicht als öffentlich durchfallen'],
+    ['::ffff:0:7f00:1', 'SIIT/IPv4-translated Loopback'],
+    ['::ffff:0:127.0.0.1', 'SIIT in Punktnotation'],
+    ['2002:7f00:1::', '6to4 mit eingebettetem Loopback'],
+    ['2002:c0a8:101::', '6to4 mit eingebettetem 192.168.1.1'],
+    ['2002:a9fe:a9fe::', '6to4 mit eingebettetem Metadaten-Endpunkt'],
+    ['64:ff9b::7f00:1', 'NAT64 well-known mit Loopback'],
+    ['64:ff9b::127.0.0.1', 'NAT64 well-known in Punktnotation'],
+    ['64:ff9b:1::7f00:1', 'lokales NAT64 (RFC 8215) mit Loopback'],
+    ['64:ff9b:1:abcd::a9fe:a9fe', 'lokales NAT64 mit Operator-Suffix und Metadaten-Endpunkt'],
+  ])('%s ist blockiert (%s)', (ip) => {
+    expect(isBlockedIp(ip)).toBe(true);
+  });
+
+  // Die Regel darf NUR die eingebettete Adresse prüfen, nicht den ganzen
+  // Präfix sperren — sonst wäre z. B. sämtlicher 6to4-Verkehr tot.
+  test.each([
+    ['2002:808:808::', '6to4 mit ÖFFENTLICHER 8.8.8.8'],
+    ['64:ff9b::808:808', 'NAT64 zu öffentlicher 8.8.8.8'],
+    ['64:ff9b::1.1.1.1', 'NAT64 zu öffentlicher 1.1.1.1'],
+    ['::808:808', 'IPv4-compatible zu öffentlicher 8.8.8.8'],
+  ])('%s bleibt erlaubt (%s)', (ip) => {
+    expect(isBlockedIp(ip)).toBe(false);
+  });
+
+  // Regressionsschutz: alles, was vor dem Fix schon korrekt entschieden
+  // wurde, entscheidet die neue Regelkette identisch.
+  test.each([
+    ['::ffff:127.0.0.1'],
+    ['::ffff:7f00:1'],
+    ['::1'],
+    ['0:0:0:0:0:0:0:1'],
+    ['fe80::'],
+    ['fc00::'],
+    ['ff00::'],
+    ['169.254.169.254'],
+    ['100.64.0.0'],
+    ['172.16.0.1'],
+    ['192.168.1.1'],
+    ['10.0.0.1'],
+    ['0.0.0.0'],
+  ])('%s bleibt blockiert (Regression)', (ip) => {
+    expect(isBlockedIp(ip)).toBe(true);
+  });
+
+  test.each([['8.8.8.8'], ['1.1.1.1'], ['2606:4700:4700::1111'], ['2001:4860:4860::8888']])(
+    '%s bleibt öffentlich erreichbar (Regression)',
+    (ip) => {
+      expect(isBlockedIp(ip)).toBe(false);
+    },
+  );
+});
