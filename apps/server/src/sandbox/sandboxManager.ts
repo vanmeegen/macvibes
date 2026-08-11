@@ -412,6 +412,26 @@ export class SandboxManager {
     this.entries.delete(projectId);
   }
 
+  /**
+   * Entschärft alle Grace-/Idle-Timer, OHNE Sandboxes zu stoppen — NUR für den
+   * Dev-Hot-Reload (`bun --hot`, s. devHotReload.ts).
+   *
+   * Beim Reload lebt dieser Manager als verwaistes Objekt weiter; seine Timer
+   * würden sonst später feuern und `stop()` auslösen — also Auto-Commit plus
+   * VM-Stopp durch eine ALTE Ausführung, deren Sicht (isBusy, chatService)
+   * längst veraltet ist. Genau das darf ein Reload nicht: laufende MicroVMs
+   * bleiben unangetastet, nur die Host-Listener werden erneuert. Verwaiste VMs
+   * fängt weiterhin die VM-eigene Idle-Frist (ADR 0003) auf. Bewusst KEIN
+   * `stopAll()` und KEIN Eingriff in die Provider-Handles (deren Poller/
+   * Supervisor überwachen die weiterlaufenden Sandboxes zu Recht weiter).
+   */
+  detachForReload(): void {
+    for (const entry of this.entries.values()) {
+      this.clearGrace(entry);
+      this.clearIdle(entry);
+    }
+  }
+
   /** Wie viele Projekte im Speicher gehalten werden (die Zahl hinter dem Leck). */
   trackedProjects(): number {
     return this.entries.size;

@@ -27,7 +27,8 @@ import boundaries from 'eslint-plugin-boundaries';
  *        ↑
  *      http
  *        ↑
- *   app (index.ts, shutdownSequence.ts)        ← Composition Root, darf alles
+ *   app (index.ts, shutdownSequence.ts,
+ *        devHotReload.ts)                      ← Composition Root, darf alles
  *
  * Schichtung Web: pages → models → api, keine Rückkanten.
  */
@@ -36,7 +37,14 @@ const serverElements = [
   // Ordner-Muster die Dateien. Tests werden eigenständig klassifiziert (s. u.).
   { type: 'test', partialMatch: false, pattern: ['**/__tests__/**'] },
   // Composition Root: verdrahtet alle Schichten, darf deshalb alles.
-  { type: 'app', mode: 'file', pattern: ['**/src/index.ts', '**/src/shutdownSequence.ts'] },
+  // devHotReload gehört zur Composition Root: es räumt beim `bun --hot`-Reload
+  // genau die Ressourcen ab bzw. übergibt sie, die index.ts verdrahtet — dafür
+  // braucht es deren Typen (core/vmTokens, services/localRouterService).
+  {
+    type: 'app',
+    mode: 'file',
+    pattern: ['**/src/index.ts', '**/src/shutdownSequence.ts', '**/src/devHotReload.ts'],
+  },
   // Querschnitts-Dateien ohne eigene Abhängigkeiten (Konfiguration, Log-Hygiene):
   // jede Schicht darf sie nutzen, sie selbst importieren nichts aus dem Projekt.
   { type: 'base-file', mode: 'file', pattern: ['**/src/config.ts', '**/src/logSafe.ts'] },

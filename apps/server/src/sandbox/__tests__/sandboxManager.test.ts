@@ -1005,3 +1005,24 @@ describe('ensureRunning: Eager-Start ohne Betrachter (enterProject/sendMessage)'
     expect(provider.stopCalls).toEqual([]);
   });
 });
+
+describe('detachForReload (Dev-Hot-Reload)', () => {
+  test('entschärft einen scharfen Grace-Timer, ohne die Sandbox zu stoppen', async () => {
+    const { provider, manager } = setup({ graceMs: 20, idleMs: 10_000 });
+    await manager.enter(ctx('p1'), 'u1');
+    manager.leave('p1', 'u1'); // letzter Betrachter weg → Grace scharf
+    manager.detachForReload();
+    await Bun.sleep(60);
+    expect(provider.stopCalls).toEqual([]);
+    expect(manager.status('p1')).toBe('running');
+  });
+
+  test('entschärft den Idle-Timer, ohne die Sandbox zu stoppen', async () => {
+    const { provider, manager } = setup({ graceMs: 10_000, idleMs: 20 });
+    await manager.enter(ctx('p1'), 'u1');
+    manager.detachForReload();
+    await Bun.sleep(60);
+    expect(provider.stopCalls).toEqual([]);
+    expect(manager.status('p1')).toBe('running');
+  });
+});

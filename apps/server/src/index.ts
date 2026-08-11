@@ -37,6 +37,18 @@ import { startLocalRouter } from './services/localRouterService';
 import { ShutdownSequence } from './shutdownSequence';
 import { SHUTDOWN_STEP_TIMEOUTS_MS } from '@macvibes/shared';
 import { projectRepoFor } from './core/workspaceService';
+import { initHotReload } from './devHotReload';
+
+// Dev-Hot-Reload (`bun --hot`): Bun führt dieses Modul bei jeder Quelldatei-
+// Änderung ERNEUT aus, im selben Prozess — die Listener der vorigen Ausführung
+// bleiben dabei gebunden. `Bun.serve` tauscht --hot in-place, `Bun.listen`
+// (Egress-Proxy) NICHT: der zweite Lauf starb mit EADDRINUSE und riss laufende
+// Agent-Turns mit (Live-Befund 2026-07-29). Deshalb hier, VOR jedem Binden,
+// die Ressourcen der vorigen Ausführung schliessen; die eigenen werden unten
+// per `hot.addCleanup` direkt nach ihrem Entstehen registriert. In Produktion
+// (`bun run start`, ohne --hot) ist all das ein No-op — Begründung und
+// Mechanik (warum globalThis statt `import.meta.hot`): devHotReload.ts.
+const hot = await initHotReload();
 
 // Fall 3 der Vorrangregel: die nutzereigene <macvibesHome>/.env laden, BEVOR die
 // Config gelesen wird. Bereits gesetzte Variablen (explizit oder aus der
@@ -74,7 +86,11 @@ await ensureBareRepo(config.bareRepoPath);
 // Ein Token PRO SANDBOX statt eines Shared Secrets (F4/F12): Credential-Proxy,
 // Egress-Proxy und Agent-Gateway prüfen alle gegen dieselbe Registry, aber
 // jedes Token gehört genau einer VM und wird beim Stoppen entwertet.
-const vmTokens = createVmTokenRegistry();
+// Beim Hot-Reload wird die Registry ÜBERNOMMEN statt neu erzeugt: die Daemons
+// der weiterlaufenden VMs verbinden sich nach dem Reload mit ihrem alten Token
+// neu — eine leere Registry sperrte sie dauerhaft aus allen drei Prüfstellen aus.
+const vmTokens = hot.inherited.vmTokens ?? createVmTokenRegistry();
+hot.handOver.vmTokens = vmTokens;
 // Egress-Proxy: einziger Weg der VMs ins Internet (msb-Regeln blocken Public).
 const egressPort = config.egress.port;
 const egressProxy = startEgressProxy({
@@ -84,6 +100,9 @@ const egressProxy = startEgressProxy({
   // Policy-Mechanik wie zuvor, nur die Env-Quelle ist jetzt config.ts.
   checkTarget: createTargetChecker({ allowedPorts: config.egress.allowedPorts }),
 });
+// Bun.listen überlebt keinen Hot-Reload-Tausch (anders als Bun.serve): genau
+// dieser Listener war die EADDRINUSE-Quelle des Vorfalls — als Erstes registriert.
+hot.addCleanup('Egress-Proxy', () => egressProxy.stop());
 console.log(`Egress-Proxy für VMs auf Port ${egressProxy.port}`);
 const anthropicProxy = createAnthropicProxy({
   upstreamUrl: config.anthropic.upstreamUrl,
@@ -110,22 +129,42 @@ if (config.anthropic.oauthToken === null && config.anthropic.apiKey === null) {
 // früh, dass auch ein Ctrl-C MITTEN im Hochlauf noch geordnet abräumt — der
 // erste Router-Start kann Minuten dauern (venv + LiteLLM).
 const shutdownSequence = new ShutdownSequence();
-for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  process.on(signal, () => void shutdownSequence.handle(signal));
+// Handler-Referenzen behalten: beim Hot-Reload trägt die nächste Ausführung
+// genau dieses Paar wieder aus (process.off), damit immer nur EINE — die
+// jüngste — ShutdownSequence auf Signale reagiert. Sonst summierten sich pro
+// Reload Handler auf, und ein Ctrl-C liesse mehrere Sequenzen parallel laufen
+// (inkl. doppeltem stopAll/Auto-Commit).
+const signalHandlers = (['SIGINT', 'SIGTERM'] as const).map(
+  (signal) => [signal, (): void => void shutdownSequence.handle(signal)] as const,
+);
+for (const [signal, handler] of signalHandlers) {
+  process.on(signal, handler);
 }
+hot.addCleanup('Signal-Handler', () => {
+  for (const [signal, handler] of signalHandlers) {
+    process.off(signal, handler);
+  }
+});
 
 // Lokalen Modell-Router (Anthropic-Shim) MITSTARTEN — im Hintergrund, damit der
 // Server sofort hochkommt; qwen-Turns vor Router-Readiness scheitern mit klarer
 // 502 des Proxys. Ein extern laufender Shim wird erkannt und nie angefasst.
 // Im Fake-Agent-Modus (Tests/E2E) gibt es keine Modell-Requests → kein Autostart.
+// Beim Hot-Reload wird ein selbst gestarteter Router ÜBERNOMMEN statt neu
+// gestartet: der Prozess soll Reloads überleben (Kaltstart dauert Minuten),
+// und ohne Übergabe stufte die neue Ausführung ihn als „extern" ein — ihr
+// Shutdown-Schritt wäre ein No-op und `bun run shutdown` liesse den Shim als
+// Waise zurück. Der ProcessSupervisor der Startausführung überwacht ihn weiter.
 const localRouterReady =
-  config.agent.backend === 'claude'
+  hot.inherited.localRouter ??
+  (config.agent.backend === 'claude'
     ? startLocalRouter({
         upstreamUrl: config.localModels.upstreamUrl,
         command: config.localModels.routerCommand,
         logFile: join(config.macvibesHome, 'local-router.log'),
       })
-    : Promise.resolve({ state: 'unavailable' as const, stop: async () => {} });
+    : Promise.resolve({ state: 'unavailable' as const, stop: async () => {} }));
+hot.handOver.localRouter = localRouterReady;
 // Selbst gestarteten Shim beim Beenden mitnehmen (SIGTERM = bun run shutdown).
 // Als Schritt, NICHT als eigener Handler: ein zweiter Handler mit eigenem
 // process.exit(0) hat vorher den Auto-Commit der Sandboxes abgeschnitten.
@@ -286,6 +325,11 @@ const sandboxManager = new SandboxManager({
     }
   },
 });
+// Beim Hot-Reload nur die Timer entschärfen — KEIN stopAll(): laufende
+// MicroVMs (samt Auto-Commit-Hook) bleiben unangetastet, sonst würde ein
+// verwaister Grace-/Idle-Timer der alten Ausführung später VMs stoppen,
+// während die neue Ausführung sie längst anders verwaltet (s. detachForReload).
+hot.addCleanup('Sandbox-Timer', () => sandboxManager.detachForReload());
 
 // Preview-Gateway: EIN fester Port, der jede Preview auf ihren dynamischen
 // VM-Port reverse-proxied — nur dieser Port muss für Remote-/VPN-Zugriff
@@ -300,6 +344,7 @@ const previewGateway = startPreviewGateway({
   authenticate: async (token) =>
     token !== null && (await resolveSession(db, config, token)) !== null,
 });
+hot.addCleanup('Preview-Gateway', () => previewGateway.stop());
 console.log(`Preview-Gateway auf http://${config.hostname}:${previewGateway.port}`);
 
 function selectAgentRunner() {
@@ -397,6 +442,12 @@ const server = Bun.serve({
     );
   },
 });
+// stop(true) kappt auch die Gateway-WebSockets der Daemons SAUBER (Close-Frame
+// statt hängender halbtoter Verbindung): die Daemons in den weiterlaufenden
+// VMs reconnecten mit Backoff (0,5–10 s) und altem Token an die neue Ausführung.
+hot.addCleanup('Haupt-Server', async () => {
+  await server.stop(true);
+});
 
 // F26: Die .env trägt den Claude-Token im Klartext. Nicht automatisch
 // korrigieren (es ist eine Nutzerdatei), aber unübersehbar melden — und zwar
@@ -416,6 +467,8 @@ const mirror = startMirrorScheduler(
   { bareRepoPath: config.bareRepoPath, remoteUrl: config.mirror.remoteUrl },
   config.mirror.intervalMs,
 );
+// Ohne diesen Schritt summierte sich pro Reload ein weiteres Mirror-Intervall auf.
+hot.addCleanup('GitHub-Mirror-Intervall', () => mirror.stop());
 if (config.mirror.remoteUrl !== null) {
   console.log(`GitHub-Mirror aktiv (alle ${Math.round(config.mirror.intervalMs / 60000)} min)`);
 }
