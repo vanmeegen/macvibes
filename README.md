@@ -90,19 +90,32 @@ dynamischen VM-Ports müssen dann nicht mehr freigegeben werden.
 Neben Claude (Anthropic) und lokalen Ollama-Modellen lässt sich **jeder
 weitere Anbieter** einhängen — OpenRouter, OpenAI oder ein eigener Endpunkt.
 Der einfachste Weg ist `bun run setup`: dort gibt man für einen eigenen
-Anbieter nur **Anzeigename, Basis-URL, Token und Modell-ID** an. Welches
-API-Format der Anbieter spricht, muss man **nicht wissen** — das Setup schickt
-je eine Mini-Probe (`max_tokens: 1`, Timeout 10 s) an Anthropics
-`/v1/messages` und OpenAIs `/chat/completions` (mit und ohne `/v1`) und sagt
-im Klartext, was es gefunden hat:
+Anbieter nur **Anzeigename, Basis-URL und Token** an. Das Setup holt dann die
+**Modell-Liste des Anbieters** (`GET /models`, mit und ohne `/v1`; OpenRouter,
+OpenAI und Anthropic antworten gleichförmig) und man wählt daraus **beliebig
+viele Modelle** — per Suchbegriff und nummerierten Treffern (`1,3,7` oder
+`alle`), in mehreren Suchdurchgängen; bei hunderten Modellen (OpenRouter)
+wird nie die ganze Liste ausgekippt. Ist die Liste nicht abrufbar, fällt das
+Setup auf die manuelle Eingabe kommagetrennter Modell-IDs zurück. Modelle mit
+`claude`-Präfix sind reserviert und werden mit Hinweis übersprungen.
 
-- **Anthropic-kompatibel** → direkte Route in `MACVIBES_MODEL_ROUTES` (ohne
-  Übersetzer) + Eintrag in `~/macvibes/models.json` (Chat-Dropdown).
-- **OpenAI-kompatibel** → Eintrag in `~/macvibes/litellm.yaml` (der
-  mitgelieferte LiteLLM-Router übersetzt Anthropic↔OpenAI), Key als
-  `<ANZEIGENAME>_API_KEY` in der `.env`, Eintrag in `models.json`. Die
-  erzeugte `litellm.yaml` enthält weiterhin die Ollama-Basis-Einträge und den
-  `'*'`-Catch-all als **letzten** Eintrag (ohne ihn brechen Claude Codes
+Welches API-Format der Anbieter spricht, muss man **nicht wissen** — das
+Setup schickt je eine Mini-Probe (`max_tokens: 1`, Timeout 10 s, mit dem
+ersten gewählten Modell; das Format hängt am Endpunkt, nicht am Modell) an
+Anthropics `/v1/messages` und OpenAIs `/chat/completions` (mit und ohne
+`/v1`) und sagt im Klartext, was es gefunden hat:
+
+- **Anthropic-kompatibel** → direkte Routen in `MACVIBES_MODEL_ROUTES` (ohne
+  Übersetzer; **eine Route pro Modell** mit der exakten id als `prefix` — ein
+  gemeinsamer, automatisch berechneter Präfix könnte fremde Modelle
+  mit-matchen) + je Modell ein Eintrag in `~/macvibes/models.json`
+  (Chat-Dropdown).
+- **OpenAI-kompatibel** → je Modell ein Eintrag in `~/macvibes/litellm.yaml`
+  (der mitgelieferte LiteLLM-Router übersetzt Anthropic↔OpenAI), Key als
+  `<ANZEIGENAME>_API_KEY` in der `.env`, je Modell ein Eintrag in
+  `models.json`. Die erzeugte `litellm.yaml` enthält weiterhin die
+  Ollama-Basis-Einträge und den `'*'`-Catch-all als **letzten** Eintrag —
+  auch nach beliebig vielen neuen Einträgen (ohne ihn brechen Claude Codes
   Hilfsmodell-Aufrufe).
 - **Token abgelehnt (401/403)** → das ist **kein** Formatproblem; das Setup
   meldet es genau so und bietet einen neuen Versuch an.

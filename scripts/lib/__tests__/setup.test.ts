@@ -96,8 +96,7 @@ describe('providerEnv — Anbieter-Wahl auf Env-Vars abbilden', () => {
     const env = providerEnv({
       kind: 'custom-anthropic',
       name: 'Mein Shim',
-      modelId: 'glm-4.7',
-      label: 'GLM 4.7 (Mein Shim)',
+      modelle: [{ id: 'glm-4.7', label: 'GLM 4.7 (Mein Shim)' }],
       url: 'https://shim.example.com',
       token: 'sk-shim',
     });
@@ -106,16 +105,41 @@ describe('providerEnv — Anbieter-Wahl auf Env-Vars abbilden', () => {
     ]);
   });
 
+  test('custom-anthropic mit MEHREREN Modellen: je Modell EINE Route (prefix = exakte id)', () => {
+    // WARUM n Routen statt eines gemeinsamen Prefixes: die Route matcht per
+    // `model.startsWith(prefix)` — ein automatisch berechneter gemeinsamer
+    // Präfix (z. B. "g" für glm-4.7 + gpt-oss) würde still auch FREMDE Modelle
+    // an diesen Upstream (mit dessen Token!) schicken. Exakte ids sind präzise;
+    // die Anzahl ist durch die Auswahl begrenzt.
+    const env = providerEnv({
+      kind: 'custom-anthropic',
+      name: 'Mein Shim',
+      modelle: [
+        { id: 'glm-4.7', label: 'GLM 4.7 (Mein Shim)' },
+        { id: 'gpt-oss-120b', label: 'GPT-OSS 120B (Mein Shim)' },
+      ],
+      url: 'https://shim.example.com',
+      token: 'sk-shim',
+    });
+    expect(JSON.parse(env['MACVIBES_MODEL_ROUTES'] ?? '[]')).toEqual([
+      { prefix: 'glm-4.7', upstreamUrl: 'https://shim.example.com', apiKey: 'sk-shim' },
+      { prefix: 'gpt-oss-120b', upstreamUrl: 'https://shim.example.com', apiKey: 'sk-shim' },
+    ]);
+  });
+
   test('custom-anthropic ohne Token lässt apiKey weg (nicht undefined serialisieren)', () => {
     const env = providerEnv({
       kind: 'custom-anthropic',
       name: 'Lokal',
-      modelId: 'x-1',
-      label: 'X 1',
+      modelle: [
+        { id: 'x-1', label: 'X 1' },
+        { id: 'y-2', label: 'Y 2' },
+      ],
       url: 'http://localhost:9999',
     });
     expect(JSON.parse(env['MACVIBES_MODEL_ROUTES'] ?? '[]')).toEqual([
       { prefix: 'x-1', upstreamUrl: 'http://localhost:9999' },
+      { prefix: 'y-2', upstreamUrl: 'http://localhost:9999' },
     ]);
   });
 
@@ -126,8 +150,7 @@ describe('providerEnv — Anbieter-Wahl auf Env-Vars abbilden', () => {
     const env = providerEnv({
       kind: 'custom-openai',
       name: 'OpenRouter',
-      modelId: 'qwen/qwen3-coder',
-      label: 'Qwen3 Coder (OpenRouter)',
+      modelle: [{ id: 'qwen/qwen3-coder', label: 'Qwen3 Coder (OpenRouter)' }],
       apiBase: 'https://openrouter.ai/api/v1',
       envVar: 'OPENROUTER_API_KEY',
       token: 'sk-or-123',
@@ -138,15 +161,21 @@ describe('providerEnv — Anbieter-Wahl auf Env-Vars abbilden', () => {
 });
 
 /** Kurzform für die Merge-Tests: ein Anthropic-kompatibler Anbieter. */
-function anthropicAnbieter(modelId: string, url: string, token: string): ProviderChoice {
-  return { kind: 'custom-anthropic', name: modelId, modelId, label: modelId, url, token };
+function anthropicAnbieter(modelIds: string[], url: string, token: string): ProviderChoice {
+  return {
+    kind: 'custom-anthropic',
+    name: modelIds[0] ?? 'anbieter',
+    modelle: modelIds.map((id) => ({ id, label: id })),
+    url,
+    token,
+  };
 }
 
 describe('mergeProviderEnv — kombinierbare Anbieter', () => {
   test('Claude + eigener Anthropic-Anbieter: beide Env-Keys stehen nebeneinander', () => {
     const merged = mergeProviderEnv([
       { kind: 'claude-oauth', token: 'tok' },
-      anthropicAnbieter('glm-4.7', 'https://shim.example.com', 'sk-or'),
+      anthropicAnbieter(['glm-4.7'], 'https://shim.example.com', 'sk-or'),
     ]);
     expect(merged['CLAUDE_CODE_OAUTH_TOKEN']).toBe('tok');
     expect(JSON.parse(merged['MACVIBES_MODEL_ROUTES'] ?? '[]')).toEqual([
@@ -154,12 +183,16 @@ describe('mergeProviderEnv — kombinierbare Anbieter', () => {
     ]);
   });
 
-  test('mehrere Anthropic-Anbieter fließen in EIN JSON-Array zusammen', () => {
+  test('mehrere Anthropic-Anbieter (auch mehr-modellige) fließen in EIN JSON-Array zusammen', () => {
     const merged = mergeProviderEnv([
-      anthropicAnbieter('a-1', 'https://a.example.com', 'a'),
-      anthropicAnbieter('b-1', 'https://b.example.com', 'b'),
+      anthropicAnbieter(['a-1', 'a-2'], 'https://a.example.com', 'a'),
+      anthropicAnbieter(['b-1'], 'https://b.example.com', 'b'),
     ]);
-    expect(JSON.parse(merged['MACVIBES_MODEL_ROUTES'] ?? '[]')).toHaveLength(2);
+    const routes = JSON.parse(merged['MACVIBES_MODEL_ROUTES'] ?? '[]') as Array<{
+      prefix: string;
+    }>;
+    expect(routes).toHaveLength(3);
+    expect(routes.map((r) => r.prefix)).toEqual(['a-1', 'a-2', 'b-1']);
   });
 
   test('nur lokal (Ollama), kein Claude: keine Claude-Keys in der Map', () => {
@@ -175,8 +208,7 @@ describe('mergeProviderEnv — kombinierbare Anbieter', () => {
       {
         kind: 'custom-openai',
         name: 'OpenRouter',
-        modelId: 'qwen/qwen3-coder',
-        label: 'Qwen3 Coder (OpenRouter)',
+        modelle: [{ id: 'qwen/qwen3-coder', label: 'Qwen3 Coder (OpenRouter)' }],
         apiBase: 'https://openrouter.ai/api/v1',
         envVar: 'OPENROUTER_API_KEY',
         token: 'sk-or',
@@ -225,7 +257,7 @@ describe('buildEnvContent — .env-Inhalt aus den Antworten', () => {
       sandboxMode: 'process',
       providers: [
         { kind: 'claude-apikey', apiKey: 'sk-ant' },
-        anthropicAnbieter('glm-4.7', 'https://shim.example.com', 'sk-shim'),
+        anthropicAnbieter(['glm-4.7'], 'https://shim.example.com', 'sk-shim'),
       ],
     });
     expect(content).toContain("ANTHROPIC_API_KEY='sk-ant'");
@@ -233,7 +265,7 @@ describe('buildEnvContent — .env-Inhalt aus den Antworten', () => {
     expect(content).toContain('shim.example.com');
   });
 
-  test('custom-openai: abgeleiteter Key single-quoted, Kommentar nennt den Anbieter', () => {
+  test('custom-openai: abgeleiteter Key single-quoted, Kommentar nennt Anbieter UND Modelle', () => {
     const content = buildEnvContent({
       adminUsername: 'marco',
       sandboxMode: 'process',
@@ -242,8 +274,10 @@ describe('buildEnvContent — .env-Inhalt aus den Antworten', () => {
         {
           kind: 'custom-openai',
           name: 'OpenRouter',
-          modelId: 'qwen/qwen3-coder',
-          label: 'Qwen3 Coder (OpenRouter)',
+          modelle: [
+            { id: 'qwen/qwen3-coder', label: 'Qwen3 Coder (OpenRouter)' },
+            { id: 'qwen/qwen3-max', label: 'Qwen3 Max (OpenRouter)' },
+          ],
           apiBase: 'https://openrouter.ai/api/v1',
           envVar: 'OPENROUTER_API_KEY',
           token: 'sk-or',
@@ -252,7 +286,35 @@ describe('buildEnvContent — .env-Inhalt aus den Antworten', () => {
     });
     expect(content).toContain("OPENROUTER_API_KEY='sk-or'");
     expect(content).toContain('OpenRouter');
+    // BEIDE ausgewählten Modelle stehen im Kommentar (nicht nur das erste):
+    expect(content).toContain('qwen/qwen3-coder');
+    expect(content).toContain('qwen/qwen3-max');
     expect(content).not.toContain('MACVIBES_MODEL_ROUTES=');
+  });
+
+  test('custom-openai mit vielen Modellen: der Kommentar bleibt gedeckelt (kein Wall-of-Text)', () => {
+    const modelle = Array.from({ length: 12 }, (_, i) => ({
+      id: `acme-modell-${i + 1}`,
+      label: `Acme ${i + 1}`,
+    }));
+    const content = buildEnvContent({
+      adminUsername: 'marco',
+      sandboxMode: 'process',
+      providers: [
+        {
+          kind: 'custom-openai',
+          name: 'Acme',
+          modelle,
+          apiBase: 'https://api.acme.example',
+          envVar: 'ACME_API_KEY',
+          token: 'sk-acme',
+        },
+      ],
+    });
+    // Erste Modelle genannt, der Rest als Anzahl — nicht alle 12 ids im Kommentar:
+    expect(content).toContain('acme-modell-1');
+    expect(content).not.toContain('acme-modell-12');
+    expect(content).toContain('weitere');
   });
 
   test('mehrere custom-openai-Anbieter: jeder Key erscheint genau einmal', () => {
@@ -263,8 +325,7 @@ describe('buildEnvContent — .env-Inhalt aus den Antworten', () => {
         {
           kind: 'custom-openai',
           name: 'Acme',
-          modelId: 'acme-1',
-          label: 'Acme 1 (Acme)',
+          modelle: [{ id: 'acme-1', label: 'Acme 1 (Acme)' }],
           apiBase: 'https://api.acme.example',
           envVar: 'ACME_API_KEY',
           token: 'sk-acme',
@@ -272,8 +333,7 @@ describe('buildEnvContent — .env-Inhalt aus den Antworten', () => {
         {
           kind: 'custom-openai',
           name: 'Beta AI',
-          modelId: 'beta-1',
-          label: 'Beta 1 (Beta AI)',
+          modelle: [{ id: 'beta-1', label: 'Beta 1 (Beta AI)' }],
           apiBase: 'https://api.beta.example/v1',
           envVar: 'BETA_AI_API_KEY',
           token: 'sk-beta',
@@ -311,12 +371,11 @@ describe('buildEnvContent — echter Round-Trip gegen Buns .env-Parser (kein Han
         sandboxMode: 'process',
         providers: [
           { kind: 'claude-oauth', token: 'oauth#tok#en' },
-          anthropicAnbieter('glm-4.7', 'https://shim.example.com', 'k#1'),
+          anthropicAnbieter(['glm-4.7', 'glm-4.7-air'], 'https://shim.example.com', 'k#1'),
           {
             kind: 'custom-openai',
             name: 'Acme',
-            modelId: 'acme-1',
-            label: 'Acme 1 (Acme)',
+            modelle: [{ id: 'acme-1', label: 'Acme 1 (Acme)' }],
             apiBase: 'https://api.acme.example',
             envVar: 'ACME_API_KEY',
             token: 'sk#acme',
@@ -329,9 +388,10 @@ describe('buildEnvContent — echter Round-Trip gegen Buns .env-Parser (kein Han
     expect(env['ACME_API_KEY']).toBe('sk#acme');
     expect(env['SENTINEL']).toBe('intact');
     // Das ganze MODEL_ROUTES-JSON (mit inneren `"` und `#` im apiKey) muss
-    // literal durchkommen und wieder parsebar sein.
+    // literal durchkommen und wieder parsebar sein — mit EINER Route pro Modell.
     expect(JSON.parse(env['MACVIBES_MODEL_ROUTES'] ?? 'null')).toEqual([
       { prefix: 'glm-4.7', upstreamUrl: 'https://shim.example.com', apiKey: 'k#1' },
+      { prefix: 'glm-4.7-air', upstreamUrl: 'https://shim.example.com', apiKey: 'k#1' },
     ]);
   });
 
@@ -398,7 +458,7 @@ describe('buildEnvContent — sperrt Werte aus, die Buns Parser korrumpieren wü
       buildEnvContent({
         adminUsername: 'admin-01',
         sandboxMode: 'process',
-        providers: [anthropicAnbieter('glm-4.7', 'https://shim.example.com', 'k\\')],
+        providers: [anthropicAnbieter(['glm-4.7'], 'https://shim.example.com', 'k\\')],
       }),
     ).toThrow(/MACVIBES_MODEL_ROUTES/);
   });
@@ -412,8 +472,7 @@ describe('buildEnvContent — sperrt Werte aus, die Buns Parser korrumpieren wü
           {
             kind: 'custom-openai',
             name: 'Acme',
-            modelId: 'acme-1',
-            label: 'Acme 1 (Acme)',
+            modelle: [{ id: 'acme-1', label: 'Acme 1 (Acme)' }],
             apiBase: 'https://api.acme.example',
             envVar: 'ACME_API_KEY',
             token: 'sk-$HOME',

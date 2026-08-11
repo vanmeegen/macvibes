@@ -42,7 +42,8 @@ halb konfiguriert.
    Apple Silicon), freie Ports (4000/4010/4173, Web 5173). Fehlt etwas: klare,
    umsetzbare Meldung (welcher `brew install …`), kein stiller Abbruch.
 2. **Modell-Anbieter wählen** (siehe unten) — Claude als Default, optional
-   Ollama (lokal) oder eigene Anbieter per URL + Token (Format-Probe).
+   Ollama (lokal) oder eigene Anbieter per URL + Token (Modell-Liste vom
+   Anbieter + Format-Probe).
 3. **Admin festlegen** — `MACVIBES_ADMIN_USERNAME` ist **Pflicht**. Ohne
    Bootstrap-Admin kann niemand Nutzer freischalten → das ist die
    „sperr-dich-nicht-selbst-aus"-Absicherung. Der Preflight bricht heute schon
@@ -72,29 +73,49 @@ Das Setup fragt den Anbieter ab statt Claude fest zu verdrahten:
     (`detectLocalRouterCommand`), lokale Modelle sind damit ohne Zutun aktiv.
     Nur ein abweichender Router-Befehl setzt `MACVIBES_LOCAL_ROUTER_CMD`.
   - **Eigener Anbieter (EIN Dialog statt Format-Kunde)** — der Nutzer gibt nur
-    **Anzeigename, Basis-URL, Token, Modell-ID** an (OpenRouter, OpenAI, ein
-    eigener Shim — egal). Ob der Endpunkt Anthropic- oder OpenAI-Format
-    spricht, erkennt eine **Format-Probe** (`scripts/lib/providerProbe.ts`):
-    je ein Minimal-Request (`max_tokens: 1`, Timeout 10 s pro Probe) an
-    `<url>/v1/messages` (Anthropic) und `<url>/chat/completions` bzw.
-    `<url>/v1/chat/completions` (OpenAI — Nutzer geben die Basis mal mit, mal
-    ohne `/v1` an). Die Auswertung ist eine reine, voll getestete Funktion:
-    2xx = erkannt; **401/403 = „Token abgelehnt" (KEIN Formatproblem —
-    zugleich starkes Format-Indiz)**; 400 = Format erkannt, Modell strittig;
-    404/405 = Pfad existiert nicht; Netzfehler/Timeout = „nicht erreichbar".
-    Verdrahtung nach Diagnose (`scripts/lib/providerWiring.ts`):
-    - **Anthropic-kompatibel** → direkte Route in `MACVIBES_MODEL_ROUTES`
-      (`prefix` = Modell-ID, ohne Übersetzer) + Eintrag in
+    **Anzeigename, Basis-URL, Token** an (OpenRouter, OpenAI, ein eigener
+    Shim — egal). Danach holt das Setup die **Modell-Liste des Anbieters**
+    (`GET <basis>/models` und `<wurzel>/v1/models`, beide Auth-Stile —
+    Bearer und `x-api-key` —, `redirect: 'manual'` gegen Token-Leaks;
+    `scripts/lib/modelCatalog.ts`, defensiv geparst: die übliche
+    `{data:[…]}`-Form mit `id`/`name`/`display_name`, nur Einträge mit
+    nichtleerer String-id). Das Modell wird pro Chat
+    im Dropdown gewählt — deshalb wählt der Nutzer hier eine **LISTE**:
+    Suchbegriff → gedeckelte, nummerierte Treffer (max. 30, Rest als Anzahl)
+    → Auswahl per Nummern (`1,3,7`) oder `alle`, beliebig viele
+    Suchdurchgänge. Ist die Liste nicht abrufbar (404/Auth/Netz), fällt das
+    Setup auf **manuelle, kommagetrennte Modell-IDs** zurück — kein Abbruch.
+    ids mit `claude`-Präfix sind reserviert und werden mit Hinweis
+    übersprungen. Ob der Endpunkt Anthropic- oder OpenAI-Format spricht,
+    erkennt eine **Format-Probe** (`scripts/lib/providerProbe.ts`) mit dem
+    ERSTEN gewählten Modell (eine Probe genügt — das Format hängt am
+    Endpunkt, nicht am Modell): je ein Minimal-Request (`max_tokens: 1`,
+    Timeout 10 s pro Probe) an `<url>/v1/messages` (Anthropic) und
+    `<url>/chat/completions` bzw. `<url>/v1/chat/completions` (OpenAI —
+    Nutzer geben die Basis mal mit, mal ohne `/v1` an). Die Auswertung ist
+    eine reine, voll getestete Funktion: 2xx = erkannt; **401/403 = „Token
+    abgelehnt" (KEIN Formatproblem — zugleich starkes Format-Indiz)**;
+    400 = Format erkannt, Modell strittig; 404/405 = Pfad existiert nicht;
+    Netzfehler/Timeout = „nicht erreichbar".
+    Verdrahtung nach Diagnose (`scripts/lib/providerWiring.ts`), für JEDES
+    gewählte Modell:
+    - **Anthropic-kompatibel** → direkte Routen in `MACVIBES_MODEL_ROUTES`:
+      **eine Route pro Modell**, `prefix` = exakte Modell-ID, ohne
+      Übersetzer. Bewusst KEIN gemeinsamer (berechneter) Präfix: die Route
+      matcht per `startsWith`, ein kurzer gemeinsamer Präfix („g" für
+      glm-4.7 + gpt-oss) würde still fremde Modelle an diesen Upstream mit
+      dessen Token schicken. Dazu je Modell ein Eintrag in
       `~/macvibes/models.json`.
-    - **OpenAI-kompatibel** → Eintrag in `~/macvibes/litellm.yaml`
+    - **OpenAI-kompatibel** → je Modell ein Eintrag in `~/macvibes/litellm.yaml`
       (`model: openai/<id>`, `api_base` = die Basis, auf die die Probe
-      ansprang, `api_key: os.environ/<VAR>`) + Key in der `.env`
+      ansprang, `api_key: os.environ/<VAR>`) + EIN Key in der `.env`
       (`<VAR>` = `<ANZEIGENAME>_API_KEY`, nur `[A-Z0-9_]`, Kollisionen
-      bekommen `_2`-Suffixe) + Eintrag in `models.json`. Die `litellm.yaml`
-      wird aus der **mitgelieferten** `litellm_config.yaml` erzeugt bzw. eine
-      vorhandene ERGÄNZT — die Ollama-Basis-Einträge bleiben, der
-      `'*'`-Catch-all bleibt **letzter** Eintrag (sonst brechen Claude Codes
-      Hilfsmodell-Aufrufe und die lokalen Modelle verschwinden).
+      bekommen `_2`-Suffixe) + je Modell ein Eintrag in `models.json`. Die
+      `litellm.yaml` wird aus der **mitgelieferten** `litellm_config.yaml`
+      erzeugt bzw. eine vorhandene ERGÄNZT — die Ollama-Basis-Einträge
+      bleiben, der `'*'`-Catch-all bleibt auch nach n Einfügungen **letzter**
+      Eintrag (sonst brechen Claude Codes Hilfsmodell-Aufrufe und die
+      lokalen Modelle verschwinden).
 
     Bei Misserfolg bietet das Setup **erneut versuchen oder überspringen** an —
     es wird NIE stillschweigend halb konfiguriert. Mehrere Anbieter

@@ -161,6 +161,27 @@ describe('litellmYamlMitEintrag — Basis + Nutzer-Eintrag, Catch-all bleibt let
     );
   });
 
+  test('MEHRERE Einträge nacheinander (Modell-Liste): Catch-all bleibt auch dann letzter', () => {
+    // Der Listen-Weg des Setups fügt pro ausgewähltem Modell einen Eintrag ein —
+    // der '*'-Catch-all muss nach n Einfügungen weiterhin die LETZTE
+    // model_name-Zeile sein (LiteLLM matcht der Reihe nach).
+    let yaml = BUNDLED_YAML;
+    for (const id of ['qwen/qwen3-coder', 'qwen/qwen3-max', 'glm-4.7']) {
+      const ergebnis = litellmYamlMitEintrag(yaml, {
+        ...EINTRAG,
+        modelName: id,
+        litellmModel: `openai/${id}`,
+      });
+      expect(ergebnis.geaendert).toBe(true);
+      yaml = ergebnis.inhalt;
+    }
+    const zeilen = modelNameZeilen(yaml);
+    expect(zeilen).toContain("- model_name: 'qwen/qwen3-coder'");
+    expect(zeilen).toContain("- model_name: 'qwen/qwen3-max'");
+    expect(zeilen).toContain("- model_name: 'glm-4.7'");
+    expect(zeilen[zeilen.length - 1]).toBe("- model_name: '*'");
+  });
+
   test('model_name schon vorhanden → unverändert, mit Hinweis', () => {
     const einmal = litellmYamlMitEintrag(BUNDLED_YAML, EINTRAG).inhalt;
     const zweimal = litellmYamlMitEintrag(einmal, EINTRAG);

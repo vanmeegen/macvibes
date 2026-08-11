@@ -27,6 +27,15 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { usernameSchema } from '@macvibes/shared';
 import { druckeDoctorReport, erhebeDoctorInput } from './lib/doctorState';
+import {
+  begrenzeTreffer,
+  filterModelle,
+  holeModellListe,
+  parseAuswahl,
+  parseManuelleIds,
+  trenneClaudeIds,
+  type ModellKandidat,
+} from './lib/modelCatalog';
 import { erkenneAnbieterFormat, type FormatDiagnose } from './lib/providerProbe';
 import { envVarName, litellmYamlMitEintrag, modelsJsonMitEintrag } from './lib/providerWiring';
 import {
@@ -35,6 +44,7 @@ import {
   envWertIstUnsicher,
   envZielPfad,
   sandboxModeFor,
+  type AnbieterModell,
   type ProviderChoice,
   type SetupAnswers,
 } from './lib/setup';
@@ -156,29 +166,116 @@ function leseBasisUrl(): string {
 }
 
 /**
- * Modell-ID lesen. Das `claude`-Präfix ist reserviert: der Credential-Proxy
- * routet solche ids IMMER an die Anthropic-API — ein eigener Anbieter käme nie
- * an den Request (agentModel.ts lehnt solche Einträge beim Laden ohnehin ab).
+ * Verbotene claude-ids aussortieren und melden — das Präfix ist reserviert:
+ * der Credential-Proxy routet solche ids IMMER an die Anthropic-API, ein
+ * eigener Anbieter käme nie an den Request (agentModel.ts lehnt solche
+ * Einträge beim Laden ohnehin ab). Zentral, damit Listen-Auswahl UND
+ * manueller Fallback dieselbe Regel mit derselben Meldung anwenden.
  */
-function leseModellId(): string {
+function ohneClaudeIds(ids: string[]): string[] {
+  const { erlaubt, verboten } = trenneClaudeIds(ids);
+  if (verboten.length > 0) {
+    console.log(
+      `    ⚠ Übersprungen ("claude"-Präfix ist reserviert — der Proxy routet solche ids an die Anthropic-API): ${verboten.join(', ')}`,
+    );
+  }
+  return erlaubt;
+}
+
+/**
+ * Modelle aus der geholten Anbieter-Liste auswählen — suchen statt scrollen:
+ * die Liste kann hunderte Einträge haben (OpenRouter), deshalb wird sie NIE
+ * komplett gezeigt. Bedienung: Suchbegriff → gedeckelte, nummerierte Treffer →
+ * Auswahl per Nummern (`1,3,7`) oder `alle`; beliebig viele Suchdurchgänge,
+ * bis der Nutzer mit leerem Suchbegriff abschließt. Kleiner Katalog: einfach
+ * Enter (leerer Begriff = alle zeigen), dann `alle`.
+ */
+function modelleAuswaehlen(katalog: ModellKandidat[], anbieterName: string): AnbieterModell[] {
+  console.log(
+    `    ✓ ${katalog.length} Modelle gefunden. Auswahl per Suche: Begriff eingeben,\n` +
+      '    Treffer per Nummern (z. B. 1,3,7) oder "alle" übernehmen — mehrere Suchdurchgänge möglich.',
+  );
+  const gewaehlt = new Map<string, AnbieterModell>();
   for (;;) {
-    const modelId = pflichtEingabe('    Modell-ID beim Anbieter (z. B. qwen/qwen3-coder): ');
-    if (modelId.startsWith('claude')) {
-      console.log(
-        '    ⚠ ids mit "claude"-Präfix sind reserviert (der Proxy routet sie an die Anthropic-API) — bitte anders benennen.',
-      );
+    const frage =
+      gewaehlt.size === 0
+        ? '    Suchbegriff (leer = alle anzeigen): '
+        : `    Weiterer Suchbegriff (leer = fertig mit ${gewaehlt.size} Modell(en)): `;
+    const begriff = (prompt(frage) ?? '').trim();
+    if (begriff === '' && gewaehlt.size > 0) break;
+    const treffer = filterModelle(katalog, begriff);
+    if (treffer.length === 0) {
+      console.log('    Kein Treffer — anderen Begriff versuchen.');
       continue;
     }
-    return modelId;
+    const { angezeigt, restAnzahl } = begrenzeTreffer(treffer);
+    console.log(`    ${treffer.length} Treffer:`);
+    angezeigt.forEach((m, i) => {
+      const schonGewaehlt = gewaehlt.has(m.id) ? ' ✓' : '';
+      const labelZusatz = m.label === m.id ? '' : ` — ${m.label}`;
+      console.log(`      ${String(i + 1).padStart(3)}) ${m.id}${labelZusatz}${schonGewaehlt}`);
+    });
+    if (restAnzahl > 0) {
+      console.log(
+        `      … und ${restAnzahl} weitere (nicht angezeigt) — Suchbegriff verfeinern oder "alle" nehmen.`,
+      );
+    }
+    for (;;) {
+      const eingabe =
+        prompt(
+          `    Übernehmen: Nummern (z. B. 1,3,7) · "alle" = alle ${treffer.length} Treffer · leer = nichts aus dieser Suche: `,
+        ) ?? '';
+      const auswahl = parseAuswahl(eingabe, angezeigt.length);
+      if (auswahl.art === 'ungueltig') {
+        console.log(`    ${auswahl.meldung}`);
+        continue;
+      }
+      const neue =
+        auswahl.art === 'alle'
+          ? treffer
+          : auswahl.art === 'nummern'
+            ? auswahl.indizes.map((i) => angezeigt[i]).filter((m) => m !== undefined)
+            : [];
+      const erlaubteIds = new Set(ohneClaudeIds(neue.map((m) => m.id)));
+      for (const modell of neue) {
+        if (!erlaubteIds.has(modell.id)) continue;
+        // Label fürs Dropdown: Anbieter-Label (name/display_name/id) + Anbietername.
+        gewaehlt.set(modell.id, { id: modell.id, label: `${modell.label} (${anbieterName})` });
+      }
+      break;
+    }
+    console.log(`    → Bisher gewählt: ${gewaehlt.size} Modell(e).`);
+  }
+  return [...gewaehlt.values()];
+}
+
+/**
+ * Manueller Fallback, wenn die Modell-Liste nicht abrufbar ist (404, Auth,
+ * Netz): kommagetrennte Modell-IDs. Leer = überspringen (kein Zwang).
+ */
+function modelleManuellErfassen(anbieterName: string): AnbieterModell[] {
+  for (;;) {
+    const eingabe =
+      prompt(
+        '    Modell-IDs, kommagetrennt (z. B. qwen/qwen3-coder, glm-4.7; leer = überspringen): ',
+      ) ?? '';
+    const ids = parseManuelleIds(eingabe);
+    if (ids.length === 0) return [];
+    const erlaubt = ohneClaudeIds(ids);
+    if (erlaubt.length === 0) continue;
+    return erlaubt.map((id) => ({ id, label: `${id} (${anbieterName})` }));
   }
 }
 
 /**
- * EIN geführter Weg für eigene Anbieter: Anzeigename → URL → Token → Modell-ID,
- * dann entscheidet die Format-PROBE (lib/providerProbe), ob der Endpunkt
- * Anthropic- oder OpenAI-Format spricht — der Nutzer muss das nicht wissen.
- * Bei Misserfolg: erneut versuchen oder überspringen — NIE halb konfigurieren
- * (null = es wird nichts eingetragen, keine Datei angefasst).
+ * EIN geführter Weg für eigene Anbieter: Anzeigename → URL → Token, dann die
+ * MODELL-LISTE des Anbieters holen (GET /models; das Modell wird pro Chat im
+ * Dropdown gewählt — deshalb eine Liste statt einer festgenagelten Modell-ID)
+ * und daraus auswählen (Fallback: manuelle Eingabe). Danach entscheidet die
+ * Format-PROBE (lib/providerProbe) mit dem ERSTEN gewählten Modell, ob der
+ * Endpunkt Anthropic- oder OpenAI-Format spricht — EINE Probe genügt, das
+ * Format hängt am Endpunkt, nicht am Modell. Bei Misserfolg: erneut versuchen
+ * oder überspringen — NIE halb konfigurieren (null = nichts eingetragen).
  */
 async function eigenenAnbieterErfassen(
   bisherige: ProviderChoice[],
@@ -192,12 +289,34 @@ async function eigenenAnbieterErfassen(
     const name = pflichtEingabe('    Anzeigename des Anbieters (z. B. OpenRouter): ');
     const url = leseBasisUrl();
     const token = leseSecret('    Token/API-Key (leer, falls keiner nötig): ');
-    const modelId = leseModellId();
 
-    console.log('    → Prüfe den Endpunkt (je eine Mini-Anfrage pro Format, max_tokens: 1) …');
+    console.log('    → Hole die Modell-Liste des Anbieters (GET /models) …');
+    const katalog = await holeModellListe(url, token);
+    let modelle: AnbieterModell[];
+    if (katalog.length === 0) {
+      console.log(
+        '    ⚠ Modell-Liste nicht abrufbar (kein /models-Endpunkt, Auth oder Netz) — bitte manuell angeben.',
+      );
+      modelle = modelleManuellErfassen(name);
+    } else {
+      modelle = modelleAuswaehlen(katalog, name);
+    }
+    if (modelle.length === 0) {
+      console.log('    Kein Modell gewählt.');
+      if (nochmal()) continue;
+      console.log('    → Übersprungen — es wurde nichts konfiguriert.');
+      return null;
+    }
+
+    // Format-Probe mit dem ERSTEN gewählten Modell — das Format hängt am
+    // Endpunkt, nicht am Modell; eine Probe genügt für den ganzen Anbieter.
+    const erstesModell = modelle[0]?.id ?? '';
+    console.log(
+      `    → Prüfe den Endpunkt mit "${erstesModell}" (je eine Mini-Anfrage pro Format, max_tokens: 1) …`,
+    );
     let diagnose: FormatDiagnose;
     try {
-      diagnose = await erkenneAnbieterFormat(url, token, modelId);
+      diagnose = await erkenneAnbieterFormat(url, token, erstesModell);
     } catch (error) {
       // Darf praktisch nicht passieren (die Probe fängt Netzfehler selbst) —
       // aber nie verschlucken und nie halb konfigurieren.
@@ -209,20 +328,13 @@ async function eigenenAnbieterErfassen(
       `    ${diagnose.art === 'anthropic' || diagnose.art === 'openai' ? '✓' : '✗'} ${diagnose.meldung}`,
     );
 
-    const label = `${modelId} (${name})`;
     if (diagnose.art === 'anthropic') {
       return token === ''
-        ? { kind: 'custom-anthropic', name, modelId, label, url }
-        : { kind: 'custom-anthropic', name, modelId, label, url, token };
+        ? { kind: 'custom-anthropic', name, modelle, url }
+        : { kind: 'custom-anthropic', name, modelle, url, token };
     }
     if (diagnose.art === 'openai') {
-      return baueOpenaiAnbieter(bisherige, {
-        name,
-        modelId,
-        label,
-        apiBase: diagnose.apiBase,
-        token,
-      });
+      return baueOpenaiAnbieter(bisherige, { name, modelle, apiBase: diagnose.apiBase, token });
     }
     if (diagnose.art === 'modell-strittig') {
       // Format steht fest, nur das Modell ist strittig — Übernahme erlaubt,
@@ -235,13 +347,12 @@ async function eigenenAnbieterErfassen(
       if (wahl === 'u' || wahl === 'uebernehmen' || wahl === 'übernehmen') {
         if (diagnose.format === 'anthropic') {
           return token === ''
-            ? { kind: 'custom-anthropic', name, modelId, label, url }
-            : { kind: 'custom-anthropic', name, modelId, label, url, token };
+            ? { kind: 'custom-anthropic', name, modelle, url }
+            : { kind: 'custom-anthropic', name, modelle, url, token };
         }
         return baueOpenaiAnbieter(bisherige, {
           name,
-          modelId,
-          label,
+          modelle,
           apiBase: diagnose.apiBase ?? url,
           token,
         });
@@ -271,7 +382,7 @@ function nochmal(): boolean {
  */
 function baueOpenaiAnbieter(
   bisherige: ProviderChoice[],
-  daten: { name: string; modelId: string; label: string; apiBase: string; token: string },
+  daten: { name: string; modelle: AnbieterModell[]; apiBase: string; token: string },
 ): ProviderChoice {
   const vergeben = new Set<string>();
   for (const p of bisherige) if (p.kind === 'custom-openai') vergeben.add(p.envVar);
@@ -280,12 +391,13 @@ function baueOpenaiAnbieter(
   if (daten.token === '') {
     console.log(`    (kein Token angegeben — ${envVar} bekommt den Platzhalter 'unbenutzt'.)`);
   }
-  console.log(`    ✓ ${daten.name}: Key landet als ${envVar} in der .env.`);
+  console.log(
+    `    ✓ ${daten.name}: ${daten.modelle.length} Modell(e) gewählt, Key landet als ${envVar} in der .env.`,
+  );
   return {
     kind: 'custom-openai',
     name: daten.name,
-    modelId: daten.modelId,
-    label: daten.label,
+    modelle: daten.modelle,
     apiBase: daten.apiBase,
     envVar,
     token,
@@ -472,16 +584,18 @@ async function main(): Promise<void> {
 }
 
 /**
- * Eigene Anbieter in die Nutzer-Dateien unter `<macvibesHome>` eintragen:
- *   - `models.json`  — Modell fürs Chat-Dropdown (alle eigenen Anbieter);
+ * Eigene Anbieter in die Nutzer-Dateien unter `<macvibesHome>` eintragen —
+ * pro Anbieter für JEDES ausgewählte Modell:
+ *   - `models.json`  — je Modell ein Dropdown-Eintrag (alle eigenen Anbieter);
  *     `slow: true`, weil Latenz fremder Endpunkte unbekannt ist — lieber
  *     großzügige Timeouts als abgebrochene Turns (agentTimeoutsFor behandelt
  *     Unbekanntes ohnehin so).
- *   - `litellm.yaml` — Router-Alias (nur OpenAI-kompatible). Existiert die
- *     Datei noch nicht, startet sie als Kopie der MITGELIEFERTEN
+ *   - `litellm.yaml` — je Modell ein Router-Alias (nur OpenAI-kompatible).
+ *     Existiert die Datei noch nicht, startet sie als Kopie der MITGELIEFERTEN
  *     litellm_config.yaml: so behält der Nutzer die Ollama-Basis-Einträge und
- *     den `'*'`-Catch-all (muss letzter Eintrag bleiben — providerWiring fügt
- *     davor ein). Eine vorhandene Datei wird ERGÄNZT, nie überschrieben.
+ *     den `'*'`-Catch-all (muss auch nach n Einfügungen letzter Eintrag
+ *     bleiben — providerWiring fügt jeweils davor ein). Eine vorhandene Datei
+ *     wird ERGÄNZT, nie überschrieben; Duplikate werden nur gemeldet.
  * Beides 0600 (defensiv; Secrets selbst stehen nur in der .env).
  */
 function verdrahteEigeneAnbieter(macvibesHome: string, eigene: EigenerAnbieter[]): void {
@@ -489,15 +603,17 @@ function verdrahteEigeneAnbieter(macvibesHome: string, eigene: EigenerAnbieter[]
   let modelsRaw: string | null = existsSync(modelsPfad) ? readFileSync(modelsPfad, 'utf8') : null;
   let modelsGeaendert = false;
   for (const anbieter of eigene) {
-    const ergebnis = modelsJsonMitEintrag(modelsRaw, {
-      id: anbieter.modelId,
-      label: anbieter.label,
-      slow: true,
-    });
-    if (ergebnis.hinweis !== undefined) console.log(`  ⚠ ${ergebnis.hinweis}`);
-    if (ergebnis.geaendert) {
-      modelsRaw = ergebnis.inhalt;
-      modelsGeaendert = true;
+    for (const modell of anbieter.modelle) {
+      const ergebnis = modelsJsonMitEintrag(modelsRaw, {
+        id: modell.id,
+        label: modell.label,
+        slow: true,
+      });
+      if (ergebnis.hinweis !== undefined) console.log(`  ⚠ ${ergebnis.hinweis}`);
+      if (ergebnis.geaendert) {
+        modelsRaw = ergebnis.inhalt;
+        modelsGeaendert = true;
+      }
     }
   }
   if (modelsGeaendert && modelsRaw !== null) {
@@ -523,17 +639,19 @@ function verdrahteEigeneAnbieter(macvibesHome: string, eigene: EigenerAnbieter[]
   // wenn ein Eintrag als Duplikat übersprungen wird.
   let yamlGeaendert = !hatteDatei;
   for (const anbieter of openaiAnbieter) {
-    const ergebnis = litellmYamlMitEintrag(yamlRaw, {
-      modelName: anbieter.modelId,
-      litellmModel: `openai/${anbieter.modelId}`,
-      apiBase: anbieter.apiBase,
-      apiKeyEnv: anbieter.envVar,
-      kommentar: anbieter.name,
-    });
-    if (ergebnis.hinweis !== undefined) console.log(`  ⚠ ${ergebnis.hinweis}`);
-    if (ergebnis.geaendert) {
-      yamlRaw = ergebnis.inhalt;
-      yamlGeaendert = true;
+    for (const modell of anbieter.modelle) {
+      const ergebnis = litellmYamlMitEintrag(yamlRaw, {
+        modelName: modell.id,
+        litellmModel: `openai/${modell.id}`,
+        apiBase: anbieter.apiBase,
+        apiKeyEnv: anbieter.envVar,
+        kommentar: anbieter.name,
+      });
+      if (ergebnis.hinweis !== undefined) console.log(`  ⚠ ${ergebnis.hinweis}`);
+      if (ergebnis.geaendert) {
+        yamlRaw = ergebnis.inhalt;
+        yamlGeaendert = true;
+      }
     }
   }
   if (yamlGeaendert) {

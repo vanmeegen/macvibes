@@ -48,10 +48,8 @@ export type ProviderChoice =
       kind: 'custom-anthropic';
       /** Anzeigename des Anbieters (nur für Kommentare/Meldungen). */
       name: string;
-      /** Modell-ID = Routen-Prefix (der Proxy matcht das `model` im Body). */
-      modelId: string;
-      /** Anzeigename des Modells fürs Chat-Dropdown (models.json). */
-      label: string;
+      /** Ausgewählte Modelle des Anbieters (mindestens eines). */
+      modelle: AnbieterModell[];
       /** Basis-URL des Endpunkts (der Proxy hängt /v1/messages an). */
       url: string;
       token?: string;
@@ -59,14 +57,25 @@ export type ProviderChoice =
   | {
       kind: 'custom-openai';
       name: string;
-      modelId: string;
-      label: string;
+      modelle: AnbieterModell[];
       /** api_base für LiteLLM — exakt die Basis, auf die die Probe ansprang. */
       apiBase: string;
       /** Abgeleiteter Env-Name (providerWiring.envVarName), z. B. ACME_API_KEY. */
       envVar: string;
       token: string;
     };
+
+/**
+ * Ein ausgewähltes Modell eines eigenen Anbieters. Ein Anbieter bietet
+ * Dutzende Modelle und das Modell wird pro Chat im Dropdown gewählt — deshalb
+ * bindet das Setup pro Anbieter eine LISTE an, nicht eine einzelne Modell-ID.
+ */
+export interface AnbieterModell {
+  /** Modell-ID beim Anbieter — zugleich die `id` in models.json. */
+  id: string;
+  /** Anzeigename fürs Chat-Dropdown (models.json), inkl. Anbietername. */
+  label: string;
+}
 
 /** Sandbox-Backend, exakt die Werte, die config.ts akzeptiert. */
 export type SandboxMode = 'auto' | 'process' | 'microsandbox';
@@ -97,16 +106,26 @@ export function providerEnv(choice: ProviderChoice): Record<string, string> {
     case 'ollama':
       return {};
     case 'custom-anthropic': {
-      // Direkte Route: der Proxy matcht das `model` im Body gegen den prefix —
-      // die Modell-ID selbst ist der präziseste Prefix (matcht genau sie).
+      // Direkte Routen: der Proxy matcht das `model` im Body per
+      // `startsWith(prefix)` — pro Modell EINE Route mit der exakten id.
+      //
+      // WARUM n Routen statt EINES gemeinsamen Prefixes: ein automatisch
+      // berechneter gemeinsamer Präfix wäre gefährlich kurz (glm-4.7 + gpt-oss
+      // → "g") und würde still auch FREMDE Modelle — samt deren Requests — an
+      // diesen Upstream mit DESSEN Token schicken. Nur wenn der Nutzer selbst
+      // einen Namensraum wählt, wäre ein Prefix sinnvoll; das lässt sich nicht
+      // zuverlässig ableiten. Exakte ids sind präzise, die Anzahl ist durch
+      // die Auswahl begrenzt und config.ts verkraftet beliebig viele Routen.
+      //
       // exactOptionalPropertyTypes: apiKey nur aufnehmen, wenn wirklich gesetzt —
       // sonst serialisierte JSON.stringify `"apiKey":undefined` weg, aber der Typ
       // ModelRoute verböte das undefined-Feld.
-      const route: ModelRoute =
+      const routes: ModelRoute[] = choice.modelle.map((modell) =>
         choice.token === undefined || choice.token === ''
-          ? { prefix: choice.modelId, upstreamUrl: choice.url }
-          : { prefix: choice.modelId, upstreamUrl: choice.url, apiKey: choice.token };
-      return { MACVIBES_MODEL_ROUTES: JSON.stringify([route]) };
+          ? { prefix: modell.id, upstreamUrl: choice.url }
+          : { prefix: modell.id, upstreamUrl: choice.url, apiKey: choice.token },
+      );
+      return routes.length === 0 ? {} : { MACVIBES_MODEL_ROUTES: JSON.stringify(routes) };
     }
     case 'custom-openai':
       // KEINE Modell-Route (Format-Mismatch, s. ProviderChoice) — nur der Key,
@@ -197,6 +216,20 @@ export function envQuote(value: string, label: string): string {
 }
 
 /**
+ * Modell-Liste für einen .env-Kommentar aufzählen — gedeckelt, damit ein
+ * Anbieter mit vielen ausgewählten Modellen keinen Kommentar-Wall erzeugt.
+ */
+function modellAufzaehlung(modelle: AnbieterModell[], limit = 3): string {
+  if (modelle.length === 1) return `Modell "${modelle[0]?.id ?? ''}"`;
+  const genannt = modelle
+    .slice(0, limit)
+    .map((m) => `"${m.id}"`)
+    .join(', ');
+  const rest = modelle.length - limit;
+  return rest > 0 ? `Modelle ${genannt} (+${rest} weitere)` : `Modelle ${genannt}`;
+}
+
+/**
  * Den `.env`-Inhalt aus den gesammelten Antworten erzeugen — orientiert an
  * apps/server/.env.example, aber nur mit den TATSÄCHLICH gesetzten Keys (kein
  * Rauschen aus leeren Platzhaltern) und knappen Kommentaren.
@@ -244,7 +277,7 @@ export function buildEnvContent(answers: SetupAnswers): string {
     lines.push('');
     lines.push(`# ${provider.name} (OpenAI-kompatibel, von der Setup-Probe erkannt) — läuft über`);
     lines.push(
-      `# den LiteLLM-Router (Anthropic→OpenAI-Übersetzung). Modell "${provider.modelId}":`,
+      `# den LiteLLM-Router (Anthropic→OpenAI-Übersetzung). ${modellAufzaehlung(provider.modelle)}:`,
     );
     lines.push('# eingetragen in ~/macvibes/litellm.yaml + ~/macvibes/models.json.');
     lines.push(`${provider.envVar}=${envQuote(env[provider.envVar] ?? '', provider.envVar)}`);
