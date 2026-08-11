@@ -23,8 +23,8 @@ const LOGIN_MUTATION = /* GraphQL */ `
 `;
 
 const REGISTER_MUTATION = /* GraphQL */ `
-  mutation Register($username: String!, $password: String!) {
-    register(username: $username, password: $password) { ${USER_FIELDS} }
+  mutation Register($username: String!, $password: String!, $bootstrapToken: String) {
+    register(username: $username, password: $password, bootstrapToken: $bootstrapToken) { ${USER_FIELDS} }
   }
 `;
 
@@ -137,16 +137,28 @@ export class AuthStore {
   }
 
   /**
-   * Selbst-Registrierung ohne Invite-Code. Der erste Nutzer wird sofort
-   * eingeloggt (Admin); alle weiteren landen im pending-Zustand und müssen
-   * freigeschaltet werden.
+   * Selbst-Registrierung ohne Invite-Code. Der Bootstrap-Admin wird sofort
+   * eingeloggt; alle weiteren landen im pending-Zustand und müssen
+   * freigeschaltet werden. `bootstrapToken` braucht NUR die Erst-Registrierung
+   * des Admins auf einer Instanz mit gesetztem MACVIBES_ADMIN_BOOTSTRAP_TOKEN;
+   * ohne Angabe wird die Variable weggelassen (Normalfall aller Nutzer).
    */
-  async register(username: string, password: string): Promise<RegisterOutcome> {
+  async register(
+    username: string,
+    password: string,
+    bootstrapToken?: string,
+  ): Promise<RegisterOutcome> {
     this.pending = true;
     this.error = null;
     this.notice = null;
     try {
-      const data = await gqlRequest<{ register: User }>(REGISTER_MUTATION, { username, password });
+      // Nur mitschicken, wenn wirklich angegeben — der Server behandelt eine
+      // fehlende Variable wie null, und die Alt-Aufrufer bleiben unverändert.
+      const variables: Record<string, unknown> =
+        bootstrapToken === undefined || bootstrapToken === ''
+          ? { username, password }
+          : { username, password, bootstrapToken };
+      const data = await gqlRequest<{ register: User }>(REGISTER_MUTATION, variables);
       if (data.register.approved) {
         runInAction(() => {
           this.currentUser = data.register;

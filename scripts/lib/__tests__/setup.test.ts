@@ -39,6 +39,7 @@ import {
  */
 const RT_KEYS = [
   'MACVIBES_ADMIN_USERNAME',
+  'MACVIBES_ADMIN_BOOTSTRAP_TOKEN',
   'CLAUDE_CODE_OAUTH_TOKEN',
   'ANTHROPIC_API_KEY',
   'MACVIBES_MODEL_ROUTES',
@@ -223,6 +224,7 @@ describe('mergeProviderEnv — kombinierbare Anbieter', () => {
 describe('buildEnvContent — .env-Inhalt aus den Antworten', () => {
   const claudeAnswers: SetupAnswers = {
     adminUsername: 'marco',
+    adminBootstrapToken: 'boot-tok-0123abcd',
     sandboxMode: 'microsandbox',
     providers: [{ kind: 'claude-oauth', token: 'sk-oauth-xyz' }],
   };
@@ -231,6 +233,13 @@ describe('buildEnvContent — .env-Inhalt aus den Antworten', () => {
     const content = buildEnvContent(claudeAnswers);
     expect(content).toContain("MACVIBES_ADMIN_USERNAME='marco'");
     expect(content).toContain('MACVIBES_SANDBOX=microsandbox');
+  });
+
+  test('schreibt den Bootstrap-Token (single-quoted) — neue Installationen sind damit sicher', () => {
+    // Ohne den Token wäre der Admin-Name auf einer frischen Instanz von jedem
+    // im Netz beanspruchbar (register ist unauthentifiziert, Server im LAN).
+    const content = buildEnvContent(claudeAnswers);
+    expect(content).toContain("MACVIBES_ADMIN_BOOTSTRAP_TOKEN='boot-tok-0123abcd'");
   });
 
   test('das erzeugte MACVIBES_ADMIN_USERNAME ist preflight-kompatibel', () => {
@@ -254,6 +263,7 @@ describe('buildEnvContent — .env-Inhalt aus den Antworten', () => {
   test('Claude + eigener Anthropic-Anbieter: beide Keys stehen in der Datei', () => {
     const content = buildEnvContent({
       adminUsername: 'marco',
+      adminBootstrapToken: 'boot-tok-0123abcd',
       sandboxMode: 'process',
       providers: [
         { kind: 'claude-apikey', apiKey: 'sk-ant' },
@@ -268,6 +278,7 @@ describe('buildEnvContent — .env-Inhalt aus den Antworten', () => {
   test('custom-openai: abgeleiteter Key single-quoted, Kommentar nennt Anbieter UND Modelle', () => {
     const content = buildEnvContent({
       adminUsername: 'marco',
+      adminBootstrapToken: 'boot-tok-0123abcd',
       sandboxMode: 'process',
       providers: [
         { kind: 'claude-apikey', apiKey: 'sk-ant' },
@@ -299,6 +310,7 @@ describe('buildEnvContent — .env-Inhalt aus den Antworten', () => {
     }));
     const content = buildEnvContent({
       adminUsername: 'marco',
+      adminBootstrapToken: 'boot-tok-0123abcd',
       sandboxMode: 'process',
       providers: [
         {
@@ -320,6 +332,7 @@ describe('buildEnvContent — .env-Inhalt aus den Antworten', () => {
   test('mehrere custom-openai-Anbieter: jeder Key erscheint genau einmal', () => {
     const content = buildEnvContent({
       adminUsername: 'marco',
+      adminBootstrapToken: 'boot-tok-0123abcd',
       sandboxMode: 'process',
       providers: [
         {
@@ -347,6 +360,7 @@ describe('buildEnvContent — .env-Inhalt aus den Antworten', () => {
   test('nur lokal, kein Claude: klarer Hinweis statt stiller Leere', () => {
     const content = buildEnvContent({
       adminUsername: 'marco',
+      adminBootstrapToken: 'boot-tok-0123abcd',
       sandboxMode: 'process',
       providers: [{ kind: 'ollama' }],
     });
@@ -368,6 +382,7 @@ describe('buildEnvContent — echter Round-Trip gegen Buns .env-Parser (kein Han
     const env = roundTripViaBun(
       buildEnvContent({
         adminUsername: 'admin-01',
+        adminBootstrapToken: 'boot-tok-0123abcd',
         sandboxMode: 'process',
         providers: [
           { kind: 'claude-oauth', token: 'oauth#tok#en' },
@@ -385,6 +400,7 @@ describe('buildEnvContent — echter Round-Trip gegen Buns .env-Parser (kein Han
     );
     expect(env['CLAUDE_CODE_OAUTH_TOKEN']).toBe('oauth#tok#en');
     expect(env['MACVIBES_ADMIN_USERNAME']).toBe('admin-01');
+    expect(env['MACVIBES_ADMIN_BOOTSTRAP_TOKEN']).toBe('boot-tok-0123abcd');
     expect(env['ACME_API_KEY']).toBe('sk#acme');
     expect(env['SENTINEL']).toBe('intact');
     // Das ganze MODEL_ROUTES-JSON (mit inneren `"` und `#` im apiKey) muss
@@ -399,6 +415,7 @@ describe('buildEnvContent — echter Round-Trip gegen Buns .env-Parser (kein Han
     const env = roundTripViaBun(
       buildEnvContent({
         adminUsername: 'admin-01',
+        adminBootstrapToken: 'boot-tok-0123abcd',
         sandboxMode: 'process',
         providers: [{ kind: 'claude-apikey', apiKey: 'sk-x#y' }],
       }),
@@ -443,10 +460,22 @@ describe('envQuote — lehnt ab, was Single-Quotes nicht sicher transportieren',
 });
 
 describe('buildEnvContent — sperrt Werte aus, die Buns Parser korrumpieren würde', () => {
+  test('Bootstrap-Token mit $ wirft mit dem Env-Namen als Label (kein Secret-Leak)', () => {
+    expect(() =>
+      buildEnvContent({
+        adminUsername: 'admin-01',
+        adminBootstrapToken: 'tok-$HOME',
+        sandboxMode: 'process',
+        providers: [{ kind: 'ollama' }],
+      }),
+    ).toThrow(/MACVIBES_ADMIN_BOOTSTRAP_TOKEN/);
+  });
+
   test('Secret mit $ wirft (würde in Single-Quotes still expandiert/injiziert)', () => {
     expect(() =>
       buildEnvContent({
         adminUsername: 'admin-01',
+        adminBootstrapToken: 'boot-tok-0123abcd',
         sandboxMode: 'process',
         providers: [{ kind: 'claude-apikey', apiKey: 'sk-$SECRET' }],
       }),
@@ -457,6 +486,7 @@ describe('buildEnvContent — sperrt Werte aus, die Buns Parser korrumpieren wü
     expect(() =>
       buildEnvContent({
         adminUsername: 'admin-01',
+        adminBootstrapToken: 'boot-tok-0123abcd',
         sandboxMode: 'process',
         providers: [anthropicAnbieter(['glm-4.7'], 'https://shim.example.com', 'k\\')],
       }),
@@ -467,6 +497,7 @@ describe('buildEnvContent — sperrt Werte aus, die Buns Parser korrumpieren wü
     expect(() =>
       buildEnvContent({
         adminUsername: 'admin-01',
+        adminBootstrapToken: 'boot-tok-0123abcd',
         sandboxMode: 'process',
         providers: [
           {
@@ -486,6 +517,7 @@ describe('buildEnvContent — sperrt Werte aus, die Buns Parser korrumpieren wü
     expect(() =>
       buildEnvContent({
         adminUsername: 'admin-01',
+        adminBootstrapToken: 'boot-tok-0123abcd',
         sandboxMode: 'process',
         providers: [{ kind: 'claude-apikey', apiKey: "sk-'-broken" }],
       }),

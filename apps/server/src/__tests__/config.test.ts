@@ -186,6 +186,7 @@ describe('loadConfig zentralisiert die früher verstreuten Env-Reads (M6)', () =
     'MACVIBES_DEBUG_ERRORS',
     'MACVIBES_RATE_LIMIT_DISABLED',
     'MACVIBES_FORCE_ADMIN',
+    'MACVIBES_ADMIN_BOOTSTRAP_TOKEN',
     'PORT',
     'MACVIBES_PREVIEW_GATEWAY_PORT',
   ] as const;
@@ -216,6 +217,8 @@ describe('loadConfig zentralisiert die früher verstreuten Env-Reads (M6)', () =
     expect(config.debugErrors).toBe(false);
     expect(config.rateLimitDisabled).toBe(false);
     expect(config.forceAdmin).toBe(false);
+    // Ohne Token gilt das Alt-Verhalten (ungeschützter Bootstrap, mit Warnung).
+    expect(config.adminBootstrapToken).toBeNull();
   });
 
   test('Env-Overrides landen geparst in der Config', () => {
@@ -232,6 +235,7 @@ describe('loadConfig zentralisiert die früher verstreuten Env-Reads (M6)', () =
     Bun.env.MACVIBES_DEBUG_ERRORS = '1';
     Bun.env.MACVIBES_RATE_LIMIT_DISABLED = '1';
     Bun.env.MACVIBES_FORCE_ADMIN = '1';
+    Bun.env.MACVIBES_ADMIN_BOOTSTRAP_TOKEN = 'geheimes-bootstrap-token';
     const config = loadConfig();
     expect(config.egress.port).toBe(4011);
     // Ungültige Einträge werden gefiltert (gleiches Verhalten wie zuvor in
@@ -248,6 +252,7 @@ describe('loadConfig zentralisiert die früher verstreuten Env-Reads (M6)', () =
     expect(config.debugErrors).toBe(true);
     expect(config.rateLimitDisabled).toBe(true);
     expect(config.forceAdmin).toBe(true);
+    expect(config.adminBootstrapToken).toBe('geheimes-bootstrap-token');
   });
 
   test('nur ungültige MACVIBES_EGRESS_PORTS fallen auf den Default zurück', () => {

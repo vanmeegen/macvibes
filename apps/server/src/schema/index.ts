@@ -311,6 +311,10 @@ builder.mutationType({
       args: {
         username: t.arg.string({ required: true }),
         password: t.arg.string({ required: true }),
+        // Out-of-Band-Secret für die Erst-Registrierung des Bootstrap-Admins
+        // (MACVIBES_ADMIN_BOOTSTRAP_TOKEN). Für alle anderen Nutzer irrelevant.
+        // Der Wert darf NIE geloggt oder in Fehlermeldungen zurückgegeben werden.
+        bootstrapToken: t.arg.string({ required: false }),
       },
       resolve: async (_root, args, ctx) => {
         assertWithinLimit(ctx, registerLimiter, [`ip:${ctx.clientIp ?? 'unbekannt'}`]);

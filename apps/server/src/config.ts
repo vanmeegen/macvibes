@@ -23,6 +23,17 @@ export interface ServerConfig {
    * bereits ein Admin existiert (F21 — ohne Flag nur echter Bootstrap).
    */
   forceAdmin: boolean;
+  /**
+   * MACVIBES_ADMIN_BOOTSTRAP_TOKEN: Out-of-Band-Secret für die
+   * Erst-Registrierung des Bootstrap-Admins. Gesetzt ⇒ der Bootstrap-Name ist
+   * RESERVIERT und register() verlangt genau dieses Token — sonst könnte auf
+   * einer frischen Instanz (Erstinstallation, DB-Reset, neuer DB_PATH) jeder
+   * im LAN, der sich zuerst mit dem Namen registriert, Admin werden UND den
+   * Namen für den echten Betreiber blockieren. null ⇒ Alt-Verhalten
+   * (Rückwärtskompatibilität; ensureAdmin warnt beim Start, solange kein
+   * Admin existiert).
+   */
+  adminBootstrapToken: string | null;
   dbPath: string;
   /** Login-Session: 3 Tage, rollierend verlängert. */
   sessionTtlMs: number;
@@ -348,6 +359,7 @@ export function loadConfig(): ServerConfig {
     templatesDir: Bun.env.MACVIBES_TEMPLATES_DIR ?? DEFAULT_TEMPLATES_DIR,
     adminUsername: Bun.env.MACVIBES_ADMIN_USERNAME || undefined,
     forceAdmin: envFlag('MACVIBES_FORCE_ADMIN'),
+    adminBootstrapToken: Bun.env.MACVIBES_ADMIN_BOOTSTRAP_TOKEN || null,
     dbPath: resolveDbPath(macvibesHome),
     sessionTtlMs: 3 * 24 * 60 * 60 * 1000,
     webDistDir: Bun.env.MACVIBES_WEB_DIST ?? DEFAULT_WEB_DIST_DIR,

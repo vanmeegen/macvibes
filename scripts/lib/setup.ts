@@ -9,7 +9,7 @@
  *
  * Env-Namen sind die WAHRHEIT aus apps/server/src/config.ts / .env.example:
  *   CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, MACVIBES_ADMIN_USERNAME,
- *   MACVIBES_SANDBOX, MACVIBES_MODEL_ROUTES.
+ *   MACVIBES_ADMIN_BOOTSTRAP_TOKEN, MACVIBES_SANDBOX, MACVIBES_MODEL_ROUTES.
  */
 import { join } from 'node:path';
 
@@ -84,6 +84,14 @@ export type SandboxMode = 'auto' | 'process' | 'microsandbox';
 export interface SetupAnswers {
   /** MACVIBES_ADMIN_USERNAME — Pflicht (Aussperr-Absicherung, H3). */
   adminUsername: string;
+  /**
+   * MACVIBES_ADMIN_BOOTSTRAP_TOKEN — vom Setup automatisch erzeugt (CSPRNG,
+   * hex; scripts/setup.ts), damit neue Installationen standardmäßig sicher
+   * sind: ohne den Token könnte auf einer frischen Instanz jeder im LAN, der
+   * den Admin-Namen zuerst registriert, Admin werden. Pflichtfeld, damit kein
+   * Aufrufer den Schutz versehentlich weglassen kann.
+   */
+  adminBootstrapToken: string;
   sandboxMode: SandboxMode;
   providers: ProviderChoice[];
 }
@@ -251,6 +259,13 @@ export function buildEnvContent(answers: SetupAnswers): string {
   lines.push('# ohne ihn kann niemand Nutzer freischalten.');
   lines.push(
     `MACVIBES_ADMIN_USERNAME=${envQuote(answers.adminUsername, 'MACVIBES_ADMIN_USERNAME')}`,
+  );
+  lines.push('');
+  lines.push('# Bootstrap-Token (vom Setup erzeugt): die Erst-Registrierung als Admin verlangt');
+  lines.push('# GENAU diesen Wert im Feld „Bootstrap-Token" — sonst könnte jeder im Netz den');
+  lines.push('# Admin-Namen zuerst beanspruchen. Alle anderen Nutzer lassen das Feld leer.');
+  lines.push(
+    `MACVIBES_ADMIN_BOOTSTRAP_TOKEN=${envQuote(answers.adminBootstrapToken, 'MACVIBES_ADMIN_BOOTSTRAP_TOKEN')}`,
   );
   lines.push('');
   lines.push('# Sandbox-Backend: auto | microsandbox | process (process = ohne VM-Isolat).');

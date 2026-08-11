@@ -92,6 +92,35 @@ describe('AuthStore', () => {
       });
     });
 
+    it('sendet den Bootstrap-Token mit, wenn er angegeben wurde (Erst-Admin)', async () => {
+      // Neue Installationen schützen den Admin-Namen mit
+      // MACVIBES_ADMIN_BOOTSTRAP_TOKEN — die Erst-Registrierung muss ihn
+      // mitschicken können, sonst weist der Server sie ab.
+      mockGql.mockResolvedValueOnce({ register: admin });
+      const store = new AuthStore();
+
+      const outcome = await store.register('marco', 'geheim', 'boot-tok-123');
+
+      expect(outcome).toBe('loggedIn');
+      expect(mockGql).toHaveBeenCalledWith(expect.stringContaining('register'), {
+        username: 'marco',
+        password: 'geheim',
+        bootstrapToken: 'boot-tok-123',
+      });
+    });
+
+    it('lässt den Bootstrap-Token weg, wenn keiner angegeben wurde', async () => {
+      mockGql.mockResolvedValueOnce({ register: pending });
+      const store = new AuthStore();
+
+      await store.register('gast', 'geheim');
+
+      expect(mockGql).toHaveBeenCalledWith(expect.stringContaining('register'), {
+        username: 'gast',
+        password: 'geheim',
+      });
+    });
+
     it('weiterer User: pending, kein Login, Hinweistext gesetzt', async () => {
       mockGql.mockResolvedValueOnce({ register: pending });
       const store = new AuthStore();

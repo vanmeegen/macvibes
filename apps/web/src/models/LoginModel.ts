@@ -12,6 +12,12 @@ export class LoginModel {
   mode: LoginMode = 'login';
   username = '';
   password = '';
+  /**
+   * Bootstrap-Token — nur für die Erst-Registrierung des Admins auf einer
+   * Instanz mit gesetztem MACVIBES_ADMIN_BOOTSTRAP_TOKEN. Alle anderen Nutzer
+   * lassen das Feld leer; dann wird es gar nicht mitgeschickt.
+   */
+  bootstrapToken = '';
 
   constructor(private readonly authStore: AuthStore) {
     makeAutoObservable(this, {}, { autoBind: true });
@@ -28,6 +34,10 @@ export class LoginModel {
 
   setPassword(value: string): void {
     this.password = value;
+  }
+
+  setBootstrapToken(value: string): void {
+    this.bootstrapToken = value;
   }
 
   get canSubmit(): boolean {
@@ -52,7 +62,13 @@ export class LoginModel {
       return ok;
     }
 
-    const outcome = await this.authStore.register(this.username.trim(), this.password);
+    const token = this.bootstrapToken.trim();
+    const outcome = await this.authStore.register(
+      this.username.trim(),
+      this.password,
+      // Leeres Feld = kein Token mitschicken (Normalfall aller Nutzer).
+      token === '' ? undefined : token,
+    );
     if (outcome === 'loggedIn') {
       this.reset();
       return true;
@@ -61,6 +77,7 @@ export class LoginModel {
       // Zurück in den Login-Modus, damit der Nutzer sich nach der Freischaltung
       // anmelden kann; der Hinweistext bleibt sichtbar.
       this.password = '';
+      this.bootstrapToken = '';
       this.mode = 'login';
       return true;
     }
@@ -70,6 +87,7 @@ export class LoginModel {
   reset(): void {
     this.username = '';
     this.password = '';
+    this.bootstrapToken = '';
     this.mode = 'login';
   }
 }

@@ -104,6 +104,17 @@ export const LoginPage = observer(function LoginPage({
               autoComplete={loginModel.mode === 'login' ? 'current-password' : 'new-password'}
               inputProps={{ 'data-testselector': 'login-password' }}
             />
+            {loginModel.mode === 'register' && (
+              <TextField
+                label="Bootstrap-Token (nur Erst-Admin)"
+                type="password"
+                value={loginModel.bootstrapToken}
+                onChange={(e) => loginModel.setBootstrapToken(e.target.value)}
+                autoComplete="off"
+                helperText="Nur für die allererste Admin-Registrierung nötig — der Wert steht als MACVIBES_ADMIN_BOOTSTRAP_TOKEN in der Server-.env. Alle anderen lassen das Feld leer."
+                inputProps={{ 'data-testselector': 'login-bootstrap-token' }}
+              />
+            )}
             <Button
               type="submit"
               variant="contained"

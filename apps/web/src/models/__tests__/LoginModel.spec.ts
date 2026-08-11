@@ -12,7 +12,8 @@ import { LoginModel } from '../LoginModel';
 
 interface AufrufProtokoll {
   logins: Array<[string, string]>;
-  registrierungen: Array<[string, string]>;
+  /** [username, password] bzw. [username, password, bootstrapToken]. */
+  registrierungen: Array<[string, string] | [string, string, string]>;
   fehlerGeleert: number;
 }
 
@@ -33,8 +34,16 @@ function fakeAuthStore(
       protokoll.logins.push([username, password]);
       return Promise.resolve(ergebnisse.login ?? true);
     },
-    register: (username: string, password: string): Promise<'loggedIn' | 'pending' | 'failed'> => {
-      protokoll.registrierungen.push([username, password]);
+    register: (
+      username: string,
+      password: string,
+      bootstrapToken?: string,
+    ): Promise<'loggedIn' | 'pending' | 'failed'> => {
+      // Nur definierte Argumente protokollieren — die Alt-Assertions ohne
+      // Token bleiben so unverändert gültig.
+      protokoll.registrierungen.push(
+        bootstrapToken === undefined ? [username, password] : [username, password, bootstrapToken],
+      );
       return Promise.resolve(ergebnisse.register ?? 'loggedIn');
     },
   } as unknown as AuthStore;
@@ -140,6 +149,31 @@ describe('LoginModel', () => {
       expect(model.password).toBe('');
     });
 
+    it('reicht den Bootstrap-Token getrimmt an den AuthStore weiter (Erst-Admin)', async () => {
+      const { store, protokoll } = fakeAuthStore({ register: 'loggedIn' });
+      const model = new LoginModel(store);
+      model.setMode('register');
+      model.setUsername('marco');
+      model.setPassword('passwort123');
+      model.setBootstrapToken('  boot-tok-123  ');
+
+      expect(await model.submit()).toBe(true);
+
+      expect(protokoll.registrierungen).toEqual([['marco', 'passwort123', 'boot-tok-123']]);
+    });
+
+    it('leeres Token-Feld: es wird KEIN Token mitgeschickt (Normalfall aller Nutzer)', async () => {
+      const { store, protokoll } = fakeAuthStore({ register: 'pending' });
+      const model = new LoginModel(store);
+      model.setMode('register');
+      model.setUsername('gast');
+      model.setPassword('passwort123');
+
+      expect(await model.submit()).toBe(true);
+
+      expect(protokoll.registrierungen).toEqual([['gast', 'passwort123']]);
+    });
+
     it('gescheiterte Registrierung bleibt im Registrieren-Modus', async () => {
       const { store } = fakeAuthStore({ register: 'failed' });
       const model = new LoginModel(store);
@@ -161,11 +195,13 @@ describe('LoginModel', () => {
       model.setMode('register');
       model.setUsername('marco');
       model.setPassword('passwort123');
+      model.setBootstrapToken('boot-tok-123');
 
       model.reset();
 
       expect(model.username).toBe('');
       expect(model.password).toBe('');
+      expect(model.bootstrapToken).toBe('');
       expect(model.mode).toBe('login');
     });
   });

@@ -13,6 +13,7 @@
  *   Doctor → Anbieter-Wahl → Admin (Pflicht) → .env schreiben (chmod 600) →
  *   ~/macvibes-Baum → Baselines (msb) / Prozess-Fallback → Abschluss-Hinweis.
  */
+import { randomBytes } from 'node:crypto';
 import {
   chmodSync,
   existsSync,
@@ -492,9 +493,17 @@ async function main(): Promise<void> {
     'Bootstrap-Admin-Username (wird beim Start zum Admin befördert; PFLICHT): ',
   );
 
+  // 3b) Bootstrap-Token automatisch erzeugen (CSPRNG, hex — enthält damit nie
+  // ein envQuote-verbotenes Zeichen): schützt den Admin-Namen vor Fremd-
+  // Registrierung. Ohne den Token könnte auf einer frischen Instanz jeder im
+  // LAN, der sich zuerst mit dem Namen registriert, Admin werden — der Server
+  // lauscht auf 0.0.0.0. Der Nutzer muss sich den Wert NICHT merken: er steht
+  // in der .env (Abschluss-Hinweis unten sagt, wo).
+  const adminBootstrapToken = randomBytes(32).toString('hex');
+
   // 4) Sandbox-Modus aus der msb-Verfügbarkeit ableiten und .env schreiben.
   const sandboxMode = sandboxModeFor(msbAvailable);
-  const answers: SetupAnswers = { adminUsername, sandboxMode, providers };
+  const answers: SetupAnswers = { adminUsername, adminBootstrapToken, sandboxMode, providers };
 
   // Ziel-.env nach Betriebsart wählen: Dev-Checkout (mit .git) → der
   // Repo-Override apps/server/.env; installierte Fassung (kein .git, z. B.
@@ -581,6 +590,13 @@ async function main(): Promise<void> {
   console.log(
     `  Danach registrieren als „${adminUsername}" — dieser Nutzer wird automatisch Admin.`,
   );
+  if (envGeschrieben) {
+    // Der Token selbst wird bewusst NICHT auf die Konsole gedruckt (Secret);
+    // der Nutzer erfährt, WO er steht und dass er ihn bei der Registrierung braucht.
+    console.log('  WICHTIG: Bei dieser Erst-Registrierung das Feld „Bootstrap-Token" ausfüllen —');
+    console.log(`  der Wert steht als MACVIBES_ADMIN_BOOTSTRAP_TOKEN in ${envPfad}.`);
+    console.log('  Er schützt den Admin-Namen davor, dass ihn jemand anderes im Netz beansprucht.');
+  }
 }
 
 /**

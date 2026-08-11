@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { sessions, users } from '../../db/schema';
 import {
@@ -320,6 +320,167 @@ describe('Erst-Admin-Vergabe (F8, H3)', () => {
     // Selber Bootstrap-Name, aber es gibt schon einen Admin: kein zweiter.
     const { user: zweite } = await register(db, config, registerInput('chefin2'));
     expect(zweite.role).toBe('user');
+  });
+});
+
+/**
+ * Bootstrap-Token (MACVIBES_ADMIN_BOOTSTRAP_TOKEN): Ohne Token wird auf einer
+ * frischen Instanz (Erstinstallation, DB-Reset, neuer DB_PATH) derjenige Admin,
+ * der sich ZUERST mit dem Bootstrap-Namen registriert — der Server lauscht im
+ * LAN, und .env.example verriet den Namen auch noch. Ist der Token gesetzt, ist
+ * der Name RESERVIERT: Registrierung nur mit dem Out-of-Band-Secret.
+ */
+describe('Erst-Admin nur mit Bootstrap-Token (MACVIBES_ADMIN_BOOTSTRAP_TOKEN)', () => {
+  const TOKEN = 'f00ba5f00ba5f00ba5f00ba5f00ba5f00ba5f00ba5f00ba5';
+  const MIT_TOKEN = { ...CONFIG, adminUsername: 'marco', adminBootstrapToken: TOKEN };
+
+  test('Bootstrap-Name OHNE Token: wirft, KEIN User angelegt, kein Admin', async () => {
+    const db = createTestDb();
+    await expect(register(db, MIT_TOKEN, registerInput('marco'))).rejects.toThrow('reserviert');
+    // Der Name bleibt frei — ein Fremder kann ihn nicht durch den Fehlversuch
+    // belegen und den echten Betreiber aussperren.
+    expect(await db.select().from(users)).toHaveLength(0);
+  });
+
+  test('Bootstrap-Name mit FALSCHEM Token: wirft, kein User, kein Admin', async () => {
+    const db = createTestDb();
+    await expect(
+      register(db, MIT_TOKEN, { ...registerInput('marco'), bootstrapToken: 'falsches-secret' }),
+    ).rejects.toThrow('reserviert');
+    expect(await db.select().from(users)).toHaveLength(0);
+  });
+
+  test('die Fehlermeldung verrät den Token NICHT', async () => {
+    const db = createTestDb();
+    let meldung = '';
+    try {
+      await register(db, MIT_TOKEN, { ...registerInput('marco'), bootstrapToken: 'falsch' });
+    } catch (error) {
+      meldung = (error as Error).message;
+    }
+    expect(meldung.length).toBeGreaterThan(0);
+    expect(meldung).not.toContain(TOKEN);
+  });
+
+  test('mit KORREKTEM Token und ohne existierenden Admin: Admin + approved + Session', async () => {
+    const db = createTestDb();
+    const { user, session } = await register(db, MIT_TOKEN, {
+      ...registerInput('marco'),
+      bootstrapToken: TOKEN,
+    });
+    expect(user.role).toBe('admin');
+    expect(user.approved).toBe(true);
+    expect(session).not.toBeNull();
+  });
+
+  test('korrekter Token, aber es EXISTIERT schon ein Admin: kein Verdrängen', async () => {
+    const db = createTestDb();
+    // Anderer Admin bereits vorhanden (per Start-Bootstrap befördert).
+    await register(db, MIT_TOKEN, registerInput('chefin'));
+    await ensureAdmin(db, { ...CONFIG, adminUsername: 'chefin' });
+
+    const { user, session } = await register(db, MIT_TOKEN, {
+      ...registerInput('marco'),
+      bootstrapToken: TOKEN,
+    });
+    expect(user.role).toBe('user');
+    expect(user.approved).toBe(false);
+    expect(session).toBeNull();
+  });
+
+  test('ein ANDERER Username ist vom Token unberührt (registriert normal, pending)', async () => {
+    const db = createTestDb();
+    const { user } = await register(db, MIT_TOKEN, registerInput('gast'));
+    expect(user.role).toBe('user');
+    expect(user.approved).toBe(false);
+  });
+
+  test('OHNE gesetzten Token gilt das Alt-Verhalten (Rückwärtskompatibilität)', async () => {
+    // Bestehende Installationen (Admin existiert längst) laufen unverändert:
+    // CONFIG hat keinen adminBootstrapToken — der Bootstrap-Name wird wie
+    // bisher ohne Token Admin. Die übrigen Suiten dieses Files belegen den
+    // Rest des Alt-Verhaltens.
+    const db = createTestDb();
+    const { user } = await register(db, CONFIG, registerInput('marco'));
+    expect(user.role).toBe('admin');
+    expect(user.approved).toBe(true);
+  });
+});
+
+/**
+ * Serverstart-Warnung: Ist ein Bootstrap-Name gesetzt, aber KEIN Token und
+ * noch KEIN Admin vorhanden, kann jeder im Netz den Namen beanspruchen —
+ * das muss der Betreiber beim Start deutlich sehen.
+ */
+describe('ensureAdmin warnt vor ungeschütztem Bootstrap-Namen', () => {
+  test('kein Admin + Bootstrap-Name gesetzt + kein Token: deutliche Warnung', async () => {
+    const db = createTestDb();
+    const warnSpy = spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await ensureAdmin(db, { ...CONFIG, adminUsername: 'marco' });
+      const gesamt = warnSpy.mock.calls.flat().join(' ');
+      expect(gesamt).toContain('MACVIBES_ADMIN_BOOTSTRAP_TOKEN');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test('mit gesetztem Token: keine Warnung', async () => {
+    const db = createTestDb();
+    const warnSpy = spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await ensureAdmin(db, {
+        ...CONFIG,
+        adminUsername: 'marco',
+        adminBootstrapToken: 'ein-secret',
+      });
+      const gesamt = warnSpy.mock.calls.flat().join(' ');
+      expect(gesamt).not.toContain('MACVIBES_ADMIN_BOOTSTRAP_TOKEN');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test('mit existierendem Admin: keine Warnung (der Bootstrap-Pfad greift nicht mehr)', async () => {
+    const db = createTestDb();
+    await register(db, CONFIG, registerInput('marco')); // wird Admin
+    const warnSpy = spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await ensureAdmin(db, { ...CONFIG, adminUsername: 'marco' });
+      const gesamt = warnSpy.mock.calls.flat().join(' ');
+      expect(gesamt).not.toContain('MACVIBES_ADMIN_BOOTSTRAP_TOKEN');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
+/**
+ * Benutzer-Enumeration über die Login-Laufzeit: Bei unbekanntem Nutzer kehrte
+ * login() VOR dem argon2-Verify zurück — die An-/Abwesenheit der teuren
+ * Operation war über das LAN messbar. Jetzt läuft in BEIDEN Fällen genau ein
+ * Verify (bei unbekanntem Nutzer gegen einen festen Dummy-Hash).
+ */
+describe('login: konstante Arbeit gegen Benutzer-Enumeration', () => {
+  test('unbekannter Nutzer und falsches Passwort: selbe Meldung, je genau EIN Verify', async () => {
+    const db = createTestDb();
+    await register(db, CONFIG, registerInput());
+    const verifySpy = spyOn(Bun.password, 'verify');
+    try {
+      await expect(login(db, CONFIG, 'niemand', 'passwort123')).rejects.toThrow(
+        'Benutzername oder Passwort ist falsch',
+      );
+      // Deterministischer Beleg statt flakiger Zeitschranke: auch der
+      // unbekannte Nutzer kostet einen vollen argon2-Verify.
+      expect(verifySpy).toHaveBeenCalledTimes(1);
+
+      await expect(login(db, CONFIG, 'marco', 'falsches-passwort')).rejects.toThrow(
+        'Benutzername oder Passwort ist falsch',
+      );
+      expect(verifySpy).toHaveBeenCalledTimes(2);
+    } finally {
+      verifySpy.mockRestore();
+    }
   });
 });
 

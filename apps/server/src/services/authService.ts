@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { desc, eq, lt } from 'drizzle-orm';
 import { passwordSchema, usernameSchema } from '@macvibes/shared';
 import type { Db } from '../db/client';
@@ -8,6 +8,37 @@ import { DomainError } from '../core/errors';
 const LOGIN_FAILED_MESSAGE = 'Benutzername oder Passwort ist falsch';
 const NOT_APPROVED_MESSAGE =
   'Dein Konto ist noch nicht freigeschaltet — ein Admin muss dich zulassen.';
+// Bewusst OHNE den Token oder sonstige Details — die Meldung geht an einen
+// unauthentifizierten Aufrufer.
+const BOOTSTRAP_RESERVED_MESSAGE =
+  'Dieser Benutzername ist für den Bootstrap-Admin reserviert. Die Registrierung ' +
+  'verlangt das Bootstrap-Token aus der Server-Konfiguration (MACVIBES_ADMIN_BOOTSTRAP_TOKEN).';
+
+/**
+ * Fester argon2-Hash für Logins mit UNBEKANNTEM Benutzernamen (Timing-Oracle):
+ * Vorher kehrte login() bei unbekanntem Nutzer VOR dem argon2-Verify zurück —
+ * die An-/Abwesenheit der teuren Operation (~100 ms) war über das LAN messbar
+ * und verriet, welche Benutzernamen existieren. Der Hash ist EINMAL
+ * vorberechnet (Bun.password.hash eines fixen Strings, Bun-1.3.14-Default
+ * argon2id): pro Request neu hashen würde die Laufzeit erneut vom bekannten
+ * Fall unterscheiden. Das Verify-Ergebnis wird verworfen — es zählt nur die
+ * konstante Arbeit.
+ */
+const DUMMY_PASSWORD_HASH =
+  '$argon2id$v=19$m=65536,t=2,p=1$nRXZwqmzCBc/j2YqH5HY1xz0gFYgWk3x6orJ2W/zEds$5VFwEI7rq0Kb7ZTVAp45NhYpXwD6LY3WjBD1RTCyVGU';
+
+/**
+ * Timing-safer Vergleich des Bootstrap-Tokens — dasselbe Muster wie
+ * core/vmTokens.lookup: beide Seiten SHA-256-hashen (normalisiert die Länge,
+ * timingSafeEqual verlangt gleich lange Buffer), dann konstantzeitig
+ * vergleichen. Ein naiver `===` verriete über die Laufzeit Länge und
+ * Präfix des richtigen Tokens.
+ */
+function bootstrapTokenGueltig(eingereicht: string, erwartet: string): boolean {
+  const a = createHash('sha256').update(eingereicht).digest();
+  const b = createHash('sha256').update(erwartet).digest();
+  return timingSafeEqual(a, b);
+}
 
 function newToken(): string {
   const bytes = new Uint8Array(32);
@@ -18,6 +49,12 @@ function newToken(): string {
 export interface RegisterInput {
   username: string;
   password: string;
+  /**
+   * Out-of-Band-Secret für die Erst-Registrierung des Bootstrap-Admins —
+   * nur nötig, wenn MACVIBES_ADMIN_BOOTSTRAP_TOKEN gesetzt ist und der
+   * Username der Bootstrap-Name ist. Für alle anderen Nutzer irrelevant.
+   */
+  bootstrapToken?: string | null | undefined;
 }
 
 export interface AuthConfig {
@@ -29,6 +66,12 @@ export interface AuthConfig {
    * auch, wenn bereits ein Admin existiert (F21).
    */
   forceAdmin?: boolean | undefined;
+  /**
+   * MACVIBES_ADMIN_BOOTSTRAP_TOKEN (via config.ts, M6): gesetzt ⇒ der
+   * Bootstrap-Name ist reserviert und register() verlangt genau dieses
+   * Token; null/undefined ⇒ Alt-Verhalten (bestehende Installationen).
+   */
+  adminBootstrapToken?: string | null | undefined;
 }
 
 export interface Session {
@@ -49,10 +92,13 @@ export interface SessionResult {
 }
 
 /**
- * Selbst-Registrierung (kein Invite-Code mehr). Der allererste Nutzer wird
- * automatisch Admin und ist sofort freigeschaltet (+ eingeloggt). Jeder weitere
- * Nutzer ist zunächst `pending` (nicht freigeschaltet, keine Session) und muss
- * von einem Admin zugelassen werden, bevor ein Login möglich ist.
+ * Selbst-Registrierung (kein Invite-Code mehr). Nur der konfigurierte
+ * Bootstrap-Name (MACVIBES_ADMIN_USERNAME) wird — solange kein Admin
+ * existiert — Admin und ist sofort freigeschaltet (+ eingeloggt); mit
+ * gesetztem MACVIBES_ADMIN_BOOTSTRAP_TOKEN nur gegen Vorlage dieses Tokens.
+ * Jeder andere Nutzer ist zunächst `pending` (nicht freigeschaltet, keine
+ * Session) und muss von einem Admin zugelassen werden, bevor ein Login
+ * möglich ist.
  */
 export async function register(
   db: Db,
@@ -66,6 +112,25 @@ export async function register(
   const passwordResult = passwordSchema.safeParse(input.password);
   if (!passwordResult.success) {
     throw new DomainError(passwordResult.error.issues[0]?.message ?? 'Ungültiges Passwort');
+  }
+
+  // Bootstrap-Schutz VOR jedem Insert: Ist MACVIBES_ADMIN_BOOTSTRAP_TOKEN
+  // gesetzt, ist der Bootstrap-Name RESERVIERT — eine Registrierung mit diesem
+  // Namen verlangt das Out-of-Band-Secret. Ohne diesen Riegel könnte auf einer
+  // frischen Instanz (Erstinstallation, DB-Reset, neuer DB_PATH) jeder im LAN,
+  // der den Namen zuerst registriert, (a) Admin werden und (b) den Namen
+  // dauerhaft belegen und so den echten Betreiber aussperren. Die Prüfung gilt
+  // AUCH wenn schon ein Admin existiert — der Name bleibt dem Betreiber
+  // vorbehalten. Wichtig: ablehnen heißt KEIN User-Insert, der Name bleibt frei.
+  if (
+    config.adminUsername !== undefined &&
+    config.adminBootstrapToken != null &&
+    usernameResult.data === config.adminUsername
+  ) {
+    const eingereicht = input.bootstrapToken ?? '';
+    if (eingereicht === '' || !bootstrapTokenGueltig(eingereicht, config.adminBootstrapToken)) {
+      throw new DomainError(BOOTSTRAP_RESERVED_MESSAGE);
+    }
   }
 
   const existing = await db
@@ -132,6 +197,11 @@ export async function login(
   const found = await db.select().from(users).where(eq(users.username, username)).limit(1);
   const user = found[0];
   if (!user) {
+    // Timing-Oracle schließen: auch der unbekannte Nutzer kostet einen vollen
+    // argon2-Verify (gegen den festen Dummy-Hash) — sonst wäre über die
+    // Antwortzeit messbar, welche Benutzernamen existieren. Das Ergebnis ist
+    // egal; die Meldung ist dieselbe wie bei falschem Passwort.
+    await Bun.password.verify(password, DUMMY_PASSWORD_HASH);
     throw new DomainError(LOGIN_FAILED_MESSAGE);
   }
   const valid = await Bun.password.verify(password, user.passwordHash);
@@ -234,7 +304,26 @@ export async function ensureAdmin(db: Db, config: AuthConfig): Promise<void> {
   }
   const found = await db.select().from(users).where(eq(users.username, username)).limit(1);
   const user = found[0];
-  if (!user) return;
+  if (!user) {
+    // Der Bootstrap-Name ist gesetzt, aber noch unbelegt. Ohne
+    // MACVIBES_ADMIN_BOOTSTRAP_TOKEN reserviert register() den Namen NICHT —
+    // solange kein Admin existiert, kann also jeder im Netz den Namen
+    // beanspruchen und wird Admin. Das muss der Betreiber beim Start deutlich
+    // sehen (existiert bereits ein Admin, ist der Bootstrap-Pfad tot und die
+    // Warnung nur Rauschen).
+    if (config.adminBootstrapToken == null) {
+      const admins = await db.select({ id: users.id }).from(users).where(eq(users.role, 'admin'));
+      if (admins.length === 0) {
+        console.warn(
+          `SICHERHEITSHINWEIS: Noch KEIN Admin vorhanden und der Bootstrap-Name "${username}" ` +
+            'ist UNGESCHÜTZT — wer sich zuerst mit diesem Namen registriert, wird Admin ' +
+            '(der Server lauscht im LAN/VPN). Setze MACVIBES_ADMIN_BOOTSTRAP_TOKEN=<zufälliges Secret> ' +
+            '(z. B. `openssl rand -hex 32`) in der .env; die Erst-Registrierung verlangt dann dieses Token.',
+        );
+      }
+    }
+    return;
+  }
   if (user.role === 'admin' && user.approved) return;
 
   // F21: Beförderung nur als echter Bootstrap — solange KEIN Admin existiert.
