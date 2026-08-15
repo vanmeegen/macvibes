@@ -1,0 +1,2222 @@
+<style>
+  :root {
+    --paper: #f7f8fa;
+    --card: #ffffff;
+    --ink: #141b26;
+    --ink-soft: #3b4657;
+    --muted2: #5c6673;
+    --hair: #e2e7ed;
+    --hair2: #edf0f4;
+    --a: #b9700c;
+    --a-bg: #fbf2e0;
+    --b: #3b41b0;
+    --b-bg: #ecedfb;
+    --c: #0c7b6c;
+    --c-bg: #e1f3ef;
+    --hi: #b32530;
+    --hi-bg: #fbe9ea;
+    --am: #9a6410;
+    --am-bg: #fbf0da;
+    --gr: #5c6673;
+    --gr-bg: #eef1f4;
+    --mono-bg: #eef1f5;
+    --mono-ink: #334;
+    --shadow: 0 1px 2px rgba(20, 27, 38, 0.05), 0 8px 30px rgba(20, 27, 38, 0.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0e1319;
+      --card: #161c25;
+      --ink: #e9edf3;
+      --ink-soft: #b8c1ce;
+      --muted2: #8a95a3;
+      --hair: #273140;
+      --hair2: #1e2732;
+      --a: #e7a24b;
+      --a-bg: #2a2113;
+      --b: #9aa0f0;
+      --b-bg: #1b1d30;
+      --c: #4fc8b4;
+      --c-bg: #122824;
+      --hi: #f0808a;
+      --hi-bg: #2a1518;
+      --am: #e7b15c;
+      --am-bg: #2a2113;
+      --gr: #9aa5b3;
+      --gr-bg: #1e2732;
+      --mono-bg: #1e2732;
+      --mono-ink: #c7d0dc;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 34px rgba(0, 0, 0, 0.35);
+    }
+  }
+  :root[data-theme='dark'] {
+    --paper: #0e1319;
+    --card: #161c25;
+    --ink: #e9edf3;
+    --ink-soft: #b8c1ce;
+    --muted2: #8a95a3;
+    --hair: #273140;
+    --hair2: #1e2732;
+    --a: #e7a24b;
+    --a-bg: #2a2113;
+    --b: #9aa0f0;
+    --b-bg: #1b1d30;
+    --c: #4fc8b4;
+    --c-bg: #122824;
+    --hi: #f0808a;
+    --hi-bg: #2a1518;
+    --am: #e7b15c;
+    --am-bg: #2a2113;
+    --gr: #9aa5b3;
+    --gr-bg: #1e2732;
+    --mono-bg: #1e2732;
+    --mono-ink: #c7d0dc;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 34px rgba(0, 0, 0, 0.35);
+  }
+  :root[data-theme='light'] {
+    --paper: #f7f8fa;
+    --card: #ffffff;
+    --ink: #141b26;
+    --ink-soft: #3b4657;
+    --muted2: #5c6673;
+    --hair: #e2e7ed;
+    --hair2: #edf0f4;
+    --a: #b9700c;
+    --a-bg: #fbf2e0;
+    --b: #3b41b0;
+    --b-bg: #ecedfb;
+    --c: #0c7b6c;
+    --c-bg: #e1f3ef;
+    --hi: #b32530;
+    --hi-bg: #fbe9ea;
+    --am: #9a6410;
+    --am-bg: #fbf0da;
+    --gr: #5c6673;
+    --gr-bg: #eef1f4;
+    --mono-bg: #eef1f5;
+    --mono-ink: #334;
+    --shadow: 0 1px 2px rgba(20, 27, 38, 0.05), 0 8px 30px rgba(20, 27, 38, 0.06);
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family:
+      ui-sans-serif,
+      system-ui,
+      -apple-system,
+      'Segoe UI',
+      Roboto,
+      sans-serif;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 56px 28px 90px;
+  }
+  .lede {
+    max-width: 74ch;
+  }
+  header .ksm {
+    font:
+      600 12px/1 ui-monospace,
+      Menlo,
+      monospace;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted2);
+  }
+  h1 {
+    font-size: clamp(26px, 4vw, 40px);
+    line-height: 1.1;
+    letter-spacing: -0.01em;
+    margin: 0.5rem 0 0.4rem;
+    text-wrap: balance;
+  }
+  h2 {
+    font-size: 22px;
+    letter-spacing: -0.01em;
+    margin: 2.6rem 0 0.3rem;
+    scroll-margin-top: 20px;
+  }
+  h3 {
+    font-size: 16px;
+    margin: 1.4rem 0 0.2rem;
+  }
+  p {
+    margin: 0.5rem 0;
+    color: var(--ink-soft);
+  }
+  a {
+    color: var(--b);
+  }
+  code,
+  .ref {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.86em;
+    background: var(--mono-bg);
+    color: var(--mono-ink);
+    padding: 0.08em 0.38em;
+    border-radius: 5px;
+    white-space: nowrap;
+  }
+  .sub {
+    color: var(--muted2);
+    font-size: 15px;
+  }
+  figure {
+    margin: 26px 0 8px;
+  }
+  .fig-card {
+    background: #ffffff;
+    border: 1px solid var(--hair);
+    border-radius: 16px;
+    padding: 18px;
+    box-shadow: var(--shadow);
+    overflow-x: auto;
+  }
+  figcaption {
+    color: var(--muted2);
+    font-size: 13px;
+    margin-top: 10px;
+    text-align: center;
+  }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+    margin: 14px 0 0;
+    font-size: 13px;
+    color: var(--ink-soft);
+  }
+  .legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .dot {
+    width: 11px;
+    height: 11px;
+    border-radius: 3px;
+    display: inline-block;
+  }
+  .grid3 {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-top: 14px;
+  }
+  @media (max-width: 820px) {
+    .grid3 {
+      grid-template-columns: 1fr;
+    }
+  }
+  .mcard {
+    border: 1px solid var(--hair);
+    border-radius: 14px;
+    background: var(--card);
+    padding: 16px 18px;
+    box-shadow: var(--shadow);
+  }
+  .mcard.a {
+    border-top: 3px solid var(--a);
+  }
+  .mcard.b {
+    border-top: 3px solid var(--b);
+  }
+  .mcard.c {
+    border-top: 3px solid var(--c);
+  }
+  .mtag {
+    font:
+      700 11px/1 ui-monospace,
+      Menlo,
+      monospace;
+    letter-spacing: 0.1em;
+    padding: 3px 8px;
+    border-radius: 6px;
+    color: #fff;
+  }
+  .mtag.a {
+    background: var(--a);
+  }
+  .mtag.b {
+    background: var(--b);
+  }
+  .mtag.c {
+    background: var(--c);
+  }
+  .flow {
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 12.5px;
+    color: var(--ink);
+    background: var(--hair2);
+    border-radius: 8px;
+    padding: 9px 11px;
+    margin: 10px 0;
+    line-height: 1.7;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  .mcard ul {
+    margin: 0.4rem 0 0;
+    padding-left: 18px;
+  }
+  .mcard li {
+    margin: 0.28rem 0;
+    font-size: 14px;
+    color: var(--ink-soft);
+  }
+  .finding {
+    border: 1px solid var(--hair);
+    border-left-width: 4px;
+    border-radius: 12px;
+    background: var(--card);
+    padding: 14px 18px;
+    margin: 14px 0;
+    box-shadow: var(--shadow);
+  }
+  .finding.med {
+    border-left-color: var(--am);
+  }
+  .finding.hi {
+    border-left-color: var(--hi);
+  }
+  .fh {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .sev {
+    font:
+      700 11px/1 ui-monospace,
+      Menlo,
+      monospace;
+    letter-spacing: 0.08em;
+    padding: 4px 9px;
+    border-radius: 20px;
+  }
+  .sev.med {
+    background: var(--am-bg);
+    color: var(--am);
+  }
+  .sev.hi {
+    background: var(--hi-bg);
+    color: var(--hi);
+  }
+  .sev.low {
+    background: var(--gr-bg);
+    color: var(--gr);
+  }
+  .sev.ok {
+    background: var(--c-bg);
+    color: var(--c);
+  }
+  .finding h3 {
+    margin: 0.1rem 0 0.3rem;
+    font-size: 16.5px;
+  }
+  .finding p {
+    margin: 0.35rem 0;
+    font-size: 14.5px;
+  }
+  .finding .lbl {
+    font-weight: 700;
+    color: var(--ink);
+    font-size: 13px;
+  }
+  .lows {
+    border: 1px solid var(--hair);
+    border-radius: 12px;
+    background: var(--card);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+    margin: 14px 0;
+  }
+  .low {
+    display: grid;
+    grid-template-columns: 64px 1fr;
+    gap: 0;
+    border-top: 1px solid var(--hair2);
+  }
+  .low:first-child {
+    border-top: 0;
+  }
+  .low .id {
+    padding: 13px 12px;
+    font:
+      700 12px ui-monospace,
+      Menlo,
+      monospace;
+    color: var(--gr);
+    background: var(--gr-bg);
+  }
+  .low .bd {
+    padding: 12px 16px;
+  }
+  .low .bd b {
+    color: var(--ink);
+  }
+  .low .bd {
+    font-size: 14px;
+    color: var(--ink-soft);
+  }
+  .clean {
+    background: var(--c-bg);
+    border: 1px solid color-mix(in srgb, var(--c) 30%, transparent);
+    border-radius: 12px;
+    padding: 6px 20px 14px;
+    margin: 14px 0;
+  }
+  .clean li {
+    color: var(--ink-soft);
+    font-size: 14px;
+    margin: 0.35rem 0;
+  }
+  .callout {
+    background: var(--hi-bg);
+    border: 1px solid color-mix(in srgb, var(--hi) 34%, transparent);
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin: 12px 0;
+    font-size: 14px;
+    color: var(--ink-soft);
+  }
+  .callout b {
+    color: var(--hi);
+  }
+  hr {
+    border: 0;
+    border-top: 1px solid var(--hair);
+    margin: 2.4rem 0;
+  }
+  footer {
+    color: var(--muted2);
+    font-size: 13px;
+    margin-top: 30px;
+  }
+  .toc {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 18px 0 0;
+  }
+  .toc a {
+    font-size: 13px;
+    text-decoration: none;
+    color: var(--ink-soft);
+    border: 1px solid var(--hair);
+    border-radius: 20px;
+    padding: 5px 13px;
+    background: var(--card);
+  }
+  .toc a:hover {
+    border-color: var(--b);
+    color: var(--b);
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="ksm">macvibes · Laufzeit-Architektur</div>
+    <h1>Sandbox, Agent &amp; Preview als verschachtelte Zustandsmaschine</h1>
+    <p class="lede sub">
+      Wie die drei Maschinen ineinandergreifen, wo sie sich synchronisieren, und welche Randfälle an
+      den Nahtstellen sauber abgedeckt sind — und welche nicht. Reine Dokumentation, Stand des
+      Codes; nichts wurde geändert.
+    </p>
+    <nav class="toc">
+      <a href="#diagramm">Diagramm</a><a href="#lesen">Lesehilfe</a
+      ><a href="#maschinen">Die drei Maschinen</a> <a href="#kopplung">Kopplung</a
+      ><a href="#randfaelle">Randfälle</a><a href="#sauber">Sauber abgedeckt</a>
+    </nav>
+  </header>
+
+  <figure id="diagramm">
+    <div class="fig-card">
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        role="img"
+        aria-label="Verschachtelte Zustandsmaschine der macvibes-Laufzeit"
+        style="width: 100%; height: auto; display: block"
+        viewBox="0 0 1600 1018"
+        font-family="ui-sans-serif,system-ui,sans-serif"
+      >
+        <rect width="1600" height="1018" fill="#FAFBFC" />
+        <marker
+          id="ah-8A5A00"
+          viewBox="0 0 10 10"
+          refX="8.5"
+          refY="5"
+          markerWidth="7"
+          markerHeight="7"
+          orient="auto-start-reverse"
+        >
+          <path d="M0 0 L10 5 L0 10 z" fill="#8A5A00" />
+        </marker>
+        <marker
+          id="ah-0C7B6C"
+          viewBox="0 0 10 10"
+          refX="8.5"
+          refY="5"
+          markerWidth="7"
+          markerHeight="7"
+          orient="auto-start-reverse"
+        >
+          <path d="M0 0 L10 5 L0 10 z" fill="#0C7B6C" />
+        </marker>
+        <marker
+          id="ah-B32530"
+          viewBox="0 0 10 10"
+          refX="8.5"
+          refY="5"
+          markerWidth="7"
+          markerHeight="7"
+          orient="auto-start-reverse"
+        >
+          <path d="M0 0 L10 5 L0 10 z" fill="#B32530" />
+        </marker>
+        <marker
+          id="ah-B9700C"
+          viewBox="0 0 10 10"
+          refX="8.5"
+          refY="5"
+          markerWidth="7"
+          markerHeight="7"
+          orient="auto-start-reverse"
+        >
+          <path d="M0 0 L10 5 L0 10 z" fill="#B9700C" />
+        </marker>
+        <marker
+          id="ah-3B41B0"
+          viewBox="0 0 10 10"
+          refX="8.5"
+          refY="5"
+          markerWidth="7"
+          markerHeight="7"
+          orient="auto-start-reverse"
+        >
+          <path d="M0 0 L10 5 L0 10 z" fill="#3B41B0" />
+        </marker>
+        <marker
+          id="ah-0C7B6C"
+          viewBox="0 0 10 10"
+          refX="8.5"
+          refY="5"
+          markerWidth="7"
+          markerHeight="7"
+          orient="auto-start-reverse"
+        >
+          <path d="M0 0 L10 5 L0 10 z" fill="#0C7B6C" />
+        </marker>
+        <marker
+          id="ah-B32530"
+          viewBox="0 0 10 10"
+          refX="8.5"
+          refY="5"
+          markerWidth="7"
+          markerHeight="7"
+          orient="auto-start-reverse"
+        >
+          <path d="M0 0 L10 5 L0 10 z" fill="#B32530" />
+        </marker>
+        <marker
+          id="ah-5B6675"
+          viewBox="0 0 10 10"
+          refX="8.5"
+          refY="5"
+          markerWidth="7"
+          markerHeight="7"
+          orient="auto-start-reverse"
+        >
+          <path d="M0 0 L10 5 L0 10 z" fill="#5B6675" />
+        </marker>
+        <marker
+          id="ah-18202E"
+          viewBox="0 0 10 10"
+          refX="8.5"
+          refY="5"
+          markerWidth="7"
+          markerHeight="7"
+          orient="auto-start-reverse"
+        >
+          <path d="M0 0 L10 5 L0 10 z" fill="#18202E" />
+        </marker>
+        <text x="40" y="46" font-size="26" font-weight="800" fill="#18202E" letter-spacing=".2">
+          macvibes · Laufzeit als verschachtelte Zustandsmaschine
+        </text>
+        <text x="40" y="70" font-size="13.5" fill="#5B6675">
+          Die Sandbox-VM (A) trägt im Superzustand «running» zwei orthogonale Regionen: den
+          Agent-Turn (B) und den Preview-Status (C). Gestrichelte Pfeile = maschinenübergreifende
+          Synchronisation.
+        </text>
+        <rect
+          x="24"
+          y="92"
+          width="1552"
+          height="872"
+          rx="18"
+          fill="none"
+          stroke="#B9700C"
+          stroke-width="2.5"
+        />
+        <path
+          d="M 24 126 L 24 110 Q 24 92 42 92 L 1558 92 Q 1576 92 1576 110 L 1576 126 Z"
+          fill="#FBEFD8"
+        />
+        <text
+          x="44"
+          y="115"
+          font-family="ui-sans-serif,system-ui,Segoe UI,sans-serif"
+          font-size="15"
+          font-weight="700"
+          fill="#B9700C"
+          letter-spacing=".4"
+        >
+          A — SANDBOX · VM-Lebenszyklus
+        </text>
+        <text
+          x="1558"
+          y="115"
+          text-anchor="end"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="12.5"
+          fill="#B9700C"
+          opacity=".9"
+        >
+          sandbox/sandboxManager.ts
+        </text>
+        <circle cx="60" cy="183" r="6" fill="#B9700C" />
+        <rect
+          x="78"
+          y="158"
+          width="132"
+          height="50"
+          rx="9"
+          fill="#FCF4E6"
+          stroke="#B9700C"
+          stroke-width="1.8"
+        />
+        <text
+          x="144"
+          y="188"
+          text-anchor="middle"
+          font-family="ui-monospace,SFMono-Regular,Menlo,monospace"
+          font-size="13.5"
+          font-weight="700"
+          fill="#18202E"
+        >
+          stopped
+        </text>
+        <rect
+          x="262"
+          y="158"
+          width="140"
+          height="50"
+          rx="9"
+          fill="#FCF4E6"
+          stroke="#B9700C"
+          stroke-width="1.8"
+        />
+        <text
+          x="332"
+          y="180"
+          text-anchor="middle"
+          font-family="ui-monospace,SFMono-Regular,Menlo,monospace"
+          font-size="13.5"
+          font-weight="700"
+          fill="#18202E"
+        >
+          starting
+        </text>
+        <text
+          x="332"
+          y="196"
+          text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10"
+          fill="#5B6675"
+        >
+          provider.start()
+        </text>
+        <rect
+          x="452"
+          y="158"
+          width="138"
+          height="50"
+          rx="9"
+          fill="#FCF4E6"
+          stroke="#B9700C"
+          stroke-width="1.8"
+        />
+        <text
+          x="521"
+          y="180"
+          text-anchor="middle"
+          font-family="ui-monospace,SFMono-Regular,Menlo,monospace"
+          font-size="13.5"
+          font-weight="700"
+          fill="#18202E"
+        >
+          stopping
+        </text>
+        <text
+          x="521"
+          y="196"
+          text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10"
+          fill="#5B6675"
+        >
+          handle.stop()
+        </text>
+        <rect
+          x="48"
+          y="232"
+          width="1504"
+          height="716"
+          rx="18"
+          fill="none"
+          stroke="#B9700C"
+          stroke-width="2.5"
+        />
+        <path
+          d="M 48 266 L 48 250 Q 48 232 66 232 L 1534 232 Q 1552 232 1552 250 L 1552 266 Z"
+          fill="#FBEFD8"
+        />
+        <text
+          x="68"
+          y="255"
+          font-family="ui-sans-serif,system-ui,Segoe UI,sans-serif"
+          font-size="15"
+          font-weight="700"
+          fill="#B9700C"
+          letter-spacing=".4"
+        >
+          running (Superzustand)
+        </text>
+        <text
+          x="1534"
+          y="255"
+          text-anchor="end"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="12.5"
+          fill="#B9700C"
+          opacity=".9"
+        >
+          previewStatus echt nur hier — sonst hart „stopped“
+        </text>
+        <path
+          d="M 210 183 L 262 183"
+          fill="none"
+          stroke="#B9700C"
+          stroke-width="1.8"
+          marker-end="url(#ah-B9700C)"
+        />
+        <rect x="170.05" y="140" width="131.9" height="15" rx="3" fill="#FAFBFC" opacity=".95" />
+        <text
+          x="236"
+          y="151"
+          text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="11"
+          font-weight="600"
+          fill="#B9700C"
+        >
+          enter / ensureRunning
+        </text>
+        <path
+          d="M 332 208 L 332 224 L 144 224 L 144 208"
+          fill="none"
+          stroke="#B32530"
+          stroke-width="1.8"
+          stroke-dasharray="5 4"
+          marker-end="url(#ah-B32530)"
+        />
+        <rect
+          x="166.14999999999998"
+          y="210"
+          width="143.70000000000002"
+          height="15"
+          rx="3"
+          fill="#FAFBFC"
+          opacity=".95"
+        />
+        <text
+          x="238"
+          y="221"
+          text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="11"
+          font-weight="600"
+          fill="#B32530"
+        >
+          Startfehler / Kapazität
+        </text>
+        <path
+          d="M 521 158 L 521 140 L 144 140 L 144 158"
+          fill="none"
+          stroke="#B9700C"
+          stroke-width="1.8"
+          marker-end="url(#ah-B9700C)"
+        />
+        <rect x="299.55" y="124" width="72.9" height="15" rx="3" fill="#FAFBFC" opacity=".95" />
+        <text
+          x="336"
+          y="135"
+          text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="11"
+          font-weight="600"
+          fill="#B9700C"
+        >
+          stop fertig
+        </text>
+        <path
+          d="M 650 232 L 521 208"
+          fill="none"
+          stroke="#B9700C"
+          stroke-width="1.8"
+          marker-end="url(#ah-B9700C)"
+        />
+        <rect x="528.25" y="213" width="155.5" height="15" rx="3" fill="#FAFBFC" opacity=".95" />
+        <text
+          x="606"
+          y="224"
+          text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="11"
+          font-weight="600"
+          fill="#B9700C"
+        >
+          stop / Grace / Idle / LRU
+        </text>
+        <text x="596" y="252" font-size="10.5" fill="#B9700C" opacity=".95">
+          beim Verlassen von running: previewStatus→„stopped“ · currentHandle.abort()
+        </text>
+        <rect
+          x="58"
+          y="452"
+          width="250"
+          height="118"
+          rx="7"
+          fill="#FCF4E6"
+          stroke="#B9700C"
+          stroke-width="1"
+          stroke-dasharray="4 3"
+        />
+        <text
+          x="69"
+          y="469"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="11.5"
+          font-weight="700"
+          fill="#B9700C"
+        >
+          Kopplung an Maschine A
+        </text>
+        <text
+          x="69"
+          y="483.5"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10.3"
+          font-weight="400"
+          fill="#5B6675"
+        >
+          viewers (H11): enter/leave ⇒ Grace
+        </text>
+        <text
+          x="69"
+          y="498"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10.3"
+          font-weight="400"
+          fill="#5B6675"
+        >
+          turn-active ⇒ isBusy() ⇒ Grace
+        </text>
+        <text
+          x="69"
+          y="512.5"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10.3"
+          font-weight="400"
+          fill="#5B6675"
+        >
+          &amp; Idle aufgeschoben
+        </text>
+        <text
+          x="69"
+          y="527"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10.3"
+          font-weight="400"
+          fill="#5B6675"
+        >
+          idleTimer: kein Aufschub
+        </text>
+        <text
+          x="69"
+          y="541.5"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10.3"
+          font-weight="400"
+          fill="#5B6675"
+        >
+          detachForReload: nur Timer, VM lebt
+        </text>
+        <rect
+          x="344"
+          y="276"
+          width="1184"
+          height="384"
+          rx="12"
+          fill="#E4E6F8"
+          fill-opacity=".3"
+          stroke="#3B41B0"
+          stroke-width="1.4"
+        />
+        <rect x="344" y="276" width="184" height="26" rx="9" fill="#3B41B0" />
+        <text
+          x="358"
+          y="294"
+          font-family="ui-monospace,Menlo,monospace"
+          font-size="12"
+          font-weight="700"
+          fill="#fff"
+          letter-spacing=".6"
+        >
+          REGION B
+        </text>
+        <text
+          x="542"
+          y="294"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="13"
+          font-weight="600"
+          fill="#3B41B0"
+        >
+          Agent-Turn · services/chatService.ts
+        </text>
+        <circle cx="368" cy="372" r="6" fill="#3B41B0" />
+        <rect
+          x="390"
+          y="346"
+          width="112"
+          height="52"
+          rx="9"
+          fill="#ECEDFB"
+          stroke="#3B41B0"
+          stroke-width="1.8"
+        />
+        <text
+          x="446"
+          y="377"
+          text-anchor="middle"
+          font-family="ui-monospace,SFMono-Regular,Menlo,monospace"
+          font-size="13.5"
+          font-weight="700"
+          fill="#18202E"
+        >
+          idle
+        </text>
+        <rect
+          x="532"
+          y="346"
+          width="112"
+          height="52"
+          rx="9"
+          fill="#ECEDFB"
+          stroke="#3B41B0"
+          stroke-width="1.8"
+        />
+        <text
+          x="588"
+          y="369"
+          text-anchor="middle"
+          font-family="ui-monospace,SFMono-Regular,Menlo,monospace"
+          font-size="13.5"
+          font-weight="700"
+          fill="#18202E"
+        >
+          queued
+        </text>
+        <text
+          x="588"
+          y="385"
+          text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10"
+          fill="#5B6675"
+        >
+          sendMessage
+        </text>
+        <rect
+          x="674"
+          y="346"
+          width="190"
+          height="52"
+          rx="9"
+          fill="#ECEDFB"
+          stroke="#3B41B0"
+          stroke-width="1.8"
+        />
+        <text
+          x="769"
+          y="369"
+          text-anchor="middle"
+          font-family="ui-monospace,SFMono-Regular,Menlo,monospace"
+          font-size="13.5"
+          font-weight="700"
+          fill="#18202E"
+        >
+          waiting-for-conn
+        </text>
+        <text
+          x="769"
+          y="385"
+          text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10"
+          fill="#5B6675"
+        >
+          activeTurnId · Handle null
+        </text>
+        <rect
+          x="904"
+          y="346"
+          width="148"
+          height="52"
+          rx="9"
+          fill="#ECEDFB"
+          stroke="#3B41B0"
+          stroke-width="1.8"
+        />
+        <text
+          x="978"
+          y="369"
+          text-anchor="middle"
+          font-family="ui-monospace,SFMono-Regular,Menlo,monospace"
+          font-size="13.5"
+          font-weight="700"
+          fill="#18202E"
+        >
+          turn-active
+        </text>
+        <text
+          x="978"
+          y="385"
+          text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10"
+          fill="#5B6675"
+        >
+          currentHandle ≠ null
+        </text>
+        <rect
+          x="1104"
+          y="328"
+          width="122"
+          height="46"
+          rx="9"
+          fill="#E3F4F0"
+          stroke="#0C7B6C"
+          stroke-width="1.8"
+        />
+        <text
+          x="1165"
+          y="348"
+          text-anchor="middle"
+          font-family="ui-monospace,SFMono-Regular,Menlo,monospace"
+          font-size="13.5"
+          font-weight="700"
+          fill="#18202E"
+        >
+          done
+        </text>
+        <text
+          x="1165"
+          y="364"
+          text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10"
+          fill="#5B6675"
+        >
+          turn-completed
+        </text>
+        <rect
+          x="1101"
+          y="381"
+          width="128"
+          height="52"
+          rx="11"
+          fill="none"
+          stroke="#B32530"
+          stroke-width="1"
+          opacity=".5"
+        />
+        <rect
+          x="1104"
+          y="384"
+          width="122"
+          height="46"
+          rx="9"
+          fill="#FBEAEB"
+          stroke="#B32530"
+          stroke-width="1.8"
+        />
+        <text
+          x="1165"
+          y="404"
+          text-anchor="middle"
+          font-family="ui-monospace,SFMono-Regular,Menlo,monospace"
+          font-size="13.5"
+          font-weight="700"
+          fill="#18202E"
+        >
+          aborting
+        </text>
+        <text
+          x="1165"
+          y="420"
+          text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10"
+          fill="#5B6675"
+        >
+          „Stop heißt Stop“
+        </text>
+        <rect
+          x="1101"
+          y="437"
+          width="128"
+          height="52"
+          rx="11"
+          fill="none"
+          stroke="#B32530"
+          stroke-width="1"
+          opacity=".5"
+        />
+        <rect
+          x="1104"
+          y="440"
+          width="122"
+          height="46"
+          rx="9"
+          fill="#FBEAEB"
+          stroke="#B32530"
+          stroke-width="1.8"
+        />
+        <text
+          x="1165"
+          y="460"
+          text-anchor="middle"
+          font-family="ui-monospace,SFMono-Regular,Menlo,monospace"
+          font-size="13.5"
+          font-weight="700"
+          fill="#18202E"
+        >
+          failed
+        </text>
+        <text
+          x="1165"
+          y="476"
+          text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10"
+          fill="#5B6675"
+        >
+          error-Zeile
+        </text>
+        <path
+          d="M 502 372 L 532 372"
+          fill="none"
+          stroke="#3B41B0"
+          stroke-width="1.8"
+          marker-end="url(#ah-3B41B0)"
+        />
+        <path
+          d="M 644 372 L 674 372"
+          fill="none"
+          stroke="#3B41B0"
+          stroke-width="1.8"
+          marker-end="url(#ah-3B41B0)"
+        />
+        <path
+          d="M 864 372 L 904 372"
+          fill="none"
+          stroke="#3B41B0"
+          stroke-width="1.8"
+          marker-end="url(#ah-3B41B0)"
+        />
+        <rect x="832.8" y="327" width="102.4" height="15" rx="3" fill="#FAFBFC" opacity=".95" />
+        <text
+          x="884"
+          y="338"
+          text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="11"
+          font-weight="600"
+          fill="#3B41B0"
+        >
+          Daemon verbunden
+        </text>
+        <path
+          d="M 1052 372 L 1104 351"
+          fill="none"
+          stroke="#0C7B6C"
+          stroke-width="1.8"
+          marker-end="url(#ah-0C7B6C)"
+        />
+        <path
+          d="M 1007.6 398 L 1104 407"
+          fill="none"
+          stroke="#B32530"
+          stroke-width="1.8"
+          marker-end="url(#ah-B32530)"
+        />
+        <rect x="961.6" y="393" width="102.4" height="15" rx="3" fill="#FAFBFC" opacity=".95" />
+        <text
+          x="1064"
+          y="404"
+          text-anchor="end"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="11"
+          font-weight="600"
+          fill="#B32530"
+        >
+          stop / interrupt
+        </text>
+        <path
+          d="M 1165 486 L 1165 508 L 769 508 L 769 398"
+          fill="none"
+          stroke="#3B41B0"
+          stroke-width="1.8"
+          stroke-dasharray="6 4"
+          marker-end="url(#ah-3B41B0)"
+        />
+        <rect
+          x="663.65"
+          y="494"
+          width="320.70000000000005"
+          height="15"
+          rx="3"
+          fill="#FAFBFC"
+          opacity=".95"
+        />
+        <text
+          x="824"
+          y="505"
+          text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="11"
+          font-weight="600"
+          fill="#3B41B0"
+        >
+          Retry 1× (sawMeaningful = false · kein Nutzerabbruch)
+        </text>
+        <rect
+          x="384"
+          y="524"
+          width="700"
+          height="104"
+          rx="10"
+          fill="#fff"
+          stroke="#3B41B0"
+          stroke-width="1.4"
+        />
+        <text
+          x="398"
+          y="543"
+          font-family="ui-monospace,Menlo,monospace"
+          font-size="11.5"
+          font-weight="700"
+          fill="#3B41B0"
+        >
+          Sub-Maschine: Daemon-Verbindung — agentGateway ⇄ daemon/main.ts
+        </text>
+        <circle cx="408" cy="589" r="6" fill="#3B41B0" />
+        <rect
+          x="424"
+          y="566"
+          width="128"
+          height="46"
+          rx="9"
+          fill="#ECEDFB"
+          stroke="#3B41B0"
+          stroke-width="1.8"
+        />
+        <text
+          x="488"
+          y="594"
+          text-anchor="middle"
+          font-family="ui-monospace,SFMono-Regular,Menlo,monospace"
+          font-size="13.5"
+          font-weight="700"
+          fill="#18202E"
+        >
+          disconnected
+        </text>
+        <rect
+          x="598"
+          y="566"
+          width="128"
+          height="46"
+          rx="9"
+          fill="#ECEDFB"
+          stroke="#3B41B0"
+          stroke-width="1.8"
+        />
+        <text
+          x="662"
+          y="586"
+          text-anchor="middle"
+          font-family="ui-monospace,SFMono-Regular,Menlo,monospace"
+          font-size="13.5"
+          font-weight="700"
+          fill="#18202E"
+        >
+          connecting
+        </text>
+        <text
+          x="662"
+          y="602"
+          text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10"
+          fill="#5B6675"
+        >
+          WS dial-out
+        </text>
+        <rect
+          x="772"
+          y="566"
+          width="128"
+          height="46"
+          rx="9"
+          fill="#ECEDFB"
+          stroke="#3B41B0"
+          stroke-width="1.8"
+        />
+        <text
+          x="836"
+          y="594"
+          text-anchor="middle"
+          font-family="ui-monospace,SFMono-Regular,Menlo,monospace"
+          font-size="13.5"
+          font-weight="700"
+          fill="#18202E"
+        >
+          connected
+        </text>
+        <path
+          d="M 552 589 L 598 589"
+          fill="none"
+          stroke="#3B41B0"
+          stroke-width="1.8"
+          marker-end="url(#ah-3B41B0)"
+        />
+        <rect
+          x="550.35"
+          y="573"
+          width="49.300000000000004"
+          height="15"
+          rx="3"
+          fill="#FAFBFC"
+          opacity=".95"
+        />
+        <text
+          x="575"
+          y="584"
+          text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="11"
+          font-weight="600"
+          fill="#3B41B0"
+        >
+          connect
+        </text>
+        <path
+          d="M 726 589 L 772 589"
+          fill="none"
+          stroke="#3B41B0"
+          stroke-width="1.8"
+          marker-end="url(#ah-3B41B0)"
+        />
+        <rect x="715.5" y="573" width="67" height="15" rx="3" fill="#FAFBFC" opacity=".95" />
+        <text
+          x="749"
+          y="584"
+          text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="11"
+          font-weight="600"
+          fill="#3B41B0"
+        >
+          open→ready
+        </text>
+        <path
+          d="M 836 612 L 836 620 L 488 620 L 488 612"
+          fill="none"
+          stroke="#B32530"
+          stroke-width="1.8"
+          stroke-dasharray="5 4"
+          marker-end="url(#ah-B32530)"
+        />
+        <rect
+          x="579.7"
+          y="605"
+          width="208.60000000000002"
+          height="15"
+          rx="3"
+          fill="#FAFBFC"
+          opacity=".95"
+        />
+        <text
+          x="684"
+          y="616"
+          text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="11"
+          font-weight="600"
+          fill="#B32530"
+        >
+          close 1006 → abandonTurn + Backoff
+        </text>
+        <text x="920" y="574" font-size="10.3" fill="#5B6675">ersetzt alte Verbindung (4000)</text>
+        <text x="920" y="590" font-size="10.3" fill="#5B6675">Ping/Pong + turn-started-ACK</text>
+        <text x="920" y="606" font-size="10.3" fill="#5B6675">(gegen msb-NAT)</text>
+        <rect
+          x="1104"
+          y="520"
+          width="406"
+          height="112"
+          rx="7"
+          fill="#ECEDFB"
+          stroke="#3B41B0"
+          stroke-width="1"
+          stroke-dasharray="4 3"
+        />
+        <text
+          x="1115"
+          y="537"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="11.5"
+          font-weight="700"
+          fill="#3B41B0"
+        >
+          Timeouts &amp; Wiederaufnahme
+        </text>
+        <text
+          x="1115"
+          y="551.5"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10.3"
+          font-weight="400"
+          fill="#5B6675"
+        >
+          vor 1. Event: coldStart / firstEvent
+        </text>
+        <text
+          x="1115"
+          y="566"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10.3"
+          font-weight="400"
+          fill="#5B6675"
+        >
+          danach: idle (slow-Var. für lok. Modelle)
+        </text>
+        <text
+          x="1115"
+          y="580.5"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10.3"
+          font-weight="400"
+          fill="#5B6675"
+        >
+          resumeUnansweredTurn beim Öffnen:
+        </text>
+        <text
+          x="1115"
+          y="595"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10.3"
+          font-weight="400"
+          fill="#5B6675"
+        >
+          letzte DB-User-Zeile → selbe turnId
+        </text>
+        <rect
+          x="344"
+          y="680"
+          width="1184"
+          height="250"
+          rx="12"
+          fill="#D5EEE8"
+          fill-opacity=".3"
+          stroke="#0C7B6C"
+          stroke-width="1.4"
+        />
+        <rect x="344" y="680" width="184" height="26" rx="9" fill="#0C7B6C" />
+        <text
+          x="358"
+          y="698"
+          font-family="ui-monospace,Menlo,monospace"
+          font-size="12"
+          font-weight="700"
+          fill="#fff"
+          letter-spacing=".6"
+        >
+          REGION C
+        </text>
+        <text
+          x="542"
+          y="698"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="13"
+          font-weight="600"
+          fill="#0C7B6C"
+        >
+          Preview-Status · preview/* + previewStatusPoller
+        </text>
+        <circle cx="368" cy="760" r="6" fill="#0C7B6C" />
+        <rect
+          x="390"
+          y="734"
+          width="128"
+          height="52"
+          rx="9"
+          fill="#E3F4F0"
+          stroke="#0C7B6C"
+          stroke-width="1.8"
+        />
+        <text
+          x="454"
+          y="765"
+          text-anchor="middle"
+          font-family="ui-monospace,SFMono-Regular,Menlo,monospace"
+          font-size="13.5"
+          font-weight="700"
+          fill="#18202E"
+        >
+          starting
+        </text>
+        <rect
+          x="594"
+          y="734"
+          width="128"
+          height="52"
+          rx="9"
+          fill="#E3F4F0"
+          stroke="#0C7B6C"
+          stroke-width="1.8"
+        />
+        <text
+          x="658"
+          y="757"
+          text-anchor="middle"
+          font-family="ui-monospace,SFMono-Regular,Menlo,monospace"
+          font-size="13.5"
+          font-weight="700"
+          fill="#18202E"
+        >
+          ready
+        </text>
+        <text
+          x="658"
+          y="773"
+          text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10"
+          fill="#5B6675"
+        >
+          HTTP-Probe antwortet
+        </text>
+        <rect
+          x="796"
+          y="734"
+          width="150"
+          height="52"
+          rx="9"
+          fill="#E3F4F0"
+          stroke="#0C7B6C"
+          stroke-width="1.8"
+        />
+        <text
+          x="871"
+          y="757"
+          text-anchor="middle"
+          font-family="ui-monospace,SFMono-Regular,Menlo,monospace"
+          font-size="13.5"
+          font-weight="700"
+          fill="#18202E"
+        >
+          restarting
+        </text>
+        <text
+          x="871"
+          y="773"
+          text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10"
+          fill="#5B6675"
+        >
+          monit Restart pending
+        </text>
+        <rect
+          x="1017"
+          y="731"
+          width="138"
+          height="58"
+          rx="11"
+          fill="none"
+          stroke="#B32530"
+          stroke-width="1"
+          opacity=".5"
+        />
+        <rect
+          x="1020"
+          y="734"
+          width="132"
+          height="52"
+          rx="9"
+          fill="#FBEAEB"
+          stroke="#B32530"
+          stroke-width="1.8"
+        />
+        <text
+          x="1086"
+          y="757"
+          text-anchor="middle"
+          font-family="ui-monospace,SFMono-Regular,Menlo,monospace"
+          font-size="13.5"
+          font-weight="700"
+          fill="#18202E"
+        >
+          failed
+        </text>
+        <text
+          x="1086"
+          y="773"
+          text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10"
+          fill="#5B6675"
+        >
+          Crash-Loop 5/40 → unmonitor
+        </text>
+        <rect
+          x="1224"
+          y="734"
+          width="130"
+          height="52"
+          rx="9"
+          fill="#EEF1F4"
+          stroke="#5B6675"
+          stroke-width="1.8"
+        />
+        <text
+          x="1289"
+          y="757"
+          text-anchor="middle"
+          font-family="ui-monospace,SFMono-Regular,Menlo,monospace"
+          font-size="13.5"
+          font-weight="700"
+          fill="#18202E"
+        >
+          stopped
+        </text>
+        <text
+          x="1289"
+          y="773"
+          text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10"
+          fill="#5B6675"
+        >
+          Sandbox ≠ running
+        </text>
+        <path
+          d="M 518 760 L 594 760"
+          fill="none"
+          stroke="#0C7B6C"
+          stroke-width="1.8"
+          marker-end="url(#ah-0C7B6C)"
+        />
+        <rect x="498.9" y="743" width="114.2" height="15" rx="3" fill="#FAFBFC" opacity=".95" />
+        <text
+          x="556"
+          y="754"
+          text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="11"
+          font-weight="600"
+          fill="#0C7B6C"
+        >
+          Running + Probe ok
+        </text>
+        <path
+          d="M 722 760 L 796 760"
+          fill="none"
+          stroke="#0C7B6C"
+          stroke-width="1.8"
+          marker-end="url(#ah-0C7B6C)"
+        />
+        <rect x="740.25" y="743" width="37.5" height="15" rx="3" fill="#FAFBFC" opacity=".95" />
+        <text
+          x="759"
+          y="754"
+          text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="11"
+          font-weight="600"
+          fill="#0C7B6C"
+        >
+          Crash
+        </text>
+        <path
+          d="M 871 786 L 871 820 L 658 820 L 658 786"
+          fill="none"
+          stroke="#0C7B6C"
+          stroke-width="1.8"
+          stroke-dasharray="6 4"
+          marker-end="url(#ah-0C7B6C)"
+        />
+        <rect x="635.75" y="805" width="96.5" height="15" rx="3" fill="#FAFBFC" opacity=".95" />
+        <text
+          x="684"
+          y="816"
+          text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="11"
+          font-weight="600"
+          fill="#0C7B6C"
+        >
+          Probe wieder ok
+        </text>
+        <path
+          d="M 946 760 L 1020 760"
+          fill="none"
+          stroke="#B32530"
+          stroke-width="1.8"
+          marker-end="url(#ah-B32530)"
+        />
+        <path
+          d="M 1152 760 L 1224 760"
+          fill="none"
+          stroke="#5B6675"
+          stroke-width="1.8"
+          marker-end="url(#ah-5B6675)"
+        />
+        <rect x="1169.25" y="743" width="37.5" height="15" rx="3" fill="#FAFBFC" opacity=".95" />
+        <text
+          x="1188"
+          y="754"
+          text-anchor="middle"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="11"
+          font-weight="600"
+          fill="#5B6675"
+        >
+          Stopp
+        </text>
+        <rect
+          x="366"
+          y="838"
+          width="468"
+          height="78"
+          rx="7"
+          fill="#E3F4F0"
+          stroke="#0C7B6C"
+          stroke-width="1"
+          stroke-dasharray="4 3"
+        />
+        <text
+          x="377"
+          y="855"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="11.5"
+          font-weight="700"
+          fill="#0C7B6C"
+        >
+          Statusquellen
+        </text>
+        <text
+          x="377"
+          y="869.5"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10.3"
+          font-weight="400"
+          fill="#5B6675"
+        >
+          Push (primär): daemon/previewStatusReporter · staleMs 15 s
+        </text>
+        <text
+          x="377"
+          y="884"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10.3"
+          font-weight="400"
+          fill="#5B6675"
+        >
+          Poll (Fallback): previewStatusPoller · 250 ms → 2000 ms
+        </text>
+        <text
+          x="377"
+          y="898.5"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10.3"
+          font-weight="400"
+          fill="#5B6675"
+        >
+          monit: Zyklus 2 s · Port-Health 30× · Crash-Loop 5/40
+        </text>
+        <rect
+          x="856"
+          y="838"
+          width="476"
+          height="78"
+          rx="7"
+          fill="#E3F4F0"
+          stroke="#0C7B6C"
+          stroke-width="1"
+          stroke-dasharray="4 3"
+        />
+        <text
+          x="867"
+          y="855"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="11.5"
+          font-weight="700"
+          fill="#0C7B6C"
+        >
+          ready-Gate (gateReadyWithProbe)
+        </text>
+        <text
+          x="867"
+          y="869.5"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10.3"
+          font-weight="400"
+          fill="#5B6675"
+        >
+          monit sieht nur den PROZESS — HTTP kommt Sekunden später.
+        </text>
+        <text
+          x="867"
+          y="884"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10.3"
+          font-weight="400"
+          fill="#5B6675"
+        >
+          „ready“ erst mit echter HTTP-Antwort, sonst starting/restarting.
+        </text>
+        <text
+          x="867"
+          y="898.5"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10.3"
+          font-weight="400"
+          fill="#5B6675"
+        >
+          httpProbe: redirect:manual (H10, VM-Location angreiferkontrolliert)
+        </text>
+        <path
+          d="M 72 289 L 344 289"
+          fill="none"
+          stroke="#0C7B6C"
+          stroke-width="2"
+          stroke-dasharray="2 3"
+          marker-end="url(#ah-0C7B6C)"
+        />
+        <text
+          x="88"
+          y="285"
+          text-anchor="start"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="11"
+          font-weight="600"
+          fill="#0C7B6C"
+        >
+          entry
+        </text>
+        <path
+          d="M 72 693 L 344 693"
+          fill="none"
+          stroke="#0C7B6C"
+          stroke-width="2"
+          stroke-dasharray="2 3"
+          marker-end="url(#ah-0C7B6C)"
+        />
+        <text
+          x="88"
+          y="689"
+          text-anchor="start"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="11"
+          font-weight="600"
+          fill="#0C7B6C"
+        >
+          entry
+        </text>
+        <path
+          d="M 344 500 L 314 500"
+          fill="none"
+          stroke="#8A5A00"
+          stroke-width="2"
+          stroke-dasharray="6 4"
+          marker-end="url(#ah-8A5A00)"
+        />
+        <path
+          d="M 344 528 L 314 528"
+          fill="none"
+          stroke="#8A5A00"
+          stroke-width="2"
+          stroke-dasharray="6 4"
+          marker-end="url(#ah-8A5A00)"
+        />
+        <rect x="44" y="977" width="16" height="12" rx="3" fill="#B9700C" opacity=".85" />
+        <text x="66" y="988" font-size="12" fill="#18202E">A Sandbox</text>
+        <rect x="157.9" y="977" width="16" height="12" rx="3" fill="#3B41B0" opacity=".85" />
+        <text x="179.9" y="988" font-size="12" fill="#18202E">B Agent-Turn</text>
+        <rect x="293.1" y="977" width="16" height="12" rx="3" fill="#0C7B6C" opacity=".85" />
+        <text x="315.1" y="988" font-size="12" fill="#18202E">C Preview</text>
+        <rect x="407" y="977" width="16" height="12" rx="3" fill="#B32530" opacity=".85" />
+        <text x="429" y="988" font-size="12" fill="#18202E">terminal / Fehler</text>
+        <rect x="577.7" y="977" width="16" height="12" rx="3" fill="#8A5A00" opacity=".85" />
+        <text x="599.7" y="988" font-size="12" fill="#18202E">Kopplung (gestrichelt)</text>
+        <text x="1560" y="988" text-anchor="end" font-size="11" fill="#5B6675">
+          Dokumentation — Stand des Codes, nichts geändert
+        </text>
+      </svg>
+    </div>
+    <div class="legend">
+      <span><i class="dot" style="background: #b9700c"></i>A — Sandbox</span>
+      <span><i class="dot" style="background: #3b41b0"></i>B — Agent-Turn</span>
+      <span><i class="dot" style="background: #0c7b6c"></i>C — Preview</span>
+      <span><i class="dot" style="background: #b32530"></i>terminal / Fehler</span>
+      <span><i class="dot" style="background: #8a5a00"></i>Kopplung (gestrichelt)</span>
+    </div>
+    <figcaption>
+      Der Superzustand «running» von A enthält die orthogonalen Regionen B und C; B enthält
+      seinerseits die Sub-Maschine der Daemon-Verbindung.
+    </figcaption>
+  </figure>
+
+  <h2 id="lesen">Wie man das Diagramm liest</h2>
+  <p>Es ist ein <b>Statechart</b>, kein Flussdiagramm. Drei Konzepte tragen alles:</p>
+  <ul class="lede">
+    <li>
+      <b>Verschachtelung.</b> A ist der Rahmen (der VM-Lebenszyklus). B und C existieren
+      <em>nur</em> innerhalb von <code>running</code>. Verlässt A diesen Zustand, werden beide
+      inneren Maschinen zwangsverlassen.
+    </li>
+    <li>
+      <b>Orthogonalität.</b> B und C laufen <em>gleichzeitig und unabhängig</em>. Ein Agent-Turn und
+      der Preview-Status ändern sich parallel, ohne einander direkt zu kennen.
+    </li>
+    <li>
+      <b>Kopplung.</b> Die gestrichelten Pfeile sind die einzige Verdrahtung zwischen den Ebenen —
+      genau die Synchronisationspunkte, um die es hier geht.
+    </li>
+  </ul>
+
+  <h2 id="maschinen">Die drei Maschinen</h2>
+  <div class="grid3">
+    <div class="mcard a">
+      <span class="mtag a">A · SANDBOX</span>
+      <p class="sub" style="margin: 0.6rem 0 0"><code>sandbox/sandboxManager.ts</code></p>
+      <div class="flow">stopped → starting → running → stopping → stopped</div>
+      <ul>
+        <li>
+          <b>Grace-Timer</b> beim letzten Betrachter; <code>isBusy()</code> schiebt ihn auf — ein
+          laufender Turn wird nie gekillt.
+        </li>
+        <li><b>Idle-Timer</b> hält die VM nur begrenzt am Leben; <em>kein</em> isBusy-Aufschub.</li>
+        <li>
+          <b>viewers-Set (H11):</b> pro Verbindung, überlebt einen VM-Stopp (folgt der Subscription,
+          nicht der VM).
+        </li>
+        <li>
+          <b>LRU-Eviction</b> bei voller Kapazität — Opfer nur <code>running</code>, nie
+          <code>starting</code>.
+        </li>
+        <li><b>detachForReload</b> räumt nur Host-Timer, killt keine VM (Hot-Reload).</li>
+      </ul>
+    </div>
+    <div class="mcard b">
+      <span class="mtag b">B · AGENT-TURN</span>
+      <p class="sub" style="margin: 0.6rem 0 0"><code>services/chatService.ts</code> + Daemon</p>
+      <div class="flow">idle → queued → waiting → turn-active → done ∕ aborting ∕ failed</div>
+      <ul>
+        <li>
+          <b>Startfenster:</b> <code>activeTurnId</code> wird synchron gesetzt, bevor ein Handle
+          existiert — ein Stop pinnt sich an genau diese turnId.
+        </li>
+        <li>
+          <b>Retry genau 1×</b>, nur wenn kein einziges sinnvolles Event kam <em>und</em> kein
+          Nutzerabbruch.
+        </li>
+        <li>
+          <b>Sub-Maschine Daemon:</b> disconnected → connecting → connected; wählt sich aus der VM
+          ins Host-Gateway, ersetzt alte Verbindungen, Ping/Pong + ACK gegen msb-NAT.
+        </li>
+        <li>
+          <b>resumeUnansweredTurn</b> beim Öffnen: letzte offene User-Zeile wird unter derselben
+          turnId wieder aufgenommen.
+        </li>
+      </ul>
+    </div>
+    <div class="mcard c">
+      <span class="mtag c">C · PREVIEW</span>
+      <p class="sub" style="margin: 0.6rem 0 0">
+        <code>preview/*</code> + <code>previewStatusPoller</code>
+      </p>
+      <div class="flow">starting → ready → restarting → failed ∕ stopped</div>
+      <ul>
+        <li>
+          <b>ready-Gate:</b> monit sieht nur den <em>Prozess</em> — <code>ready</code> gilt erst,
+          wenn der Dev-Server wirklich HTTP beantwortet.
+        </li>
+        <li>
+          <b>Zwei Quellen:</b> Push vom In-VM-Daemon (primär, 15 s stale) + Host-Poll (Fallback, 250
+          → 2000 ms).
+        </li>
+        <li>
+          <b>monit</b> in der VM: Zyklus 2 s, Port-Health nach 30×, Crash-Loop 5/40 →
+          <code>unmonitor</code> ≙ <code>failed</code>.
+        </li>
+      </ul>
+    </div>
+  </div>
+
+  <h2 id="kopplung">Die Kopplung — wo sich die Maschinen synchronisieren</h2>
+  <p>Vier Berührungspunkte, alle als gestrichelte Pfeile im Diagramm:</p>
+  <ul class="lede">
+    <li><b>entry.</b> Sobald A <code>running</code> erreicht, werden B und C gemeinsam aktiv.</li>
+    <li>
+      <b><code>isBusy()</code>.</b> Solange B in <code>turn-active</code> steht, meldet
+      <code>isBusy()=true</code> — der Grace- <em>und</em> der Idle-Stopp von A werden aufgeschoben.
+      So überlebt die VM einen laufenden Turn.
+    </li>
+    <li>
+      <b>Viewer-Refcount.</b> <code>enter</code>/<code>leave</code> der Chat-Subscription armieren
+      bzw. löschen den Grace-Timer von A. Geht der letzte Betrachter, beginnt die Nachlauffrist.
+    </li>
+    <li>
+      <b>Superzustands-Austritt.</b> Verlässt A <code>running</code>, wird C hart auf
+      <code>stopped</code> gesetzt und ein laufendes Turn-Handle in B abgebrochen.
+    </li>
+    <li>
+      <b>Daemon-Gate.</b> Der Übergang <code>waiting → turn-active</code> in B wird erst
+      freigegeben, wenn die Sub-Maschine <code>connected</code> erreicht.
+    </li>
+  </ul>
+
+  <hr />
+
+  <h2 id="randfaelle">Randfälle an den Nahtstellen</h2>
+  <p>
+    Ein eigener adversarialer Durchgang hat die sechs Phasen — Hochfahren, KI arbeitet, Abbruch,
+    Fortsetzung nach Neustart, Preview-Kopplung, Timer/Promise-Racen — am Code verifiziert.
+    Ehrliches Ergebnis: <b>kein Befund der Stufe „hoch"</b>, drei mittlere, sechs niedrige. Das
+    meiste, was riskant aussah, ist tatsächlich sauber abgesichert.
+  </p>
+
+  <div class="callout">
+    <b
+      >M1 erzeugt dasselbe Sichtbild wie der Hot-Reload-Vorfall vom 2026-08-11 (EADDRINUSE, behoben
+      in <code>312b52a</code>).</b
+    >
+    M1 ist aber ein <em>anderer, weiterhin offener</em> Code-Pfad, der zum selben Bild führt: „Agent
+    arbeitet", aber es kommt kein Abschluss-Signal mehr.
+  </div>
+
+  <div class="finding med">
+    <div class="fh">
+      <span class="sev med">MITTEL · M1</span>
+      <h3>
+        Nutzer-Stop im Verbindungs-Limbo endet zeilenlos — und der gestoppte Prompt läuft beim
+        nächsten Öffnen erneut
+      </h3>
+    </div>
+    <p>
+      Wird <b>gestoppt, während der Daemon gerade nicht verbunden ist</b> (VM-Boot, Daemon-Neustart
+      nach <code>turn-rejected</code>) und kommt er binnen 8–30 s nicht wieder, feuert der Watchdog,
+      aber die Bedingung für eine Fehlerzeile ist beidseitig <code>false</code> — es wird
+      <em>nichts</em> geschrieben.
+    </p>
+    <p>
+      <span class="lbl">Folge:</span> (a) kein finales <code>turnActive:false</code> → der Client
+      kann auf „Agent arbeitet" hängen bleiben; (b) die letzte DB-Zeile bleibt
+      <code>role='user'</code>, also führt <code>resumeUnansweredTurn</code> beim nächsten
+      <code>enterProject</code> <b>genau den gestoppten Prompt erneut aus</b> — inklusive
+      Dateiänderungen und Auto-Commit. „Stop" wird über ein Reopen also rückgängig gemacht.
+    </p>
+    <p class="sub">
+      <span class="ref">chatService.ts:441-470 · 819-823 · 985-1004 · 642 · 660-662</span> ·
+      <span class="ref">daemonRunner.ts:127 · 207-214</span>
+    </p>
+  </div>
+
+  <div class="finding med">
+    <div class="fh">
+      <span class="sev med">MITTEL · M2</span>
+      <h3>Tote oder „failed" VM bei Manager-Status <code>running</code>: kein Heilungspfad</h3>
+    </div>
+    <p>
+      Stirbt die MicroVM oder unmonitort monit den Dev-Server (Crash-Loop), bleibt der
+      Manager-Eintrag <code>running</code>. <code>ensureRunning</code> ist dann ein No-op, es gibt
+      keine Stop-/Restart-Mutation.
+    </p>
+    <p>
+      <span class="lbl">Folge:</span> Jede Nachricht scheitert nach dem Watchdog-Budget; die Preview
+      zeigt dauerhaft <code>restarting</code>/<code>failed</code>. Der UI-Hinweis „bitte das Projekt
+      neu öffnen" ist <b>wirkungslos</b> — Reopen bootet nichts neu. Heilung erst über Idle (30 min)
+      bzw. Grace (15 min nach Tab-Schluss).
+    </p>
+    <p class="sub">
+      <span class="ref">sandboxManager.ts:165-176 · 302-306</span> ·
+      <span class="ref">web/PreviewModel.ts:79</span>
+    </p>
+  </div>
+
+  <div class="finding med">
+    <div class="fh">
+      <span class="sev med">MITTEL · M3</span>
+      <h3>
+        Nach <code>abandonTurn</code> können Alt-Events dem nächsten Turn zugeschrieben werden
+      </h3>
+    </div>
+    <p>
+      Der close-Handler des Daemons räumt <code>currentTurnId</code> sofort und ruft
+      <code>interrupt()</code> nur fire-and-forget. Hängt die SDK-Query an totem Upstream und
+      generiert weiter, taggt <code>handleMessage</code> alle nachlaufenden Messages mit der
+      <em>neuen</em> turnId — Alt-Antwort erscheint unter der neuen Bubble, ein spätes
+      <code>turn-completed</code> beendet den neuen Turn vorzeitig.
+    </p>
+    <p class="sub">
+      Grenzt an das bewusst akzeptierte Restrisiko „Daemon bleibt bei totem Upstream belegt" — hier
+      greift die Notwehr-Sperre aber <em>gerade nicht</em>, weil abandonTurn sie geräumt hat.
+      <span class="ref">daemon/main.ts:197-207</span> ·
+      <span class="ref">daemonSession.ts:165-173 · 228-243</span>
+    </p>
+  </div>
+
+  <h3>Niedrig — kosmetisch, sehr selten oder eng am akzeptierten Restrisiko</h3>
+  <div class="lows">
+    <div class="low">
+      <div class="id">N4</div>
+      <div class="bd">
+        <b>isBusy-Mikrofenster</b> zwischen <code>ensureRunning</code> und
+        <code>queue.push</code> (ein DB-Read lang) — Grace/Idle/Eviction könnte die VM genau dann
+        stoppen; kein Versuch macht ensureRunning nach.
+        <span class="ref">projectSessionService.ts:203-204</span>
+      </div>
+    </div>
+    <div class="low">
+      <div class="id">N5</div>
+      <div class="bd">
+        <b>Floating <code>void this.stop()</code></b> in Grace- und Idle-Timer ohne
+        Rejection-Handler (verstößt gegen die eigene F18-Konvention; <code>forget()</code> macht es
+        richtig). <span class="ref">sandboxManager.ts:281 · 449</span>
+      </div>
+    </div>
+    <div class="low">
+      <div class="id">N6</div>
+      <div class="bd">
+        <b>previewStatus zeigt <code>stopped</code> während des Boots</b> — Overlay sagt „Sandbox
+        gestoppt" statt „Preview startet" für ein paar Sekunden. Die Gegenrichtung (<code
+          >ready</code
+        >
+        während <code>stopping</code>) ist nachweislich unmöglich.
+        <span class="ref">sandboxManager.ts:302-306</span>
+      </div>
+    </div>
+    <div class="low">
+      <div class="id">N7</div>
+      <div class="bd">
+        <b>Hot-Reload-Reconnect rebootet die VM</b> ohne Auto-Commit des Zwischenstands
+        (host-gemountet, nichts geht verloren, aber uncommitted); Orphan-VMs zählen nicht zur
+        Kapazität. <span class="ref">msbClient.ts:270</span>
+      </div>
+    </div>
+    <div class="low">
+      <div class="id">N8</div>
+      <div class="bd">
+        <b><code>forget()</code>-Leck</b> bei dazwischengekommenem <code>enter()</code>:
+        Nachholstopp setzt nur <code>stopped</code>, löscht den Map-Eintrag nie. Einmaliges kleines
+        Leck pro Lösch-Race. <span class="ref">sandboxManager.ts:393-401</span>
+      </div>
+    </div>
+    <div class="low">
+      <div class="id">N9</div>
+      <div class="bd">
+        <b>Warmup zählt nicht als busy</b> — Grace/Eviction können eine gerade vorwärmende VM
+        stoppen. Folge nur: verlorener Warmup, Doppel-Boot.
+        <span class="ref">chatService.ts:188-192</span>
+      </div>
+    </div>
+  </div>
+  <p class="sub">
+    Dazu <b>N10:</b> das Shutdown-Budget von 45 s für bis zu 8 VMs inkl. Auto-Commit kann bei vollem
+    Haus überschritten werden → ein geordneter Neustart hinterlässt dann Orphans wie ein Crash.
+    <span class="ref">shared/domain/shutdownTimings.ts:38</span>
+  </p>
+
+  <h2 id="sauber">Was sich als sauber abgedeckt erwiesen hat</h2>
+  <p>Genauso Teil der Dokumentation — mehrere naheliegende Verdachtspunkte sind im Code dicht:</p>
+  <div class="clean">
+    <ul>
+      <li>
+        <b>Start scheitert unter wartendem Turn:</b> <code>ensureRunning</code> wird vor jedem
+        Chat-Effekt <em>awaitet</em>; Baseline-/msb-/Kapazitätsfehler propagieren als sichtbarer
+        GraphQL-Fehler — nichts wird gequeued, kein coldStart-Hänger. Der Viewer-Refcount wird bei
+        Start-Abbruch in beiden Pfaden zurückgenommen.
+      </li>
+      <li>
+        <b>Idle-Timer trifft keinen laufenden Turn:</b> Event-Stille ist durch den Chat-Watchdog
+        (max. 600 s) unter der Idle-Frist (30 min) gedeckelt; jedes Event resettet.
+      </li>
+      <li>
+        <b>Kein Doppel-Turn bei Verbindungsabriss:</b> Reconnect setzt immer den close-Handler
+        (<code>abandonTurn</code>) voraus; die turn-started-ACK deckt die Halbtod-Richtung.
+        (Restlücke: M3.)
+      </li>
+      <li>
+        <b>Stop + sofort neu senden:</b> heilt wie designt über
+        <code>turn-rejected → shutdown → closeGracefully → Retry</code> mit History-Prompt.
+        (Restlücke: M1, der Stop <em>ohne</em> erreichbaren Daemon.)
+      </li>
+      <li>
+        <b>Token nach echtem Neustart:</b> Verdacht entkräftet — die Shutdown-Sequenz stoppt alle
+        VMs; Überlebende gibt es nur nach Crash, und deren Orphan-VM wird beim nächsten Öffnen durch
+        <code>provider.start</code> ersetzt. Kein UI-Hänger, nur Log-Rauschen.
+      </li>
+      <li>
+        <b>Timer/Promise-Racen:</b> stop-während-start (Handle-Übergabe), Doppel-<code>enter</code>
+        auf stoppender VM, Grace+Idle-Doppelstopp — alle über <code>startPromise</code>/<code
+          >stopPromise</code
+        >
+        dedupliziert und verifiziert.
+      </li>
+    </ul>
+  </div>
+
+  <footer>
+    Dokumentation der macvibes-Laufzeit · Zustände am aktuellen Code verifiziert, keine Änderung
+    vorgenommen. Diagramm generiert aus <code>zustandsmaschinen-gen.ts</code> (bei
+    Architektur-Änderungen bitte dort nachziehen); Randfälle aus einem adversarialen
+    Nahtstellen-Audit. Datei:Zeile-Referenzen relativ zu <code>apps/server/src/</code> (Ausnahmen
+    gekennzeichnet).
+  </footer>
+</div>
