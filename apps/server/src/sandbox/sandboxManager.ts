@@ -29,6 +29,14 @@ export interface SandboxManagerOptions {
   maxSandboxes: number;
   /** Hook vor jedem Stopp — Auto-Commit eines offenen Stands (R8/R9). */
   onBeforeStop?: (projectId: string) => Promise<void>;
+  /**
+   * Hook vor jedem Frischstart — Auto-Commit eines offenen Stands (N7): msb
+   * startet mit .replace(), eine nach einem Hot-Reload verwaiste VM gleichen
+   * Namens wird also ohne stop() (und damit ohne onBeforeStop) überbootet.
+   * Ihr uncommitteter Workspace-Stand (Host-Mount) wird hier gesichert; bei
+   * leerem git status ist das ein No-op. Fehler blockieren den Start nicht.
+   */
+  onBeforeStart?: (projectId: string) => Promise<void>;
   onStatusChange?: (projectId: string, status: SandboxStatus) => void;
   /**
    * Läuft gerade ein Agent-Turn? Der Grace-Stopp schiebt sich dann um eine
@@ -203,6 +211,15 @@ export class SandboxManager {
     const startWork = (async () => {
       try {
         await this.evictLeastActiveIfNeeded(context.projectId);
+        if (this.options.onBeforeStart) {
+          try {
+            await this.options.onBeforeStart(context.projectId);
+          } catch (error) {
+            // Sichern ist best effort — ein kaputtes git darf den Start nicht
+            // verhindern (der Stand liegt weiterhin im Host-Mount).
+            console.error(`onBeforeStart für ${context.projectId} schlug fehl:`, error);
+          }
+        }
         entry.handle = await this.options.provider.start(context);
       } catch (error) {
         // Nur auf `stopped` schalten, wenn nicht bereits ein Stopp läuft — der

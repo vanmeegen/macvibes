@@ -1140,6 +1140,65 @@ describe('previewStatus während des Boots (N6)', () => {
 });
 
 /**
+ * N7 aus dem Zustandsmaschinen-Audit: msb startet Sandboxes mit .replace() —
+ * eine nach einem Hot-Reload verwaiste, noch laufende VM gleichen Namens wird
+ * beim nächsten Start kommentarlos ÜBERBOOTET, ohne stop(), also ohne den
+ * onBeforeStop-Auto-Commit. Ihr Workspace-Stand (Host-Mount) ginge zwar nicht
+ * verloren, bliebe aber uncommittet. Der onBeforeStart-Hook sichert ihn,
+ * BEVOR provider.start die alte VM ersetzt (autoCommit ist bei leerem
+ * git status ein No-op — der Normalfall kostet ein git status).
+ */
+describe('onBeforeStart: offener Stand wird gesichert, bevor eine neue VM bootet (N7)', () => {
+  function setupMitBeforeStart(onBeforeStart: (projectId: string) => Promise<void>) {
+    const ablauf: string[] = [];
+    const provider: SandboxProvider = {
+      async start(context: SandboxContext): Promise<SandboxHandle> {
+        ablauf.push(`start:${context.projectId}`);
+        return {
+          previewHostPort: 1,
+          previewStatus: () => 'ready' as const,
+          stop: async () => {},
+        };
+      },
+    };
+    const manager = new SandboxManager({
+      provider,
+      graceMs: 10_000,
+      idleMs: 10_000,
+      maxSandboxes: 8,
+      onBeforeStart: async (projectId) => {
+        ablauf.push(`beforeStart:${projectId}`);
+        await onBeforeStart(projectId);
+      },
+    });
+    return { ablauf, manager };
+  }
+
+  test('läuft beim Frischstart VOR provider.start', async () => {
+    const { ablauf, manager } = setupMitBeforeStart(async () => {});
+    await manager.enter(ctx('p1'), 'u1');
+    expect(ablauf).toEqual(['beforeStart:p1', 'start:p1']);
+  });
+
+  test('ein No-op-enter auf laufender VM ruft den Hook nicht erneut', async () => {
+    const { ablauf, manager } = setupMitBeforeStart(async () => {});
+    await manager.enter(ctx('p1'), 'u1');
+    await manager.enter(ctx('p1'), 'u2');
+    await manager.ensureRunning(ctx('p1'));
+    expect(ablauf).toEqual(['beforeStart:p1', 'start:p1']);
+  });
+
+  test('ein Fehler im Hook blockiert den Start nicht', async () => {
+    const { ablauf, manager } = setupMitBeforeStart(async () => {
+      throw new Error('git kaputt');
+    });
+    await manager.enter(ctx('p1'), 'u1');
+    expect(manager.status('p1')).toBe('running');
+    expect(ablauf).toEqual(['beforeStart:p1', 'start:p1']);
+  });
+});
+
+/**
  * N8 aus dem Zustandsmaschinen-Audit: kam zwischen stop() und forget() ein
  * enter() dazwischen, machte forget nur einen Nachhol-Stopp und liess den
  * Map-Eintrag FÜR IMMER stehen — ein kleines Leck pro Lösch-Race. Rennen-Test

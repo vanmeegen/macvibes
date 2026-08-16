@@ -291,6 +291,26 @@ console.log(
   `Sandbox-Backend: ${useMicrosandbox ? `microsandbox (${config.sandbox.image}, ${config.sandbox.cpus} CPUs, ${config.sandbox.memoryMib} MiB)` : 'process (kein VM-Isolat!)'}`,
 );
 
+// Offenen Workspace-Stand per Auto-Commit sichern — vor jedem Stopp (R9) und
+// vor jedem Frischstart (N7: msb-.replace() überbootet eine nach Hot-Reload
+// verwaiste VM ohne stop(), also ohne den Stopp-Hook).
+const sichereProjektStand = async (projectId: string, anlass: string): Promise<void> => {
+  // Kriterium ist das gitDir NEBEN dem Arbeitsbaum (F1) — ein `.git` im
+  // Arbeitsbaum wäre gast-geschrieben und damit kein Beleg für ein Repo.
+  const repo = projectRepoFor(config.macvibesHome, projectId);
+  if (!existsSync(join(repo.gitDir, 'HEAD'))) return;
+  try {
+    await autoCommit(repo, anlass);
+  } catch (error) {
+    console.error(`${anlass} für ${projectId} fehlgeschlagen:`, error);
+    await chatServiceRef?.postMessage(
+      projectId,
+      'error',
+      `${anlass} fehlgeschlagen: ${String(error)}`,
+    );
+  }
+};
+
 const sandboxManager = new SandboxManager({
   provider: sandboxProvider,
   graceMs: config.sandbox.graceMs,
@@ -308,22 +328,11 @@ const sandboxManager = new SandboxManager({
   // lokale qwen-)Turns überleben so das Zurücknavigieren zur Projektliste.
   isBusy: (projectId) => chatServiceRef?.isTurnActive(projectId) ?? false,
   // Offenen Stand vor jedem Stopp sichern (R9).
-  onBeforeStop: async (projectId) => {
-    // Kriterium ist das gitDir NEBEN dem Arbeitsbaum (F1) — ein `.git` im
-    // Arbeitsbaum wäre gast-geschrieben und damit kein Beleg für ein Repo.
-    const repo = projectRepoFor(config.macvibesHome, projectId);
-    if (!existsSync(join(repo.gitDir, 'HEAD'))) return;
-    try {
-      await autoCommit(repo, 'Auto-Commit vor Sandbox-Stopp');
-    } catch (error) {
-      console.error(`Auto-Commit vor Stopp von ${projectId} fehlgeschlagen:`, error);
-      await chatServiceRef?.postMessage(
-        projectId,
-        'error',
-        `Auto-Commit vor Sandbox-Stopp fehlgeschlagen: ${String(error)}`,
-      );
-    }
-  },
+  onBeforeStop: (projectId) => sichereProjektStand(projectId, 'Auto-Commit vor Sandbox-Stopp'),
+  // … und vor jedem Frischstart (N7, verwaiste VM nach Hot-Reload): bei leerem
+  // git status ein No-op, der Normalfall kostet ein git status.
+  onBeforeStart: (projectId) =>
+    sichereProjektStand(projectId, 'Auto-Commit vor Sandbox-Start (verwaister Stand?)'),
 });
 // Beim Hot-Reload nur die Timer entschärfen — KEIN stopAll(): laufende
 // MicroVMs (samt Auto-Commit-Hook) bleiben unangetastet, sonst würde ein
