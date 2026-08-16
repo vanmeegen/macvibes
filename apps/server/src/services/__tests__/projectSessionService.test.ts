@@ -312,8 +312,16 @@ describe('enterProjectSession (Stufe 3)', () => {
       project,
     );
 
-    // resume === true → prewarm bleibt aus.
-    expect(f.calls).toEqual([`ensureRunning:${project.id}`, `resume:${project.id}`]);
+    // resume === true → prewarm bleibt aus. Das zweite ensureRunning ist die
+    // Nachsorge (symmetrisch zu sendMessage): zwischen dem ersten
+    // ensureRunning und dem queue.push des Resume liegen zwei DB-Reads —
+    // wurde die Sandbox genau in diesem Fenster gestoppt, sichert die
+    // Nachsorge den Neustart, jetzt wo isBusy sie schützt.
+    expect(f.calls).toEqual([
+      `ensureRunning:${project.id}`,
+      `resume:${project.id}`,
+      `ensureRunning:${project.id}`,
+    ]);
     expect(f.calls).not.toContain(`prewarm:${project.id}`);
     expect((await lastActivity(db, project.id)).getTime()).toBeGreaterThan(OLD.getTime());
   });
@@ -411,6 +419,37 @@ describe('sendMessageToProject (Stufe 3)', () => {
       `ensureRunning:${project.id}`,
     ]);
     expect(sandboxLaeuft).toBe(true);
+  });
+
+  test('die Nachsorge ist best effort: ein Fehler NACH dem Einreihen kippt die Mutation nicht', async () => {
+    // Die Nachricht ist zu diesem Zeitpunkt persistiert und der Turn läuft.
+    // Würfe das zweite ensureRunning (SandboxCapacityError, msb-Flake), sähe
+    // der Client die Mutation als gescheitert: optimistische Bubble zurück,
+    // Entwurf wiederhergestellt — und Sekunden später erscheint dieselbe
+    // Nachricht über die Subscription doch. Wer dann erneut sendet, erzeugt
+    // einen zweiten Turn. Deshalb: Fehler der Nachsorge nur loggen.
+    const { db, config, marco, home } = await setup();
+    const project = await createProject(db, config, marco, { name: 'App', templateDir: 'pwa' });
+    const f = fakes(db);
+    let aufruf = 0;
+    const sandbox: SandboxLifecycle = {
+      ensureRunning: async (context) => {
+        aufruf += 1;
+        if (aufruf === 2) throw new Error('Alle Sandbox-Plätze belegt');
+        f.calls.push(`ensureRunning:${context.projectId}`);
+      },
+      stop: f.sandbox.stop,
+      forget: f.sandbox.forget,
+    };
+
+    await expect(
+      sendMessageToProject({ db, sandbox, chat: f.chat, macvibesHome: home }, marco, {
+        projectId: project.id,
+        text: 'hallo',
+        interrupt: false,
+      }),
+    ).resolves.toBeUndefined();
+    expect(aufruf).toBe(2);
   });
 
   test('fremder User: getProjectOwned wirft VOR ensureRunning/sendMessage (F10)', async () => {

@@ -156,6 +156,14 @@ export async function enterProjectSession(
     // Ergebnis, ohne erneutes Tippen. Nur für den Owner: Besucher dürfen
     // weder den Agent-Daemon belegen noch Turns anstoßen.
     const resumed = await chat.resumeUnansweredTurn(user, project.id, workspaceDir);
+    if (resumed) {
+      // Symmetrie zu N4 (sendMessage): Zwischen dem ensureRunning oben und dem
+      // queue.push des Resume liegen zwei DB-Reads — wurde die Sandbox genau
+      // in diesem Fenster gestoppt (Eviction, exakt jetzt ablaufender Grace-
+      // Timer), liefe der wiederaufgenommene Turn gegen eine tote VM in den
+      // Watchdog. Jetzt (isBusy true) idempotent erneut zusichern; best effort.
+      await nachsorgeEnsureRunning(sandbox, context);
+    }
     if (!resumed) {
       // Nur wenn NICHT wiederaufgenommen: stiller Config-Warmup
       // (fire-and-forget), während der User tippt — der erste echte Turn
@@ -214,6 +222,31 @@ export async function sendMessageToProject(
   // idempotent erneut zusichern: war sie im Fenster gestoppt worden, bootet
   // sie hier neu und der wartende DaemonRunner trifft den frischen Daemon.
   // (Vorbild: der „KEIN await mehr"-Kommentar in resumeUnansweredTurn.)
-  await sandbox.ensureRunning(context);
+  await nachsorgeEnsureRunning(sandbox, context);
   await touchProject(db, project.id);
+}
+
+/**
+ * Nachsorge-Zusicherung — best effort, NIE werfend: Die Nachricht ist zu
+ * diesem Zeitpunkt bereits persistiert und der Turn läuft. Würfe der Aufruf
+ * (SandboxCapacityError bei vollem Haus, msb-Flake), gälte die Mutation als
+ * gescheitert — der Client nähme die optimistische Bubble zurück und stellte
+ * den Entwurf wieder her, während die Nachricht Sekunden später über die
+ * Subscription doch erscheint; ein erneutes Senden erzeugte einen ZWEITEN
+ * Turn. Ein Fehler hier ist zudem kein Verlust: der Normalfall (Sandbox läuft)
+ * ist ein No-op, und im Stopp-Fenster-Fall meldet sich der Turn selbst über
+ * seinen Watchdog, falls die Sandbox wirklich nicht mehr hochkommt.
+ */
+async function nachsorgeEnsureRunning(
+  sandbox: SandboxLifecycle,
+  context: SandboxRunContext,
+): Promise<void> {
+  try {
+    await sandbox.ensureRunning(context);
+  } catch (error) {
+    console.error(
+      `Nachsorge-ensureRunning für ${context.projectId} schlug fehl (Turn läuft weiter):`,
+      error,
+    );
+  }
 }
