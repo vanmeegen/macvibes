@@ -1989,6 +1989,12 @@
           <b>resumeUnansweredTurn</b> beim Öffnen: letzte offene User-Zeile wird unter derselben
           turnId wieder aufgenommen.
         </li>
+        <li>
+          <b>Session-Vertrag:</b> Folge-Turns reichen die persistierte Session-ID durch — Kontext
+          bleibt auch über Interrupts erhalten. <code>resumeSessionId: null</code> bedeutet dagegen
+          <em>erzwungenen Frischstart</em> (Heilungspfad des zweiten Retry-Versuchs); Kontext-Erhalt
+          und Heilung schließen sich pro Turn bewusst aus.
+        </li>
       </ul>
     </div>
     <div class="mcard c">

@@ -328,12 +328,22 @@ describe.skipIf(!enabled)(
           .join('');
         expect(text.toLowerCase()).toContain('bereit');
 
+        // Ab hier den Host treu nachbilden: chatService persistiert die
+        // Session-ID aus dem session-Event und reicht sie bei Folge-Turns
+        // durch. `resumeSessionId: null` hiesse laut Vertrag (daemonSession)
+        // „erzwungener Frischstart" (Heilung) — damit verlöre der Daemon den
+        // Kontext GEWOLLT. Kontext-Erhalt gibt es nur mit Session-ID.
+        const session1 =
+          turn1.find((e): e is Extract<AgentEvent, { type: 'session' }> => e.type === 'session')
+            ?.sessionId ?? null;
+        expect(session1).not.toBeNull();
+
         // Turn 2: unterbrechen — das war der Deadlock aus chatproblems.md #13.
         const handle2 = runner.startTurn({
           projectId: PROJECT_ID,
           prompt: 'Zähle langsam und ausführlich von 1 bis 100, jede Zahl einzeln erklärt.',
           workspaceDir: '/egal-host-pfad',
-          resumeSessionId: null,
+          resumeSessionId: session1,
           model: 'claude-sonnet-5',
         });
         const turn2Promise = collectTurn(handle2.events);
@@ -344,14 +354,19 @@ describe.skipIf(!enabled)(
         expect(turn2.at(-1)).toEqual({ type: 'turn-aborted' });
 
         // Turn 3: MUSS sofort funktionieren (kein Hänger, Session lebt weiter)
-        // und den Kontext aus Turn 1/2 kennen (dieselbe SDK-Session).
+        // und den Kontext aus Turn 1/2 kennen (dieselbe SDK-Session). Wie der
+        // Host: die zuletzt gemeldete Session-ID durchreichen (Turn 2 kann sie
+        // aktualisiert haben).
+        const session2 =
+          turn2.find((e): e is Extract<AgentEvent, { type: 'session' }> => e.type === 'session')
+            ?.sessionId ?? session1;
         const turn3 = await collectTurn(
           runner.startTurn({
             projectId: PROJECT_ID,
             prompt:
               'Welche Zahl solltest du dir vorhin merken? Antworte ausschließlich mit der Zahl.',
             workspaceDir: '/egal-host-pfad',
-            resumeSessionId: null,
+            resumeSessionId: session2,
             model: 'claude-sonnet-5',
           }).events,
         );
