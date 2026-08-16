@@ -27,7 +27,7 @@
 <rect x="48" y="232" width="1504" height="716" rx="18" fill="none" stroke="#B9700C" stroke-width="2.5"/>
 <path d="M 48 266 L 48 250 Q 48 232 66 232 L 1534 232 Q 1552 232 1552 250 L 1552 266 Z" fill="#FBEFD8"/>
 <text x="68" y="255" font-family="ui-sans-serif,system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#B9700C" letter-spacing=".4">running  (Superzustand)</text>
-<text x="1534" y="255" text-anchor="end" font-family="ui-sans-serif,system-ui,sans-serif" font-size="12.5" fill="#B9700C" opacity=".9">previewStatus echt nur hier — sonst hart „stopped“</text>
+<text x="1534" y="255" text-anchor="end" font-family="ui-sans-serif,system-ui,sans-serif" font-size="12.5" fill="#B9700C" opacity=".9">previewStatus echt nur hier — beim Boot „starting“ (N6), sonst „stopped“</text>
 <path d="M 210 183 L 262 183" fill="none" stroke="#B9700C" stroke-width="1.8" marker-end="url(#ah-B9700C)"/>
 <rect x="170.05" y="140" width="131.9" height="15" rx="3" fill="#FAFBFC" opacity=".95"/>
 <text x="236" y="151" text-anchor="middle" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11" font-weight="600" fill="#B9700C">enter / ensureRunning</text>
@@ -38,16 +38,17 @@
 <rect x="299.55" y="124" width="72.9" height="15" rx="3" fill="#FAFBFC" opacity=".95"/>
 <text x="336" y="135" text-anchor="middle" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11" font-weight="600" fill="#B9700C">stop fertig</text>
 <path d="M 650 232 L 521 208" fill="none" stroke="#B9700C" stroke-width="1.8" marker-end="url(#ah-B9700C)"/>
-<rect x="528.25" y="213" width="155.5" height="15" rx="3" fill="#FAFBFC" opacity=".95"/>
-<text x="606" y="224" text-anchor="middle" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11" font-weight="600" fill="#B9700C">stop / Grace / Idle / LRU</text>
+<rect x="484" y="213" width="244" height="15" rx="3" fill="#FAFBFC" opacity=".95"/>
+<text x="606" y="224" text-anchor="middle" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11" font-weight="600" fill="#B9700C">stop / Grace / Idle / LRU / Heilung (M2)</text>
 <text x="596" y="252" font-size="10.5" fill="#B9700C" opacity=".95">beim Verlassen von running: previewStatus→„stopped“ · currentHandle.abort()</text>
-<rect x="58" y="452" width="250" height="118" rx="7" fill="#FCF4E6" stroke="#B9700C" stroke-width="1" stroke-dasharray="4 3"/>
+<rect x="58" y="452" width="250" height="132" rx="7" fill="#FCF4E6" stroke="#B9700C" stroke-width="1" stroke-dasharray="4 3"/>
 <text x="69" y="469" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11.5" font-weight="700" fill="#B9700C">Kopplung an Maschine A</text>
 <text x="69" y="483.5" font-family="ui-sans-serif,system-ui,sans-serif" font-size="10.3" font-weight="400" fill="#5B6675">viewers (H11): enter/leave ⇒ Grace</text>
-<text x="69" y="498" font-family="ui-sans-serif,system-ui,sans-serif" font-size="10.3" font-weight="400" fill="#5B6675">turn-active ⇒ isBusy() ⇒ Grace</text>
-<text x="69" y="512.5" font-family="ui-sans-serif,system-ui,sans-serif" font-size="10.3" font-weight="400" fill="#5B6675">  &amp; Idle aufgeschoben</text>
+<text x="69" y="498" font-family="ui-sans-serif,system-ui,sans-serif" font-size="10.3" font-weight="400" fill="#5B6675">turn/warmup aktiv ⇒ isBusy() ⇒ Grace</text>
+<text x="69" y="512.5" font-family="ui-sans-serif,system-ui,sans-serif" font-size="10.3" font-weight="400" fill="#5B6675">  &amp; Eviction aufgeschoben (N9)</text>
 <text x="69" y="527" font-family="ui-sans-serif,system-ui,sans-serif" font-size="10.3" font-weight="400" fill="#5B6675">idleTimer: kein Aufschub</text>
 <text x="69" y="541.5" font-family="ui-sans-serif,system-ui,sans-serif" font-size="10.3" font-weight="400" fill="#5B6675">detachForReload: nur Timer, VM lebt</text>
+<text x="69" y="556" font-family="ui-sans-serif,system-ui,sans-serif" font-size="10.3" font-weight="400" fill="#5B6675">enter bei kaputter VM ⇒ Heilung (M2)</text>
 <rect x="344" y="276" width="1184" height="384" rx="12" fill="#E4E6F8" fill-opacity=".3" stroke="#3B41B0" stroke-width="1.4"/>
 <rect x="344" y="276" width="184" height="26" rx="9" fill="#3B41B0"/>
 <text x="358" y="294" font-family="ui-monospace,Menlo,monospace" font-size="12" font-weight="700" fill="#fff" letter-spacing=".6">REGION B</text>
@@ -109,6 +110,7 @@
 <text x="920" y="574" font-size="10.3" fill="#5B6675">ersetzt alte Verbindung (4000)</text>
 <text x="920" y="590" font-size="10.3" fill="#5B6675">Ping/Pong + turn-started-ACK</text>
 <text x="920" y="606" font-size="10.3" fill="#5B6675">(gegen msb-NAT)</text>
+<text x="920" y="622" font-size="10.3" fill="#5B6675">Nachzügler bis result verworfen (M3)</text>
 <rect x="1104" y="520" width="406" height="112" rx="7" fill="#ECEDFB" stroke="#3B41B0" stroke-width="1" stroke-dasharray="4 3"/>
 <text x="1115" y="537" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11.5" font-weight="700" fill="#3B41B0">Timeouts &amp; Wiederaufnahme</text>
 <text x="1115" y="551.5" font-family="ui-sans-serif,system-ui,sans-serif" font-size="10.3" font-weight="400" fill="#5B6675">vor 1. Event: coldStart / firstEvent</text>

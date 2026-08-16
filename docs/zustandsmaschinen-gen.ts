@@ -234,7 +234,7 @@ container(
   C.aLine,
   C.aBand,
   'running  (Superzustand)',
-  'previewStatus echt nur hier — sonst hart „stopped“',
+  'previewStatus echt nur hier — beim Boot „starting“ (N6), sonst „stopped“',
 );
 boxes['running'] = { id: 'running', x: runX, y: runY, w: runW, h: runH };
 
@@ -268,7 +268,7 @@ arrow(
     { x: 521, y: 208 },
   ],
   C.aLine,
-  'stop / Grace / Idle / LRU',
+  'stop / Grace / Idle / LRU / Heilung (M2)',
   { lx: 606, ly: 224 },
 );
 // on-exit-Notiz
@@ -277,13 +277,14 @@ P(
 );
 
 // ===== Maschine-A-Kopplungs-Chip (links) ====================================
-chip(58, 452, 250, 118, C.aLine, C.aFill, [
+chip(58, 452, 250, 132, C.aLine, C.aFill, [
   'Kopplung an Maschine A',
   'viewers (H11): enter/leave ⇒ Grace',
-  'turn-active ⇒ isBusy() ⇒ Grace',
-  '  & Idle aufgeschoben',
+  'turn/warmup aktiv ⇒ isBusy() ⇒ Grace',
+  '  & Eviction aufgeschoben (N9)',
   'idleTimer: kein Aufschub',
   'detachForReload: nur Timer, VM lebt',
+  'enter bei kaputter VM ⇒ Heilung (M2)',
 ]);
 
 // ===== Region B: AGENT-TURN =================================================
@@ -373,6 +374,9 @@ P(
   `<text x="${dX + 536}" y="${dY + 66}" font-size="10.3" fill="${C.muted}">Ping/Pong + turn-started-ACK</text>`,
 );
 P(`<text x="${dX + 536}" y="${dY + 82}" font-size="10.3" fill="${C.muted}">(gegen msb-NAT)</text>`);
+P(
+  `<text x="${dX + 536}" y="${dY + 98}" font-size="10.3" fill="${C.muted}">Nachzügler bis result verworfen (M3)</text>`,
+);
 
 // Timeout-/Resume-Chip
 chip(tx, dY - 4, rbX + rbW - tx - 18, 112, C.bLine, C.bFill, [

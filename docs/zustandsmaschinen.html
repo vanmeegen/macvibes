@@ -429,8 +429,10 @@
     <h1>Sandbox, Agent &amp; Preview als verschachtelte Zustandsmaschine</h1>
     <p class="lede sub">
       Wie die drei Maschinen ineinandergreifen, wo sie sich synchronisieren, und welche Randfälle an
-      den Nahtstellen sauber abgedeckt sind — und welche nicht. Reine Dokumentation, Stand des
-      Codes; nichts wurde geändert.
+      den Nahtstellen sauber abgedeckt sind — und welche nicht. Ursprünglich reine Dokumentation
+      (Stand <code>b510362</code>); <b>Update 2026-08-16:</b> alle zehn Befunde (M1–M3, N4–N10) sind
+      test-first behoben — die Analysen bleiben stehen, jeder Befund trägt seinen Behoben-Vermerk
+      mit Commit.
     </p>
     <nav class="toc">
       <a href="#diagramm">Diagramm</a><a href="#lesen">Lesehilfe</a
@@ -711,7 +713,7 @@
           fill="#B9700C"
           opacity=".9"
         >
-          previewStatus echt nur hier — sonst hart „stopped“
+          previewStatus echt nur hier — beim Boot „starting“ (N6), sonst „stopped“
         </text>
         <path
           d="M 210 183 L 262 183"
@@ -786,7 +788,7 @@
           stroke-width="1.8"
           marker-end="url(#ah-B9700C)"
         />
-        <rect x="528.25" y="213" width="155.5" height="15" rx="3" fill="#FAFBFC" opacity=".95" />
+        <rect x="484" y="213" width="244" height="15" rx="3" fill="#FAFBFC" opacity=".95" />
         <text
           x="606"
           y="224"
@@ -796,7 +798,7 @@
           font-weight="600"
           fill="#B9700C"
         >
-          stop / Grace / Idle / LRU
+          stop / Grace / Idle / LRU / Heilung (M2)
         </text>
         <text x="596" y="252" font-size="10.5" fill="#B9700C" opacity=".95">
           beim Verlassen von running: previewStatus→„stopped“ · currentHandle.abort()
@@ -805,7 +807,7 @@
           x="58"
           y="452"
           width="250"
-          height="118"
+          height="132"
           rx="7"
           fill="#FCF4E6"
           stroke="#B9700C"
@@ -840,7 +842,7 @@
           font-weight="400"
           fill="#5B6675"
         >
-          turn-active ⇒ isBusy() ⇒ Grace
+          turn/warmup aktiv ⇒ isBusy() ⇒ Grace
         </text>
         <text
           x="69"
@@ -850,7 +852,7 @@
           font-weight="400"
           fill="#5B6675"
         >
-          &amp; Idle aufgeschoben
+          &amp; Eviction aufgeschoben (N9)
         </text>
         <text
           x="69"
@@ -871,6 +873,16 @@
           fill="#5B6675"
         >
           detachForReload: nur Timer, VM lebt
+        </text>
+        <text
+          x="69"
+          y="556"
+          font-family="ui-sans-serif,system-ui,sans-serif"
+          font-size="10.3"
+          font-weight="400"
+          fill="#5B6675"
+        >
+          enter bei kaputter VM ⇒ Heilung (M2)
         </text>
         <rect
           x="344"
@@ -1393,6 +1405,9 @@
         <text x="920" y="574" font-size="10.3" fill="#5B6675">ersetzt alte Verbindung (4000)</text>
         <text x="920" y="590" font-size="10.3" fill="#5B6675">Ping/Pong + turn-started-ACK</text>
         <text x="920" y="606" font-size="10.3" fill="#5B6675">(gegen msb-NAT)</text>
+        <text x="920" y="622" font-size="10.3" fill="#5B6675">
+          Nachzügler bis result verworfen (M3)
+        </text>
         <rect
           x="1104"
           y="520"
@@ -2030,6 +2045,8 @@
     Fortsetzung nach Neustart, Preview-Kopplung, Timer/Promise-Racen — am Code verifiziert.
     Ehrliches Ergebnis: <b>kein Befund der Stufe „hoch"</b>, drei mittlere, sechs niedrige. Das
     meiste, was riskant aussah, ist tatsächlich sauber abgesichert.
+    <b>Stand 2026-08-16 sind alle Befunde behoben</b> (je ein test-first-Commit pro Befund, s. die
+    Vermerke unten); die Analysen bleiben als Begründung stehen.
   </p>
 
   <div class="callout">
@@ -2037,8 +2054,8 @@
       >M1 erzeugt dasselbe Sichtbild wie der Hot-Reload-Vorfall vom 2026-08-11 (EADDRINUSE, behoben
       in <code>312b52a</code>).</b
     >
-    M1 ist aber ein <em>anderer, weiterhin offener</em> Code-Pfad, der zum selben Bild führt: „Agent
-    arbeitet", aber es kommt kein Abschluss-Signal mehr.
+    M1 war aber ein <em>anderer</em> Code-Pfad, der zum selben Bild führte: „Agent arbeitet", aber
+    es kommt kein Abschluss-Signal mehr. <b>Inzwischen behoben</b> (s. Vermerk am Befund).
   </div>
 
   <div class="finding med">
@@ -2066,6 +2083,14 @@
       <span class="ref">chatService.ts:441-470 · 819-823 · 985-1004 · 642 · 660-662</span> ·
       <span class="ref">daemonRunner.ts:127 · 207-214</span>
     </p>
+    <p>
+      <span class="sev ok">BEHOBEN</span> <b>2026-08-16, zweistufig:</b> (1)
+      <code>abort()</code> weckt den DaemonRunner auch während <code>waitForConnection</code> — der
+      Event-Strom endet sofort vertragsgemäß mit <code>turn-aborted</code> (<code>3126733</code>);
+      (2) der chatService-Watchdog schreibt bei <code>benutzerAbbruch</code> immer die „Turn
+      abgebrochen"-Systemzeile — <code>turnActive:false</code> wird publiziert,
+      <code>resumeUnansweredTurn</code> greift nicht mehr (<code>107ccff</code>).
+    </p>
   </div>
 
   <div class="finding med">
@@ -2087,6 +2112,14 @@
     <p class="sub">
       <span class="ref">sandboxManager.ts:165-176 · 302-306</span> ·
       <span class="ref">web/PreviewModel.ts:79</span>
+    </p>
+    <p>
+      <span class="sev ok">BEHOBEN</span> <b>2026-08-16:</b> Der running-Zweig von
+      <code>acquire</code> heilt beim Wieder-Öffnen per Stop→Neustart (inkl. Auto-Commit), sobald
+      der Handle <code>failed</code> meldet oder <code>touchSandbox</code> die VM als verschwunden
+      gemeldet hat (liefert dafür jetzt boolean, deckt den „restarting für immer"-Fall) — nie unter
+      einem laufenden Turn (isBusy, inkl. Warmup). Der UI-Hinweis „Projekt neu öffnen" stimmt damit
+      (<code>ce49b6e</code>).
     </p>
   </div>
 
@@ -2110,9 +2143,18 @@
       <span class="ref">daemon/main.ts:197-207</span> ·
       <span class="ref">daemonSession.ts:165-173 · 228-243</span>
     </p>
+    <p>
+      <span class="sev ok">BEHOBEN</span> <b>2026-08-16:</b> <code>abandonTurn</code> setzt eine
+      Verwerfen-Sperre; alles, was die geteilte Query bis zu ihrem nächsten <code>result</code>
+      liefert (der Generationsgrenze), wird still verworfen — das Query-Ende selbst unterdrückt die
+      Sperre bewusst nicht (<code>1b639e3</code>).
+    </p>
   </div>
 
-  <h3>Niedrig — kosmetisch, sehr selten oder eng am akzeptierten Restrisiko</h3>
+  <h3>
+    Niedrig — kosmetisch, sehr selten oder eng am akzeptierten Restrisiko
+    <span class="sev ok" style="vertical-align: middle">ALLE BEHOBEN · 2026-08-16</span>
+  </h3>
   <div class="lows">
     <div class="low">
       <div class="id">N4</div>
@@ -2120,7 +2162,9 @@
         <b>isBusy-Mikrofenster</b> zwischen <code>ensureRunning</code> und
         <code>queue.push</code> (ein DB-Read lang) — Grace/Idle/Eviction könnte die VM genau dann
         stoppen; kein Versuch macht ensureRunning nach.
-        <span class="ref">projectSessionService.ts:203-204</span>
+        <span class="ref">projectSessionService.ts:203-204</span> — <b>Behoben:</b> nach dem
+        Einreihen (ab da isBusy=true) wird <code>ensureRunning</code> idempotent erneut zugesichert
+        (<code>1eb3471</code>).
       </div>
     </div>
     <div class="low">
@@ -2128,7 +2172,8 @@
       <div class="bd">
         <b>Floating <code>void this.stop()</code></b> in Grace- und Idle-Timer ohne
         Rejection-Handler (verstößt gegen die eigene F18-Konvention; <code>forget()</code> macht es
-        richtig). <span class="ref">sandboxManager.ts:281 · 449</span>
+        richtig). <span class="ref">sandboxManager.ts:281 · 449</span> — <b>Behoben:</b> beide Timer
+        mit <code>.catch</code>-Logging (<code>8b4e071</code>).
       </div>
     </div>
     <div class="low">
@@ -2139,7 +2184,9 @@
           >ready</code
         >
         während <code>stopping</code>) ist nachweislich unmöglich.
-        <span class="ref">sandboxManager.ts:302-306</span>
+        <span class="ref">sandboxManager.ts:302-306</span> — <b>Behoben:</b> während
+        <code>starting</code> meldet <code>previewStatus()</code> jetzt „starting" (Spinner statt
+        „Sandbox gestoppt", <code>8b4e071</code>).
       </div>
     </div>
     <div class="low">
@@ -2147,7 +2194,10 @@
       <div class="bd">
         <b>Hot-Reload-Reconnect rebootet die VM</b> ohne Auto-Commit des Zwischenstands
         (host-gemountet, nichts geht verloren, aber uncommitted); Orphan-VMs zählen nicht zur
-        Kapazität. <span class="ref">msbClient.ts:270</span>
+        Kapazität. <span class="ref">msbClient.ts:270</span> — <b>Behoben:</b> ein
+        <code>onBeforeStart</code>-Hook sichert den Stand per Auto-Commit, bevor
+        <code>.replace()</code> die alte VM überbootet (<code>7794a05</code>; das Kapazitäts-Detail
+        bleibt, ADR 0003 fängt Orphans weiterhin auf).
       </div>
     </div>
     <div class="low">
@@ -2155,7 +2205,9 @@
       <div class="bd">
         <b><code>forget()</code>-Leck</b> bei dazwischengekommenem <code>enter()</code>:
         Nachholstopp setzt nur <code>stopped</code>, löscht den Map-Eintrag nie. Einmaliges kleines
-        Leck pro Lösch-Race. <span class="ref">sandboxManager.ts:393-401</span>
+        Leck pro Lösch-Race. <span class="ref">sandboxManager.ts:393-401</span> —
+        <b>Behoben:</b> der Nachholstopp löscht den Eintrag nach Vollendung (Same-Object-Guard gegen
+        ein weiteres Race, <code>8b4e071</code>).
       </div>
     </div>
     <div class="low">
@@ -2163,14 +2215,17 @@
       <div class="bd">
         <b>Warmup zählt nicht als busy</b> — Grace/Eviction können eine gerade vorwärmende VM
         stoppen. Folge nur: verlorener Warmup, Doppel-Boot.
-        <span class="ref">chatService.ts:188-192</span>
+        <span class="ref">chatService.ts:188-192</span> — <b>Behoben:</b>
+        <code>isTurnActive</code> zählt laufende Warmups mit (<code>ad92990</code>).
       </div>
     </div>
   </div>
   <p class="sub">
     Dazu <b>N10:</b> das Shutdown-Budget von 45 s für bis zu 8 VMs inkl. Auto-Commit kann bei vollem
     Haus überschritten werden → ein geordneter Neustart hinterlässt dann Orphans wie ein Crash.
-    <span class="ref">shared/domain/shutdownTimings.ts:38</span>
+    <span class="ref">shared/domain/shutdownTimings.ts:38</span> — <b>Behoben:</b> das
+    Sandbox-Budget skaliert mit <code>maxSandboxes</code> (5 s + 5 s/VM), die Skript-Grace kommt aus
+    derselben Formel; Default-Werte unverändert (<code>58bb684</code>).
   </p>
 
   <h2 id="sauber">Was sich als sauber abgedeckt erwiesen hat</h2>
@@ -2189,13 +2244,13 @@
       </li>
       <li>
         <b>Kein Doppel-Turn bei Verbindungsabriss:</b> Reconnect setzt immer den close-Handler
-        (<code>abandonTurn</code>) voraus; die turn-started-ACK deckt die Halbtod-Richtung.
-        (Restlücke: M3.)
+        (<code>abandonTurn</code>) voraus; die turn-started-ACK deckt die Halbtod-Richtung. (Die
+        frühere Restlücke M3 ist geschlossen.)
       </li>
       <li>
         <b>Stop + sofort neu senden:</b> heilt wie designt über
-        <code>turn-rejected → shutdown → closeGracefully → Retry</code> mit History-Prompt.
-        (Restlücke: M1, der Stop <em>ohne</em> erreichbaren Daemon.)
+        <code>turn-rejected → shutdown → closeGracefully → Retry</code> mit History-Prompt. (Die
+        frühere Restlücke M1 — Stop <em>ohne</em> erreichbaren Daemon — ist geschlossen.)
       </li>
       <li>
         <b>Token nach echtem Neustart:</b> Verdacht entkräftet — die Shutdown-Sequenz stoppt alle
@@ -2213,8 +2268,9 @@
   </div>
 
   <footer>
-    Dokumentation der macvibes-Laufzeit · Zustände am aktuellen Code verifiziert, keine Änderung
-    vorgenommen. Diagramm generiert aus <code>zustandsmaschinen-gen.ts</code> (bei
+    Dokumentation der macvibes-Laufzeit · Audit am Stand <code>b510362</code>, Befunde M1–M3 und
+    N4–N10 am 2026-08-16 test-first behoben (Vermerke an den Befunden; Zeilenreferenzen beziehen
+    sich auf den Audit-Stand). Diagramm generiert aus <code>zustandsmaschinen-gen.ts</code> (bei
     Architektur-Änderungen bitte dort nachziehen); Randfälle aus einem adversarialen
     Nahtstellen-Audit. Datei:Zeile-Referenzen relativ zu <code>apps/server/src/</code> (Ausnahmen
     gekennzeichnet).
