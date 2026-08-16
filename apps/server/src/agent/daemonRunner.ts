@@ -132,6 +132,13 @@ export class DaemonAgentRunner implements AgentRunner {
 
     const events = (async function* (): AsyncGenerator<AgentEvent> {
       try {
+        if (aborted) {
+          // Abbruch VOR der ersten Iteration (Startfenster-Pin): gar keinen
+          // Verbindungs-Waiter registrieren — der hinge sonst bis zu 60 s
+          // samt Timer im Gateway, ohne dass ihn je jemand bräuchte.
+          yield { type: 'turn-aborted' };
+          return;
+        }
         const verbindung = gateway.waitForConnection(sandbox, connectTimeoutMs);
         try {
           await Promise.race([verbindung, abortDa]);

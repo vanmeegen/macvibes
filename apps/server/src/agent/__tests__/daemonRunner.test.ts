@@ -323,6 +323,29 @@ describe('Abbruch während des Verbindungsaufbaus (M1)', () => {
     }
   });
 
+  test('ein Abbruch VOR der ersten Iteration registriert gar keinen Verbindungs-Waiter', async () => {
+    // runAttempt löst den Startfenster-Pin ein, BEVOR der Generator je
+    // iteriert wurde. Der Generator-Body soll dann gar nicht erst
+    // waitForConnection anwerfen — sonst hinge für bis zu 60 s ein Waiter
+    // samt Timer im Gateway, der u. a. den Prozess-Shutdown offen hält.
+    const gw = new FakeGateway();
+    gw.armConnectGate();
+    let verbindungAngefragt = false;
+    const originalWait = gw.waitForConnection.bind(gw);
+    gw.waitForConnection = async (sandbox: string, timeoutMs: number) => {
+      verbindungAngefragt = true;
+      return originalWait(sandbox, timeoutMs);
+    };
+    const runner = makeRunner(gw, 60_000);
+
+    const handle = runner.startTurn(TURN);
+    handle.abort(); // vor der ersten Iteration
+    const events = await collect(handle.events);
+
+    expect(events).toEqual([{ type: 'turn-aborted' }]);
+    expect(verbindungAngefragt).toBe(false);
+  });
+
   test('eine später doch noch gelingende Verbindung startet keinen Turn mehr', async () => {
     const gw = new FakeGateway();
     gw.armConnectGate();
