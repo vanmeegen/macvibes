@@ -62,7 +62,12 @@ const SANDBOX_SHUTDOWN_PER_VM_MS = 5_000;
  * Unsinnige Werte (0, negativ) fallen auf eine VM zurück.
  */
 export function sandboxShutdownBudgetMs(maxSandboxes: number): number {
-  return SANDBOX_SHUTDOWN_BASE_MS + SANDBOX_SHUTDOWN_PER_VM_MS * Math.max(1, maxSandboxes);
+  // NaN-Härtung: Number('acht') → NaN, und Math.max(1, NaN) bleibt NaN — ein
+  // setTimeout(…, NaN) wäre ein SOFORT-Timeout (Sandbox-Schritt immer
+  // übersprungen, nie ein Auto-Commit), die Skript-Warteschleife (`< NaN`)
+  // killte sofort hart. Unsinnige Werte fallen auf den Default zurück.
+  const n = Number.isFinite(maxSandboxes) ? Math.max(1, maxSandboxes) : DEFAULT_MAX_SANDBOXES;
+  return SANDBOX_SHUTDOWN_BASE_MS + SANDBOX_SHUTDOWN_PER_VM_MS * n;
 }
 
 /** Summe aller Schritt-Fristen in ms für eine Flotte von maxSandboxes VMs. */

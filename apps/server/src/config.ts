@@ -367,7 +367,11 @@ export function loadConfig(): ServerConfig {
     sandbox: {
       graceMs: Number(Bun.env.MACVIBES_GRACE_MS ?? 15 * 60 * 1000),
       idleMs: Number(Bun.env.MACVIBES_IDLE_MS ?? 30 * 60 * 1000),
-      maxSandboxes: Number(Bun.env.MACVIBES_MAX_SANDBOXES ?? DEFAULT_MAX_SANDBOXES),
+      // NaN-Härtung: ein vertippter Wert deaktivierte sonst die LRU-Eviction
+      // (`active().length >= NaN` ist immer false → unbegrenzt viele VMs).
+      maxSandboxes: Number.isFinite(Number(Bun.env.MACVIBES_MAX_SANDBOXES))
+        ? Number(Bun.env.MACVIBES_MAX_SANDBOXES)
+        : DEFAULT_MAX_SANDBOXES,
       backend:
         Bun.env.MACVIBES_SANDBOX === 'process' || Bun.env.MACVIBES_SANDBOX === 'microsandbox'
           ? Bun.env.MACVIBES_SANDBOX

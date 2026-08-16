@@ -6,6 +6,7 @@
  * lsof-Abhängigkeit entfällt.
  */
 import { DEFAULT_MAX_SANDBOXES, shutdownGraceSeconds } from '@macvibes/shared';
+import { envWertMitDateiFallback } from './lib/env';
 import { portKonfiguration } from './lib/ports';
 import { istPortBelegt, pidsAufPort, pidsMitKommandozeile, beende } from './lib/prozesse';
 
@@ -42,9 +43,16 @@ for (const pid of await pidsMitKommandozeile(/run --filter.* dev/)) beende(pid);
 // (shutdownGraceSeconds; dort auch die maschinell bewachte Invariante). Seit
 // N10 skaliert das Sandbox-Budget mit der Flottengröße — dieselbe Env-Variable
 // wie beim Server, damit beide Seiten dieselbe Rechnung machen.
-const MAX_SANDBOXES = Number(process.env['MACVIBES_MAX_SANDBOXES'] ?? DEFAULT_MAX_SANDBOXES);
+// Mit .env-Datei-Fallback (lib/env): der Server liest apps/server/.env und
+// <macvibesHome>/.env — ohne den Fallback sähe das Skript ein dort gesetztes
+// MACVIBES_MAX_SANDBOXES nicht, rechnete die Grace mit dem Default und
+// schösse bei großen Flotten mitten in den Sandbox-Schritt (die Invariante
+// gälte nur auf dem Papier). NaN-Werte härtet shutdownGraceSeconds selbst ab.
+const MAX_SANDBOXES = Number(
+  envWertMitDateiFallback('MACVIBES_MAX_SANDBOXES') ?? DEFAULT_MAX_SANDBOXES,
+);
 const GRACE_SECONDS = Number(
-  process.env['MACVIBES_SHUTDOWN_GRACE'] ?? shutdownGraceSeconds(MAX_SANDBOXES),
+  envWertMitDateiFallback('MACVIBES_SHUTDOWN_GRACE') ?? shutdownGraceSeconds(MAX_SANDBOXES),
 );
 
 console.log(

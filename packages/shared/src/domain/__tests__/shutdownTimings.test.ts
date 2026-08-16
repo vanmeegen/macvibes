@@ -52,4 +52,16 @@ describe('Shutdown-Fristen-Budget (skaliert mit maxSandboxes, N10)', () => {
     // Unsinnige Werte fallen auf mindestens eine VM zurück.
     expect(sandboxShutdownBudgetMs(0)).toBe(sandboxShutdownBudgetMs(1));
   });
+
+  test('NaN-Härtung: ein vertipptes MACVIBES_MAX_SANDBOXES kippt kein Budget', () => {
+    // Number('acht') → NaN. Ohne Härtung wäre setTimeout(…, NaN) ein
+    // SOFORT-Timeout: der Sandbox-Schritt würde bei jedem Herunterfahren
+    // augenblicklich übersprungen — nie ein Auto-Commit; und die Skript-Grace
+    // (Warteschleife `< NaN`) killte sofort hart.
+    expect(sandboxShutdownBudgetMs(Number.NaN)).toBe(
+      sandboxShutdownBudgetMs(DEFAULT_MAX_SANDBOXES),
+    );
+    expect(shutdownGraceSeconds(Number.NaN)).toBe(shutdownGraceSeconds(DEFAULT_MAX_SANDBOXES));
+    expect(Number.isFinite(shutdownStepsTotalMs(Number.NaN))).toBe(true);
+  });
 });
