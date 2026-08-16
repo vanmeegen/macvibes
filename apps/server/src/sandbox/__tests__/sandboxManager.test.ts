@@ -1026,3 +1026,155 @@ describe('detachForReload (Dev-Hot-Reload)', () => {
     expect(manager.status('p1')).toBe('running');
   });
 });
+
+/** Pollt eine Bedingung, statt blind zu schlafen. */
+async function warteAuf(bedingung: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (bedingung()) return;
+    await Bun.sleep(5);
+  }
+  throw new Error('warteAuf: Bedingung nicht erfüllt');
+}
+
+/**
+ * N5 aus dem Zustandsmaschinen-Audit: die Grace- und Idle-Timer feuerten
+ * `void this.stop(...)` OHNE Rejection-Handler — ein scheiterndes stop()
+ * (z. B. msb weg) wurde zur Unhandled Rejection, entgegen der eigenen
+ * F18-Konvention (forget/touchVm machen es mit .catch richtig).
+ */
+describe('Timer-Stopps ohne Rejection-Handler (N5)', () => {
+  function providerMitKaputtemStop() {
+    const provider: SandboxProvider = {
+      async start(): Promise<SandboxHandle> {
+        return {
+          previewHostPort: 1,
+          previewStatus: () => 'ready' as const,
+          stop: async () => {
+            throw new Error('msb stop kaputt');
+          },
+        };
+      },
+    };
+    return provider;
+  }
+
+  async function mitRejectionFaenger(lauf: () => Promise<void>): Promise<unknown[]> {
+    const abgefangen: unknown[] = [];
+    const faenger = (reason: unknown): void => {
+      abgefangen.push(reason);
+    };
+    process.on('unhandledRejection', faenger);
+    try {
+      await lauf();
+    } finally {
+      process.off('unhandledRejection', faenger);
+    }
+    return abgefangen;
+  }
+
+  test('scheiternder Grace-Stopp wird geloggt statt zur Unhandled Rejection', async () => {
+    const manager = new SandboxManager({
+      provider: providerMitKaputtemStop(),
+      graceMs: 20,
+      idleMs: 10_000,
+      maxSandboxes: 8,
+    });
+    const abgefangen = await mitRejectionFaenger(async () => {
+      await manager.enter(ctx('p1'), 'u1');
+      manager.leave('p1', 'u1'); // letzter Betrachter → Grace scharf
+      await warteAuf(() => manager.status('p1') === 'stopped');
+      await Bun.sleep(30); // Zeit, in der die Rejection hochkäme
+    });
+    expect(abgefangen).toEqual([]);
+  });
+
+  test('scheiternder Idle-Stopp wird geloggt statt zur Unhandled Rejection', async () => {
+    const manager = new SandboxManager({
+      provider: providerMitKaputtemStop(),
+      graceMs: 10_000,
+      idleMs: 30,
+      maxSandboxes: 8,
+    });
+    const abgefangen = await mitRejectionFaenger(async () => {
+      await manager.enter(ctx('p1'), 'u1');
+      await warteAuf(() => manager.status('p1') === 'stopped');
+      await Bun.sleep(30);
+    });
+    expect(abgefangen).toEqual([]);
+  });
+});
+
+/**
+ * N6 aus dem Zustandsmaschinen-Audit: previewStatus() lieferte während des
+ * Boots hart „stopped" (Gate: status !== 'running' || !handle) — das Overlay
+ * behauptete „Sandbox gestoppt", während die Preview gerade STARTETE.
+ */
+describe('previewStatus während des Boots (N6)', () => {
+  test('meldet „starting", solange die Sandbox startet — danach den echten Handle-Status', async () => {
+    const t = torProvider();
+    const manager = new SandboxManager({
+      provider: t.provider,
+      graceMs: 10_000,
+      idleMs: 10_000,
+      maxSandboxes: 8,
+    });
+
+    const start = manager.enter(ctx('p1'), 'u1');
+    await t.warteAufTor('p1');
+    expect(manager.status('p1')).toBe('starting');
+    expect(manager.previewStatus('p1')).toBe('starting');
+
+    t.freigeben('p1');
+    await start;
+    expect(manager.previewStatus('p1')).toBe('ready');
+  });
+
+  test('unbekanntes Projekt und gestoppte Sandbox bleiben „stopped"', async () => {
+    const { manager } = setup();
+    expect(manager.previewStatus('unbekannt')).toBe('stopped');
+    await manager.enter(ctx('p1'), 'u1');
+    await manager.stop('p1');
+    expect(manager.previewStatus('p1')).toBe('stopped');
+  });
+});
+
+/**
+ * N8 aus dem Zustandsmaschinen-Audit: kam zwischen stop() und forget() ein
+ * enter() dazwischen, machte forget nur einen Nachhol-Stopp und liess den
+ * Map-Eintrag FÜR IMMER stehen — ein kleines Leck pro Lösch-Race. Rennen-Test
+ * #9 pinnt, dass der Eintrag WÄHREND des Stopps erhalten bleibt (keine
+ * verwaiste VM); hier kommt die zweite Hälfte: NACH dem vollendeten
+ * Nachhol-Stopp verschwindet er.
+ */
+describe('forget() räumt den Eintrag nach dem Nachhol-Stopp ab (N8)', () => {
+  test('der Nachhol-Stopp löscht den Eintrag, sobald er vollendet ist', async () => {
+    const t = torProvider();
+    const manager = new SandboxManager({
+      provider: t.provider,
+      graceMs: 10_000,
+      idleMs: 10_000,
+      maxSandboxes: 8,
+    });
+
+    // Exakt das #9-Szenario: stop(), enter() dazwischen, forget() mitten im Start.
+    const start1 = manager.enter(ctx('p1'), 'u1');
+    await t.warteAufTor('p1');
+    t.freigeben('p1');
+    await start1;
+    await manager.stop('p1');
+    const neuerStart = manager.enter(ctx('p1'), 'u2');
+    await t.warteAufTor('p1');
+
+    manager.forget('p1');
+
+    t.freigeben('p1');
+    await neuerStart;
+
+    // #9 hält hier fest: nicht sofort verwaist. Aber der Nachhol-Stopp muss
+    // den Eintrag danach abräumen — sonst bleibt er für die Prozesslaufzeit.
+    await warteAuf(() => manager.trackedProjects() === 0);
+    expect(manager.status('p1')).toBe('stopped');
+    expect(t.gestoppt).toContain('p1');
+  });
+});

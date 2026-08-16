@@ -278,7 +278,10 @@ export class SandboxManager {
         this.armGrace(entry);
         return;
       }
-      void this.stop(entry.context.projectId);
+      // Mit Rejection-Handler (F18/N5) — wie in forget()/touchVm().
+      void this.stop(entry.context.projectId).catch((error: unknown) => {
+        console.error(`Grace-Stopp für ${entry.context.projectId} schlug fehl:`, error);
+      });
     }, this.options.graceMs);
   }
 
@@ -301,7 +304,11 @@ export class SandboxManager {
   /** Zustand des Dev-Servers laut Watchdog (für das UI-Overlay, R7). */
   previewStatus(projectId: string): PreviewStatus {
     const entry = this.entries.get(projectId);
-    if (!entry || entry.status !== 'running' || !entry.handle) return 'stopped';
+    if (!entry) return 'stopped';
+    // Boot ist kein „stopped" (N6): sonst behauptete das Overlay für die
+    // Dauer des VM-Starts „Sandbox gestoppt", während die Preview STARTET.
+    if (entry.status === 'starting') return 'starting';
+    if (entry.status !== 'running' || !entry.handle) return 'stopped';
     return entry.handle.previewStatus();
   }
 
@@ -395,9 +402,22 @@ export class SandboxManager {
         `forget(${projectId}): Sandbox ist ${entry.status} — erneut stoppen statt vergessen ` +
           '(gleichzeitiger enter auf ein gelöschtes Projekt?).',
       );
-      void this.stop(projectId).catch((error: unknown) => {
-        console.error(`Nachträglicher Stopp für ${projectId} schlug fehl:`, error);
-      });
+      void this.stop(projectId)
+        .then(() => {
+          // Erst NACH dem vollendeten Stopp löschen (N8) — und nur, wenn der
+          // Eintrag noch DERSELBE und wirklich gestoppt ist: ein weiteres
+          // enter() hätte im Frischstart-Pfad ein NEUES Entry-Objekt
+          // installiert, das hier nicht weggeräumt werden darf.
+          const aktuell = this.entries.get(projectId);
+          if (aktuell !== entry || aktuell.status !== 'stopped') return;
+          this.clearGrace(aktuell);
+          this.clearIdle(aktuell);
+          aktuell.viewers.clear();
+          this.entries.delete(projectId);
+        })
+        .catch((error: unknown) => {
+          console.error(`Nachträglicher Stopp für ${projectId} schlug fehl:`, error);
+        });
       return;
     }
     this.clearGrace(entry);
@@ -446,7 +466,10 @@ export class SandboxManager {
     this.clearIdle(entry);
     entry.idleTimer = setTimeout(() => {
       entry.idleTimer = null;
-      void this.stop(entry.context.projectId);
+      // Mit Rejection-Handler (F18/N5) — wie in forget()/touchVm().
+      void this.stop(entry.context.projectId).catch((error: unknown) => {
+        console.error(`Idle-Stopp für ${entry.context.projectId} schlug fehl:`, error);
+      });
     }, this.options.idleMs);
     this.touchVm(entry);
   }
