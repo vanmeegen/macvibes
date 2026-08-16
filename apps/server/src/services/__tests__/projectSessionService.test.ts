@@ -359,12 +359,58 @@ describe('sendMessageToProject (Stufe 3)', () => {
       },
     );
 
-    // Reihenfolge fix; Text getrimmt; interrupt durchgereicht.
+    // Reihenfolge fix; Text getrimmt; interrupt durchgereicht. Das ZWEITE
+    // ensureRunning nach dem Einreihen schließt das N4-Mikro-Fenster (s. u.).
     expect(f.calls).toEqual([
       `ensureRunning:${project.id}`,
       `sendMessage:${project.id}:hallo:true`,
+      `ensureRunning:${project.id}`,
     ]);
     expect((await lastActivity(db, project.id)).getTime()).toBeGreaterThan(OLD.getTime());
+  });
+
+  test('N4: wird die Sandbox im Fenster vor queue.push gestoppt, sichert das zweite ensureRunning den Neustart', async () => {
+    // Zwischen dem ersten ensureRunning und dem queue.push im ChatService
+    // liegt ein await (Ownership-Read) — dort ist isBusy noch false und ein
+    // Grace-/Idle-/Eviction-Stopp möglich. Das Szenario: der Stopp passiert,
+    // WÄHREND sendMessage läuft; das zweite ensureRunning (nach dem Einreihen,
+    // ab da isBusy=true) muss den Neustart zusichern.
+    const { db, config, marco, home } = await setup();
+    const project = await createProject(db, config, marco, { name: 'App', templateDir: 'pwa' });
+    const f = fakes(db);
+    const abfolge: string[] = [];
+    let sandboxLaeuft = false;
+    const sandbox: SandboxLifecycle = {
+      ensureRunning: async (context) => {
+        sandboxLaeuft = true;
+        abfolge.push(`ensureRunning:${context.projectId}`);
+      },
+      stop: f.sandbox.stop,
+      forget: f.sandbox.forget,
+    };
+    const chat: ChatSessionPort = {
+      ...f.chat,
+      sendMessage: async (_user, input) => {
+        // Mitten im Fenster: Grace/Eviction stoppt die VM.
+        sandboxLaeuft = false;
+        abfolge.push(`stopp-im-fenster:${input.projectId}`);
+        abfolge.push(`sendMessage:${input.projectId}`);
+      },
+    };
+
+    await sendMessageToProject({ db, sandbox, chat, macvibesHome: home }, marco, {
+      projectId: project.id,
+      text: 'hallo',
+      interrupt: false,
+    });
+
+    expect(abfolge).toEqual([
+      `ensureRunning:${project.id}`,
+      `stopp-im-fenster:${project.id}`,
+      `sendMessage:${project.id}`,
+      `ensureRunning:${project.id}`,
+    ]);
+    expect(sandboxLaeuft).toBe(true);
   });
 
   test('fremder User: getProjectOwned wirft VOR ensureRunning/sendMessage (F10)', async () => {
