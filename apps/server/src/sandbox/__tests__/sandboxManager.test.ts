@@ -45,6 +45,7 @@ function setup(
     idleMs?: number;
     maxSandboxes?: number;
     isBusy?: (projectId: string) => boolean;
+    healCooldownMs?: number;
   } = {},
 ): Setup {
   const provider = new FakeProvider();
@@ -56,6 +57,7 @@ function setup(
     idleMs: overrides.idleMs ?? 10_000,
     maxSandboxes: overrides.maxSandboxes ?? 8,
     ...(overrides.isBusy !== undefined ? { isBusy: overrides.isBusy } : {}),
+    ...(overrides.healCooldownMs !== undefined ? { healCooldownMs: overrides.healCooldownMs } : {}),
     onBeforeStop: async (projectId) => {
       beforeStopLog.push(projectId);
     },
@@ -1107,6 +1109,103 @@ describe('Heilung beim Wieder-Öffnen: kaputte VM bei Manager-Status running (M2
   });
 });
 
+/**
+ * Zombie-Timer: Die Timer-Callbacks schließen über ihr `entry`-Objekt, rufen
+ * aber `this.stop(projectId)` — also „was auch immer gerade unter dieser ID
+ * registriert ist". Bleibt ein Timer an einem TOTEN Eintrag hängen, stoppt er
+ * beim Ablauf die inzwischen neu gestartete, GESUNDE VM. `forget()` hat für
+ * genau diese Klasse seit N8 einen Same-Object-Guard — die Timer nicht.
+ */
+describe('Zombie-Timer eines toten Eintrags darf die nächste VM nicht stoppen', () => {
+  test('Grace-Timer eines GESCHEITERTEN Starts killt die danach gesunde VM nicht', async () => {
+    // Der Weg dorthin ist Alltag: Betrachter öffnet, der Kaltstart läuft,
+    // der Tab geht zu (leave armiert Grace auch im Status „starting"), und
+    // dann scheitert der Start (Kapazität, msb-Flake, fehlende Baseline).
+    // Der Fehlerpfad setzte nur den Status, ließ den Timer aber laufen.
+    let versuch = 0;
+    let freigeben: () => void = () => {};
+    const tor = new Promise<void>((r) => {
+      freigeben = r;
+    });
+    const gestoppt: string[] = [];
+    const provider: SandboxProvider = {
+      async start(context: SandboxContext): Promise<SandboxHandle> {
+        versuch += 1;
+        if (versuch === 1) {
+          await tor;
+          throw new Error('Startfehler (Kapazität/msb-Flake)');
+        }
+        return {
+          previewHostPort: 1,
+          previewStatus: () => 'ready' as const,
+          stop: async () => {
+            gestoppt.push(context.projectId);
+          },
+        };
+      },
+    };
+    const manager = new SandboxManager({
+      provider,
+      graceMs: 60,
+      idleMs: 10_000,
+      maxSandboxes: 8,
+    });
+
+    const ersterStart = manager.enter(ctx('p1'), 'u1');
+    await warteAuf(() => manager.status('p1') === 'starting');
+    manager.leave('p1', 'u1'); // Tab zu → Grace scharf, obwohl noch „starting"
+    freigeben();
+    await expect(ersterStart).rejects.toThrow();
+    expect(manager.status('p1')).toBe('stopped');
+
+    // Nutzer öffnet erneut: neue, gesunde VM mit lebendem Betrachter.
+    await manager.enter(ctx('p1'), 'u2');
+    expect(manager.status('p1')).toBe('running');
+
+    // Der Zombie-Timer des gescheiterten Starts darf sie nicht abräumen.
+    await Bun.sleep(200);
+    expect(manager.status('p1')).toBe('running');
+    expect(gestoppt).toEqual([]);
+  });
+});
+
+/**
+ * Die Heilung (Stop→Neustart bei kaputter VM) braucht einen Deckel: Ohne ihn
+ * heilt JEDES enter/ensureRunning erneut. Bei dauerhaft „failed" (der Agent hat
+ * den Dev-Server kaputtgeschrieben — die VM LEBT, nur monit hat unmonitored)
+ * bedeutet das: jede Nachricht des Nutzers löst zuerst einen vollen VM-Zyklus
+ * samt zwei Auto-Commits aus, bevor sein „mach es heil"-Prompt überhaupt
+ * anläuft. Ein VM-Neustart repariert kaputten Code ohnehin nicht.
+ */
+describe('Heilung ist gedeckelt (kein Neustart-Sturm)', () => {
+  test('dauerhaft „failed": es wird höchstens einmal geheilt, nicht bei jedem enter', async () => {
+    const { provider, manager } = setup({ graceMs: 10_000, healCooldownMs: 10_000 });
+    await manager.enter(ctx('p1'), 'u1');
+    provider.previewStatusVon.set('p1', 'failed');
+
+    for (let i = 0; i < 5; i += 1) {
+      await manager.enter(ctx('p1'), 'u1');
+    }
+
+    // Genau EINE Heilung: der Ausgangsstart plus ein Heil-Neustart.
+    expect(provider.startCalls).toEqual(['p1', 'p1']);
+    expect(provider.stopCalls).toEqual(['p1']);
+  });
+
+  test('nach Ablauf der Sperrfrist darf erneut geheilt werden', async () => {
+    const { provider, manager } = setup({ graceMs: 10_000, healCooldownMs: 30 });
+    await manager.enter(ctx('p1'), 'u1');
+    provider.previewStatusVon.set('p1', 'failed');
+
+    await manager.enter(ctx('p1'), 'u1');
+    await Bun.sleep(60);
+    await manager.enter(ctx('p1'), 'u1');
+
+    expect(provider.startCalls).toEqual(['p1', 'p1', 'p1']);
+    expect(provider.stopCalls).toEqual(['p1', 'p1']);
+  });
+});
+
 /** Pollt eine Bedingung, statt blind zu schlafen. */
 async function warteAuf(bedingung: () => boolean, timeoutMs = 2_000): Promise<void> {
   const start = Date.now();
@@ -1287,6 +1386,35 @@ describe('onBeforeStart: offener Stand wird gesichert, bevor eine neue VM bootet
  * Nachhol-Stopp verschwindet er.
  */
 describe('forget() räumt den Eintrag nach dem Nachhol-Stopp ab (N8)', () => {
+  test('auch wenn der Nachhol-Stopp WIRFT, verschwindet der Eintrag (kein Dauer-Leck)', async () => {
+    // stop() setzt `stopped` im finally — auch bei einem werfenden
+    // handle.stop(). Hinge die Löschung nur am Erfolgspfad, bliebe der
+    // Buchhaltungseintrag eines GELÖSCHTEN Projekts für die Prozesslaufzeit
+    // stehen: genau das Leck, das forget beseitigen soll.
+    const provider: SandboxProvider = {
+      async start(): Promise<SandboxHandle> {
+        return {
+          previewHostPort: 1,
+          previewStatus: () => 'ready' as const,
+          stop: async () => {
+            throw new Error('msb stop kaputt');
+          },
+        };
+      },
+    };
+    const manager = new SandboxManager({
+      provider,
+      graceMs: 10_000,
+      idleMs: 10_000,
+      maxSandboxes: 8,
+    });
+    await manager.enter(ctx('p1'), 'u1');
+
+    // forget auf laufender Sandbox → Nachhol-Stopp (der wirft).
+    manager.forget('p1');
+    await warteAuf(() => manager.trackedProjects() === 0);
+  });
+
   test('der Nachhol-Stopp löscht den Eintrag, sobald er vollendet ist', async () => {
     const t = torProvider();
     const manager = new SandboxManager({

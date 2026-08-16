@@ -58,7 +58,19 @@ export interface SandboxManagerOptions {
    * viele API-Aufrufe pro Turn. Default 60 s; die VM-Frist liegt bei 45 min.
    */
   vmTouchIntervalMs?: number;
+  /**
+   * Sperrfrist zwischen zwei Heilungs-Neustarts desselben Projekts (M2).
+   * Ohne Deckel heilte JEDES enter/ensureRunning erneut: bei dauerhaft
+   * „failed" (der Agent hat den Dev-Server kaputtgeschrieben — die VM lebt!)
+   * löste jede Nachricht des Nutzers erst einen vollen VM-Zyklus samt zwei
+   * Auto-Commits aus, bevor sein „mach es heil"-Prompt überhaupt anlief.
+   * Ein VM-Neustart repariert kaputten Code ohnehin nicht. Default 2 min.
+   */
+  healCooldownMs?: number;
 }
+
+/** Default-Sperrfrist zwischen zwei Heilungs-Neustarts (M2). */
+const DEFAULT_HEAL_COOLDOWN_MS = 2 * 60 * 1000;
 
 type Timer = ReturnType<typeof setTimeout>;
 
@@ -125,6 +137,12 @@ export function viewerKey(userId: string, connectionId: string): string {
 
 export class SandboxManager {
   private readonly entries = new Map<string, SandboxEntry>();
+  /**
+   * Wann zuletzt ein Heilungs-Neustart lief (M2) — bewusst am Manager, nicht
+   * am Entry: der Frischstart ersetzt das Entry-Objekt, die Sperrfrist muss
+   * den Neustart aber überleben.
+   */
+  private readonly letzteHeilungAt = new Map<string, number>();
 
   constructor(private readonly options: SandboxManagerOptions) {}
 
@@ -178,7 +196,15 @@ export class SandboxManager {
         if (viewer !== null) existing.viewers.delete(viewer);
         throw error;
       }
-      this.touch(existing);
+      // Status-Recheck nach dem await: Hat ein Stopp den Start überholt
+      // (F17-Übergabe), ist der Eintrag `stopping`/`stopped` — ein touch()
+      // würde jetzt einen frischen Idle-Timer auf den sterbenden Eintrag
+      // setzen (Zombie-Timer). Nur eine wirklich laufende Sandbox berühren.
+      // (Frischer Property-Read über den weiten Typ: TS narrowt `status` über
+      // das await hinweg auf 'starting' und sähe den Vergleich sonst als toten
+      // Code — die Mutation durch stop() passiert aber genau in dem await.)
+      const statusNachStart = (existing as SandboxEntry).status;
+      if (statusNachStart === 'running') this.touch(existing);
       return;
     }
     if (existing && existing.status === 'running') {
@@ -191,7 +217,15 @@ export class SandboxManager {
       // Betrachter überleben das per H11-Übernahme. Nie unter einem laufenden
       // Turn (auch Warmup, N9) — ein toter Turn löst sich über den Watchdog.
       const kaputt = existing.vmVerschwunden || existing.handle?.previewStatus() === 'failed';
-      if (kaputt && this.options.isBusy?.(context.projectId) !== true) {
+      // Sperrfrist (Deckel): höchstens EIN Heil-Neustart pro Frist und
+      // Projekt — sonst löste bei dauerhaft „failed" jedes enter/ensureRunning
+      // (Chat-Öffnen, Subscription-Reconnect, jede Nachricht) einen weiteren
+      // VM-Zyklus samt zwei Auto-Commits aus.
+      const heilungErlaubt =
+        Date.now() - (this.letzteHeilungAt.get(context.projectId) ?? 0) >=
+        (this.options.healCooldownMs ?? DEFAULT_HEAL_COOLDOWN_MS);
+      if (kaputt && heilungErlaubt && this.options.isBusy?.(context.projectId) !== true) {
+        this.letzteHeilungAt.set(context.projectId, Date.now());
         console.warn(
           `Sandbox ${context.projectId} ist kaputt (${
             existing.vmVerschwunden ? 'VM verschwunden' : 'Dev-Server failed'
@@ -256,6 +290,12 @@ export class SandboxManager {
       } catch (error) {
         // Nur auf `stopped` schalten, wenn nicht bereits ein Stopp läuft — der
         // hat den Status schon auf `stopping` gesetzt und räumt selbst auf.
+        // Timer IMMER räumen: ein leave() während des Starts hat u. U. Grace
+        // armiert — bliebe der Timer stehen, feuerte er später auf die
+        // nächste, gesunde VM (Zombie-Timer; der Guard im Callback ist die
+        // zweite Sicherung).
+        this.clearGrace(entry);
+        this.clearIdle(entry);
         if (entry.stopPromise === null) this.setStatus(entry, 'stopped');
         throw error;
       }
@@ -323,6 +363,12 @@ export class SandboxManager {
     this.clearGrace(entry);
     entry.graceTimer = setTimeout(() => {
       entry.graceTimer = null;
+      // Zombie-Guard (wie der N8-Guard in forget): stop() trifft „was auch
+      // immer gerade unter dieser ID registriert ist". Gehört dieser Timer zu
+      // einem ERSETZTEN Eintrag (z. B. blieb er an einem gescheiterten Start
+      // hängen), würde er sonst die inzwischen neu gestartete, gesunde VM
+      // unter dem offenen Tab abräumen.
+      if (this.entries.get(entry.context.projectId) !== entry) return;
       if (this.options.isBusy?.(entry.context.projectId)) {
         this.armGrace(entry);
         return;
@@ -452,7 +498,14 @@ export class SandboxManager {
           '(gleichzeitiger enter auf ein gelöschtes Projekt?).',
       );
       void this.stop(projectId)
-        .then(() => {
+        .catch((error: unknown) => {
+          // stop() setzt `stopped` im finally — auch bei einem werfenden
+          // handle.stop(). Der Fehler wird geloggt, die Löschung unten läuft
+          // TROTZDEM: sonst bliebe der Eintrag eines gelöschten Projekts als
+          // Dauer-Leck stehen — genau das, was forget beseitigen soll.
+          console.error(`Nachträglicher Stopp für ${projectId} schlug fehl:`, error);
+        })
+        .finally(() => {
           // Erst NACH dem vollendeten Stopp löschen (N8) — und nur, wenn der
           // Eintrag noch DERSELBE und wirklich gestoppt ist: ein weiteres
           // enter() hätte im Frischstart-Pfad ein NEUES Entry-Objekt
@@ -463,9 +516,6 @@ export class SandboxManager {
           this.clearIdle(aktuell);
           aktuell.viewers.clear();
           this.entries.delete(projectId);
-        })
-        .catch((error: unknown) => {
-          console.error(`Nachträglicher Stopp für ${projectId} schlug fehl:`, error);
         });
       return;
     }
@@ -515,6 +565,8 @@ export class SandboxManager {
     this.clearIdle(entry);
     entry.idleTimer = setTimeout(() => {
       entry.idleTimer = null;
+      // Zombie-Guard — s. Begründung in armGrace.
+      if (this.entries.get(entry.context.projectId) !== entry) return;
       // Mit Rejection-Handler (F18/N5) — wie in forget()/touchVm().
       void this.stop(entry.context.projectId).catch((error: unknown) => {
         console.error(`Idle-Stopp für ${entry.context.projectId} schlug fehl:`, error);
