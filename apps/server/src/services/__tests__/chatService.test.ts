@@ -241,6 +241,70 @@ describe('Watchdog: stiller Hänger wird als Fehler sichtbar', () => {
   });
 });
 
+/**
+ * M1 aus dem Zustandsmaschinen-Audit, Service-Hälfte: Stoppt der Nutzer,
+ * während der Runner-Stream stumm bleibt (Daemon im Verbindungs-Limbo — sein
+ * abort liefert dann kein turn-aborted), schrieb der Watchdog KEINE Zeile:
+ * die Bedingung für die error-Zeile war auf Versuch 1 beidseitig false, und
+ * die Retry-Schleife brach wegen benutzerAbbruch ab, bevor der letzte Versuch
+ * sie hätte schreiben können. Folgen: kein finales turnActive:false („Agent
+ * arbeitet" für immer) und — schlimmer — die letzte DB-Zeile blieb die
+ * User-Nachricht, sodass resumeUnansweredTurn beim nächsten Öffnen GENAU den
+ * gestoppten Prompt erneut ausführte. Der Backstop hier gilt für JEDEN Runner,
+ * unabhängig vom DaemonRunner-Fix derselben Konstellation.
+ */
+describe('Stop bei nicht erreichbarem Daemon (M1): Terminal-Zeile trotz stummem Runner', () => {
+  test('Nutzer-Stop ohne Runner-Reaktion schreibt „Turn abgebrochen" und beendet turnActive', async () => {
+    let starts = 0;
+    // Vertragsverletzender Runner als Robustheits-Seam: events lösen nie auf,
+    // abort() emittiert NICHTS (Daemon nie verbunden, pre-M1a-Verhalten).
+    const stummerRunner: AgentRunner = {
+      startTurn(): TurnHandle {
+        starts += 1;
+        const events: AsyncIterable<never> = {
+          [Symbol.asyncIterator]: () => ({ next: () => new Promise<never>(() => {}) }),
+        };
+        return { events, abort: () => {} };
+      },
+    };
+    const { owner, service, projectId } = await setupChat(stummerRunner, {
+      agentFirstEventTimeoutMs: 40,
+      agentColdStartTimeoutMs: 60,
+      agentAbortGraceMs: 20,
+    });
+
+    const payloads: ChatEventPayload[] = [];
+    const subscription = service.subscribe(projectId);
+    const collector = (async () => {
+      for await (const payload of subscription) payloads.push(payload);
+    })();
+
+    await service.sendMessage(owner, sendInput(projectId, 'gestoppter Prompt'));
+    await waitFor(() => starts === 1);
+    await service.stopTurn(owner, projectId);
+    await waitFor(() => !service.isTurnActive(projectId), 3000);
+
+    // DER Kern des Befunds: es MUSS eine Terminal-Zeile geben …
+    const messages = await service.listMessages(projectId);
+    const letzte = messages[messages.length - 1];
+    expect(letzte?.role).toBe('system');
+    expect(letzte?.content).toContain('abgebrochen');
+    // … kein error (Nutzer-Stop ist kein Fehler), kein Retry:
+    expect(messages.some((m) => m.role === 'error')).toBe(false);
+    expect(messages.some((m) => m.content.includes('zweiter Versuch'))).toBe(false);
+
+    // Das finale turnActive:false MUSS publiziert worden sein.
+    await waitFor(() => payloads.some((p) => !p.turnActive));
+    await subscription.return?.(undefined);
+    await collector;
+    expect(payloads[payloads.length - 1]?.turnActive).toBe(false);
+
+    // Und der gestoppte Prompt läuft beim nächsten Öffnen NICHT erneut.
+    expect(await service.resumeUnansweredTurn(owner, projectId, '/tmp/fake-workspace')).toBe(false);
+    expect(starts).toBe(1);
+  });
+});
+
 describe('Kaltstart-Timeout: der ERSTE Turn (frische VM) bekommt mehr Zeit', () => {
   test('erstes Event kommt spät (nach dem kurzen Timeout), Turn läuft trotzdem — weil Kaltstart', async () => {
     // Frisches Projekt (keine Session) => Kaltstart. claudes First-Run in der frisch

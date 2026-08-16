@@ -989,7 +989,16 @@ export class ChatService {
           // ein Hänger ist genau der Fall, für den der Retry gedacht ist.
           rohHandle.abort();
           const detail = await drainForErrorDetail();
-          if (sawMeaningful || isLastAttempt) {
+          if (benutzerAbbruch) {
+            // Nutzer-Stop, aber der Runner hat sein turn-aborted nie geliefert
+            // (z. B. Daemon nie verbunden, M1): Terminal-Zeile trotzdem
+            // schreiben — sonst bliebe die letzte Zeile die User-Nachricht
+            // (resumeUnansweredTurn führte den gerade gestoppten Prompt beim
+            // nächsten Öffnen erneut aus) und mangels lastRow würde
+            // turnActive:false nie publiziert („Agent arbeitet" für immer).
+            // Gleiches Vokabular wie der turn-aborted-Pfad, EIN Stop-Bild im UI.
+            await insert('system', 'Turn abgebrochen');
+          } else if (sawMeaningful || isLastAttempt) {
             const usedMs = sawAnyEvent ? timeouts.idleMs : firstEventBudget;
             const secs = Math.round(usedMs / 1000);
             await insert(
