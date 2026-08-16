@@ -5,7 +5,7 @@
  * TCP-Connect, PID-Suche gekapselt in lib/prozesse — die frühere harte
  * lsof-Abhängigkeit entfällt.
  */
-import { SHUTDOWN_GRACE_SECONDS } from '@macvibes/shared';
+import { DEFAULT_MAX_SANDBOXES, shutdownGraceSeconds } from '@macvibes/shared';
 import { portKonfiguration } from './lib/ports';
 import { istPortBelegt, pidsAufPort, pidsMitKommandozeile, beende } from './lib/prozesse';
 
@@ -39,8 +39,13 @@ for (const pid of await pidsMitKommandozeile(/run --filter.* dev/)) beende(pid);
 // einzelner hängender Schritt nicht das ganze Budget frisst und die restlichen
 // Schritte (u. a. der Auto-Commit) abschneidet (Live-Befund 2026-08). Der
 // Default kommt aus EINER Quelle mit den Schritt-Fristen: @macvibes/shared
-// (SHUTDOWN_GRACE_SECONDS; dort auch die maschinell bewachte Invariante).
-const GRACE_SECONDS = Number(process.env['MACVIBES_SHUTDOWN_GRACE'] ?? SHUTDOWN_GRACE_SECONDS);
+// (shutdownGraceSeconds; dort auch die maschinell bewachte Invariante). Seit
+// N10 skaliert das Sandbox-Budget mit der Flottengröße — dieselbe Env-Variable
+// wie beim Server, damit beide Seiten dieselbe Rechnung machen.
+const MAX_SANDBOXES = Number(process.env['MACVIBES_MAX_SANDBOXES'] ?? DEFAULT_MAX_SANDBOXES);
+const GRACE_SECONDS = Number(
+  process.env['MACVIBES_SHUTDOWN_GRACE'] ?? shutdownGraceSeconds(MAX_SANDBOXES),
+);
 
 console.log(
   `→ Beende Ports (${WEB_PORT} Web, ${SERVER_PORT} Server, ${EGRESS_PORT} Egress, ${GATEWAY_PORT} Gateway) …`,

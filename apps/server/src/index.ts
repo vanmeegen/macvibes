@@ -35,7 +35,7 @@ import { ensureBareRepo } from './core/gitService';
 import { startMirrorScheduler } from './services/mirrorService';
 import { startLocalRouter } from './services/localRouterService';
 import { ShutdownSequence } from './shutdownSequence';
-import { SHUTDOWN_STEP_TIMEOUTS_MS } from '@macvibes/shared';
+import { FIXED_SHUTDOWN_STEP_TIMEOUTS_MS, sandboxShutdownBudgetMs } from '@macvibes/shared';
 import { projectRepoFor } from './core/workspaceService';
 import { initHotReload } from './devHotReload';
 
@@ -176,7 +176,7 @@ shutdownSequence.register(
     const router = await localRouterReady;
     await router.stop();
   },
-  SHUTDOWN_STEP_TIMEOUTS_MS['lokaler Modell-Router'],
+  FIXED_SHUTDOWN_STEP_TIMEOUTS_MS['lokaler Modell-Router'],
 );
 
 /** Meldet eine group/other-lesbare .env — dort steht der Claude-Token (F26). */
@@ -489,15 +489,17 @@ if (config.mirror.remoteUrl !== null) {
 shutdownSequence.register(
   'GitHub-Mirror',
   () => mirror.stop(),
-  SHUTDOWN_STEP_TIMEOUTS_MS['GitHub-Mirror'],
+  FIXED_SHUTDOWN_STEP_TIMEOUTS_MS['GitHub-Mirror'],
 );
 shutdownSequence.register(
   'Preview-Gateway',
   () => previewGateway.stop(),
-  SHUTDOWN_STEP_TIMEOUTS_MS['Preview-Gateway'],
+  FIXED_SHUTDOWN_STEP_TIMEOUTS_MS['Preview-Gateway'],
 );
 shutdownSequence.register(
   'Sandboxes (inkl. Auto-Commit)',
   () => sandboxManager.stopAll(),
-  SHUTDOWN_STEP_TIMEOUTS_MS['Sandboxes (inkl. Auto-Commit)'],
+  // N10: skaliert mit der Flottengröße — stopAll() macht pro VM einen
+  // host-seitig seriellen Auto-Commit inkl. git push.
+  sandboxShutdownBudgetMs(config.sandbox.maxSandboxes),
 );

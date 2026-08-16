@@ -7,8 +7,10 @@ export {
 } from './validation/templates';
 export { usernameSchema, passwordSchema, projectNameSchema } from './validation/auth';
 export {
-  SHUTDOWN_STEP_TIMEOUTS_MS,
-  SHUTDOWN_STEPS_TOTAL_MS,
-  SHUTDOWN_GRACE_SECONDS,
+  DEFAULT_MAX_SANDBOXES,
+  FIXED_SHUTDOWN_STEP_TIMEOUTS_MS,
+  sandboxShutdownBudgetMs,
+  shutdownGraceSeconds,
+  shutdownStepsTotalMs,
   type ShutdownStepName,
 } from './domain/shutdownTimings';
