@@ -186,6 +186,11 @@ export class ChatService {
   }
 
   isTurnActive(projectId: string): boolean {
+    // Ein Config-Warmup belegt den Ein-Turn-Daemon genauso wie ein echter
+    // Turn — Grace-Stopp und LRU-Eviction (isBusy) dürfen die VM nicht unter
+    // ihm wegstoppen (N9). Der Eintrag verschwindet garantiert im finally
+    // von prewarm — kein Dauer-busy-Risiko.
+    if (this.warmups.has(projectId)) return true;
     const state = this.states.get(projectId);
     if (!state) return false;
     return state.pumpRunning || state.queue.length > 0 || state.currentHandle !== null;

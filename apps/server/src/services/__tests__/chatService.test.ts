@@ -165,6 +165,33 @@ describe('Config-Warmup: erster Turn wird schnell, weil beim Öffnen vorgewärmt
     expect((await service.listMessages(projectId)).some((m) => m.content === 'echt')).toBe(true);
   });
 
+  test('ein laufender Warmup zählt als aktiver Turn — Grace/Eviction stoppen keine warmlaufende VM (N9)', async () => {
+    // isTurnActive speist isBusy des SandboxManagers (Grace-Aufschub und
+    // Eviction-Schutz). Der Warmup belegt den Ein-Turn-Daemon wie ein echter
+    // Turn — zählte er nicht als busy, konnte Grace/LRU die VM mitten im
+    // Warmup stoppen (Folge: verlorener Warmup, Doppel-Boot).
+    let warmupGestartet = false;
+    let releaseWarmup: () => void = () => {};
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        warmupGestartet = true;
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          await new Promise<void>((r) => {
+            releaseWarmup = r;
+          });
+          yield { type: 'turn-completed', sessionId: 'w' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { owner, service, projectId } = await setup(runner);
+    await service.prewarm(owner, projectId, '/tmp/ws');
+    await waitFor(() => warmupGestartet);
+    expect(service.isTurnActive(projectId)).toBe(true);
+    releaseWarmup();
+    await waitFor(() => !service.isTurnActive(projectId));
+  });
+
   test('prewarm überspringt, wenn schon eine Session existiert (Config bereits warm)', async () => {
     const prompts: string[] = [];
     const runner: AgentRunner = {
