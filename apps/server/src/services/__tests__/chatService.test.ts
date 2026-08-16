@@ -329,6 +329,64 @@ describe('Stop bei nicht erreichbarem Daemon (M1): Terminal-Zeile trotz stummem 
     // Und der gestoppte Prompt läuft beim nächsten Öffnen NICHT erneut.
     expect(await service.resumeUnansweredTurn(owner, projectId, '/tmp/fake-workspace')).toBe(false);
     expect(starts).toBe(1);
+
+    // Ohne sinnvolle Events gibt es nichts fortzusetzen — KEIN weiter-Hinweis.
+    expect(letzte?.content).not.toContain('weiter');
+  });
+});
+
+/**
+ * Halbfertige Arbeit sichtbar fortsetzbar machen: Bricht ein Turn ab, NACHDEM
+ * schon sinnvolle Events liefen (sawMeaningful), bleibt der Zwischenstand im
+ * Workspace liegen und die SDK-Session trägt den Kontext weiter — ein
+ * schlichtes „weiter" setzt nahtlos fort. Ohne Hinweis in der Terminal-Zeile
+ * weiß das aber niemand. Ohne sinnvolle Events gibt es dagegen nichts
+ * fortzusetzen, dann bleibt die Zeile hinweisfrei (Negativfall im M1-Test).
+ */
+describe('Abbruch nach halber Arbeit: Terminal-Zeile fordert zum „weiter" auf', () => {
+  test('Nutzer-Stop nach text-delta: „Turn abgebrochen" enthält den weiter-Hinweis', async () => {
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        let release: (() => void) | null = null;
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          yield { type: 'text-delta', text: 'Ich fange an …' };
+          await new Promise<void>((r) => {
+            release = r;
+          });
+          yield { type: 'turn-aborted' };
+        })();
+        return { events, abort: () => release?.() };
+      },
+    };
+    const { owner, service, projectId, activity } = await setup(runner);
+    await service.sendMessage(owner, sendInput(projectId, 'baue X'));
+    await waitFor(() => activity.length > 0);
+    await service.stopTurn(owner, projectId);
+    await waitFor(() => !service.isTurnActive(projectId), 3000);
+
+    const letzte = (await service.listMessages(projectId)).at(-1);
+    expect(letzte?.role).toBe('system');
+    expect(letzte?.content).toContain('Turn abgebrochen');
+    expect(letzte?.content).toContain('„weiter"');
+  });
+
+  test('Watchdog-Abbruch nach text-delta: error-Zeile enthält den weiter-Hinweis', async () => {
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          yield { type: 'text-delta', text: 'Ich fange an …' };
+          await new Promise<never>(() => {}); // hängt für immer — Watchdog-Fall
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { owner, service, projectId } = await setup(runner, 60, 20);
+    await service.sendMessage(owner, sendInput(projectId, 'baue X'));
+    await waitFor(() => !service.isTurnActive(projectId), 5000);
+
+    const err = (await service.listMessages(projectId)).find((m) => m.role === 'error');
+    expect(err?.content).toContain('nicht reagiert');
+    expect(err?.content).toContain('„weiter"');
   });
 });
 

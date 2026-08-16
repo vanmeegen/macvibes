@@ -45,6 +45,15 @@ interface QueuedTurn {
   workspaceDir: string;
 }
 
+/**
+ * Anhang für Terminal-Zeilen, wenn ein Turn NACH sinnvollen Events abbrach:
+ * Der Zwischenstand liegt im Workspace, die SDK-Session trägt den Kontext —
+ * ein schlichtes „weiter" setzt nahtlos fort. Ohne den Hinweis weiß das
+ * niemand; ohne sinnvolle Events gäbe es nichts fortzusetzen (dann weglassen).
+ */
+const WEITER_HINWEIS =
+  'Der Zwischenstand bleibt erhalten — mit „weiter" setzt der Agent an dieser Stelle fort.';
+
 interface ProjectChatState {
   queue: QueuedTurn[];
   pumpRunning: boolean;
@@ -967,7 +976,10 @@ export class ChatService {
           // Nutzerabbruch folgt kein Retry, also ist dieser Versuch der letzte
           // — die Rückmeldung MUSS dann sichtbar sein.
           if (benutzerAbbruch || sawMeaningful || isLastAttempt) {
-            await insert('system', 'Turn abgebrochen');
+            await insert(
+              'system',
+              'Turn abgebrochen' + (sawMeaningful ? ` — ${WEITER_HINWEIS}` : ''),
+            );
           }
           break;
         case 'turn-completed':
@@ -1002,7 +1014,10 @@ export class ChatService {
             // nächsten Öffnen erneut aus) und mangels lastRow würde
             // turnActive:false nie publiziert („Agent arbeitet" für immer).
             // Gleiches Vokabular wie der turn-aborted-Pfad, EIN Stop-Bild im UI.
-            await insert('system', 'Turn abgebrochen');
+            await insert(
+              'system',
+              'Turn abgebrochen' + (sawMeaningful ? ` — ${WEITER_HINWEIS}` : ''),
+            );
           } else if (sawMeaningful || isLastAttempt) {
             const usedMs = sawAnyEvent ? timeouts.idleMs : firstEventBudget;
             const secs = Math.round(usedMs / 1000);
@@ -1012,7 +1027,8 @@ export class ChatService {
                 (detail
                   ? `\n\n${detail}`
                   : ' Kein weiterer Fehlertext verfügbar — mögliche Ursache: die Claude-API ' +
-                    'antwortet nicht (Netz-/Rate-Limit-Problem).'),
+                    'antwortet nicht (Netz-/Rate-Limit-Problem).') +
+                (sawMeaningful ? `\n\n${WEITER_HINWEIS}` : ''),
             );
           }
           break;
