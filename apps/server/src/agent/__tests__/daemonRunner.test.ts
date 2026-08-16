@@ -11,6 +11,25 @@ class FakeGateway {
   sendSucceeds = true;
   invalidated: string[] = [];
   closedGracefully: string[] = [];
+  /**
+   * "Boot-Modus": solange gesetzt, gibt waitForConnection diese pendente
+   * Promise zurück — der Daemon verbindet sich gerade erst (VM bootet).
+   * Ohne das Gate löst waitForConnection sofort auf/ab, und die
+   * M1-Konstellation (Abbruch WÄHREND des Verbindungsaufbaus) wäre untestbar.
+   */
+  connectGate: { promise: Promise<void>; resolve: () => void; reject: (e: Error) => void } | null =
+    null;
+
+  armConnectGate(): void {
+    let resolve: () => void = () => {};
+    let reject: (e: Error) => void = () => {};
+    const promise = new Promise<void>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    this.connectGate = { promise, resolve, reject };
+  }
+
   private readonly listeners = new Map<string, Set<GatewayListener>>();
 
   invalidate(sandbox: string): void {
@@ -22,6 +41,7 @@ class FakeGateway {
   }
 
   async waitForConnection(sandbox: string, timeoutMs: number): Promise<void> {
+    if (this.connectGate !== null) return this.connectGate.promise;
     if (this.connected) return;
     throw new Error(`Agent-Daemon von ${sandbox} hat sich nicht verbunden (${timeoutMs}ms)`);
   }
@@ -245,6 +265,78 @@ describe('DaemonAgentRunner', () => {
     const turnId = firstTurnId(gw);
     gw.emitEvent('sb-p1', turnId, { type: 'turn-completed', sessionId: 's-neu' });
     await collected;
+  });
+});
+
+/**
+ * M1 aus dem Zustandsmaschinen-Audit: Stoppt der Nutzer, während der Daemon
+ * gerade NICHT verbunden ist (VM-Boot, Daemon-Neustart nach turn-rejected),
+ * hing der Generator in waitForConnection und abort() füllte nur eine Queue,
+ * die nie gedraint wurde — der Event-Strom lieferte NIE turn-aborted und
+ * verletzte damit seinen dokumentierten Vertrag (runner.ts: "Der Event-Strom
+ * endet danach mit turn-aborted"). Der chatService lief in seinen Watchdog.
+ */
+describe('Abbruch während des Verbindungsaufbaus (M1)', () => {
+  test('abort() beendet den Event-Strom sofort mit turn-aborted, obwohl waitForConnection noch hängt', async () => {
+    const gw = new FakeGateway();
+    gw.armConnectGate();
+    const runner = makeRunner(gw, 60_000);
+
+    const handle = runner.startTurn(TURN);
+    const collected = collect(handle.events);
+    await tick();
+
+    handle.abort();
+
+    const events = await Promise.race([collected, Bun.sleep(500).then(() => 'timeout' as const)]);
+    expect(events).toEqual([{ type: 'turn-aborted' }]);
+  });
+
+  test('eine später doch noch scheiternde Verbindung erzeugt weder Nachzügler noch Unhandled Rejection', async () => {
+    const abgefangen: unknown[] = [];
+    const faenger = (reason: unknown): void => {
+      abgefangen.push(reason);
+    };
+    process.on('unhandledRejection', faenger);
+    try {
+      const gw = new FakeGateway();
+      gw.armConnectGate();
+      const runner = makeRunner(gw, 60_000);
+
+      const handle = runner.startTurn(TURN);
+      const collected = collect(handle.events);
+      await tick();
+      handle.abort();
+      const events = await Promise.race([collected, Bun.sleep(500).then(() => 'timeout' as const)]);
+      expect(events).toEqual([{ type: 'turn-aborted' }]);
+
+      // Die Verbindung scheitert erst NACH dem Stream-Ende (60-s-Timeout in
+      // Produktion) — das darf keine Unhandled Rejection werden.
+      gw.connectGate?.reject(new Error('Verbindung nie gekommen'));
+      await tick();
+
+      // Es wurde nie ein start-turn gesendet, nur der interrupt des abort().
+      expect(gw.sent.every((m) => m.kind !== 'start-turn')).toBe(true);
+      expect(abgefangen).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', faenger);
+    }
+  });
+
+  test('eine später doch noch gelingende Verbindung startet keinen Turn mehr', async () => {
+    const gw = new FakeGateway();
+    gw.armConnectGate();
+    const runner = makeRunner(gw, 60_000);
+
+    const handle = runner.startTurn(TURN);
+    const collected = collect(handle.events);
+    await tick();
+    handle.abort();
+    await collected;
+
+    gw.connectGate?.resolve();
+    await tick();
+    expect(gw.sent.every((m) => m.kind !== 'start-turn')).toBe(true);
   });
 });
 

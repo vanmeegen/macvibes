@@ -121,10 +121,20 @@ export class DaemonAgentRunner implements AgentRunner {
       pushAll([message.event]);
     });
 
+    // abort() muss den Generator auch dann wecken, wenn er noch in
+    // waitForConnection hängt (M1: Stop im Verbindungs-Limbo) — sonst endet
+    // der Event-Strom nie mit turn-aborted und der Aufrufer läuft in seinen
+    // Watchdog, ohne dass je eine Zeile geschrieben würde.
+    let abortDaWecker: (() => void) | null = null;
+    const abortDa = new Promise<void>((resolve) => {
+      abortDaWecker = resolve;
+    });
+
     const events = (async function* (): AsyncGenerator<AgentEvent> {
       try {
+        const verbindung = gateway.waitForConnection(sandbox, connectTimeoutMs);
         try {
-          await gateway.waitForConnection(sandbox, connectTimeoutMs);
+          await Promise.race([verbindung, abortDa]);
         } catch (error) {
           yield {
             type: 'error',
@@ -134,6 +144,9 @@ export class DaemonAgentRunner implements AgentRunner {
           return;
         }
         if (aborted) {
+          // Die Verliererin des Race darf nicht als Unhandled Rejection enden,
+          // wenn der Verbindungsversuch später doch noch scheitert.
+          verbindung.catch(() => {});
           yield { type: 'turn-aborted' };
           return;
         }
@@ -211,6 +224,8 @@ export class DaemonAgentRunner implements AgentRunner {
         // Claude-Session bleibt intakt. Lokal beenden wir den Stream sofort.
         gateway.send(sandbox, { kind: 'interrupt', turnId });
         pushAll([{ type: 'turn-aborted' }]);
+        // Hängt der Generator noch in waitForConnection, wecken (M1).
+        abortDaWecker?.();
       },
     };
   }
