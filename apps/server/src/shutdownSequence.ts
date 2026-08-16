@@ -32,8 +32,10 @@ export interface ShutdownSequenceOptions {
    * die Summe aller Schritt-Fristen muss KLEINER sein als diese Grace, sonst
    * frisst ein einziger Hänger das ganze Skript-Budget und schneidet den
    * Auto-Commit ab. Die tatsächlich genutzten Fristen kommen darum aus EINER
-   * Quelle: `SHUTDOWN_STEP_TIMEOUTS_MS` in `@macvibes/shared` (dort auch die
-   * maschinell bewachte Invariante). `index.ts` setzt sie pro Schritt.
+   * Quelle: `FIXED_SHUTDOWN_STEP_TIMEOUTS_MS` + `sandboxShutdownBudgetMs` in
+   * `@macvibes/shared` (dort auch die maschinell bewachte Invariante).
+   * `index.ts` setzt sie pro Schritt; der Sandbox-Schritt skaliert mit
+   * maxSandboxes (N10).
    */
   stepTimeoutMs?: number | undefined;
 }

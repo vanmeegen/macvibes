@@ -205,49 +205,60 @@ describe('deleteProjectAndCleanup (Stufe 2)', () => {
     expect(await getProject(db, project.id)).toBeNull();
   });
 
-  test('rmSync-Fehler: deleteProject wirft NICHT → forget×2 läuft trotzdem', async () => {
-    const { db, config, marco, home } = await setup();
-    const project = await createProject(db, config, marco, {
-      name: 'Blockiert',
-      templateDir: 'pwa',
-    });
-    const f = fakes(db);
-    // Volume so präparieren, dass rmSync scheitert — exakt wie im
-    // projectsService-Test: schreibgeschütztes Verzeichnis (POSIX) bzw.
-    // cwd-Handle (Windows) blockiert das Entfernen deterministisch.
-    const volumeDir = projectVolumeDir(home, project.id);
-    const workspace = join(volumeDir, 'workspace');
-    mkdirSync(workspace, { recursive: true });
-    writeFileSync(join(workspace, 'blockiert.txt'), 'x');
-    const prevCwd = process.cwd();
-    const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
-    try {
-      process.chdir(workspace);
-      chmodSync(workspace, 0o555);
-      await expect(
-        deleteProjectAndCleanup(
-          { db, sandbox: f.sandbox, chat: f.chat, macvibesHome: home },
-          marco,
-          project.id,
-        ),
-      ).resolves.toBeUndefined();
-    } finally {
-      errorSpy.mockRestore();
-      chmodSync(workspace, 0o755);
-      process.chdir(prevCwd);
-    }
+  // Als root ist die Prämisse des Tests verletzt: chmod 555 hindert rmSync
+  // nicht (root ignoriert Dateirechte), das Volume verschwindet doch — die
+  // Assertions können nicht gelten. Auf den Pflicht-CI-Legs (macOS/Windows,
+  // nie root) läuft der Test unverändert.
+  const istRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+  test.skipIf(istRoot)(
+    'rmSync-Fehler: deleteProject wirft NICHT → forget×2 läuft trotzdem',
+    async () => {
+      const { db, config, marco, home } = await setup();
+      const project = await createProject(db, config, marco, {
+        name: 'Blockiert',
+        templateDir: 'pwa',
+      });
+      const f = fakes(db);
+      // Volume so präparieren, dass rmSync scheitert — exakt wie im
+      // projectsService-Test: schreibgeschütztes Verzeichnis (POSIX) bzw.
+      // cwd-Handle (Windows) blockiert das Entfernen deterministisch.
+      const volumeDir = projectVolumeDir(home, project.id);
+      const workspace = join(volumeDir, 'workspace');
+      mkdirSync(workspace, { recursive: true });
+      writeFileSync(join(workspace, 'blockiert.txt'), 'x');
+      const prevCwd = process.cwd();
+      const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        process.chdir(workspace);
+        chmodSync(workspace, 0o555);
+        await expect(
+          deleteProjectAndCleanup(
+            { db, sandbox: f.sandbox, chat: f.chat, macvibesHome: home },
+            marco,
+            project.id,
+          ),
+        ).resolves.toBeUndefined();
+      } finally {
+        errorSpy.mockRestore();
+        // cwd ZUERST zurück: würfe das chmod (Workspace wider Erwarten schon
+        // weg), bliebe der cwd sonst im gelöschten Verzeichnis stehen und jeder
+        // folgende Spawn mit cwd=process.cwd() schlüge quer durch die Suite fehl.
+        process.chdir(prevCwd);
+        if (existsSync(workspace)) chmodSync(workspace, 0o755);
+      }
 
-    // deleteProject warf nicht (Volume best effort ab dem DB-Delete) — also
-    // lief die Kette weiter: forget wird trotz liegengebliebenem Volume erledigt.
-    expect(f.calls).toEqual([
-      `stop:${project.id}`,
-      `sandbox.forget:${project.id}`,
-      `chat.forget:${project.id}`,
-    ]);
-    expect(await getProject(db, project.id)).toBeNull();
-    // Ehrlich: der Rest liegt noch auf der Platte.
-    expect(existsSync(volumeDir)).toBe(true);
-  });
+      // deleteProject warf nicht (Volume best effort ab dem DB-Delete) — also
+      // lief die Kette weiter: forget wird trotz liegengebliebenem Volume erledigt.
+      expect(f.calls).toEqual([
+        `stop:${project.id}`,
+        `sandbox.forget:${project.id}`,
+        `chat.forget:${project.id}`,
+      ]);
+      expect(await getProject(db, project.id)).toBeNull();
+      // Ehrlich: der Rest liegt noch auf der Platte.
+      expect(existsSync(volumeDir)).toBe(true);
+    },
+  );
 });
 
 /** Setzt lastActivityAt auf einen alten Fixwert, damit ein touchProject sichtbar bumpt. */
@@ -348,12 +359,58 @@ describe('sendMessageToProject (Stufe 3)', () => {
       },
     );
 
-    // Reihenfolge fix; Text getrimmt; interrupt durchgereicht.
+    // Reihenfolge fix; Text getrimmt; interrupt durchgereicht. Das ZWEITE
+    // ensureRunning nach dem Einreihen schließt das N4-Mikro-Fenster (s. u.).
     expect(f.calls).toEqual([
       `ensureRunning:${project.id}`,
       `sendMessage:${project.id}:hallo:true`,
+      `ensureRunning:${project.id}`,
     ]);
     expect((await lastActivity(db, project.id)).getTime()).toBeGreaterThan(OLD.getTime());
+  });
+
+  test('N4: wird die Sandbox im Fenster vor queue.push gestoppt, sichert das zweite ensureRunning den Neustart', async () => {
+    // Zwischen dem ersten ensureRunning und dem queue.push im ChatService
+    // liegt ein await (Ownership-Read) — dort ist isBusy noch false und ein
+    // Grace-/Idle-/Eviction-Stopp möglich. Das Szenario: der Stopp passiert,
+    // WÄHREND sendMessage läuft; das zweite ensureRunning (nach dem Einreihen,
+    // ab da isBusy=true) muss den Neustart zusichern.
+    const { db, config, marco, home } = await setup();
+    const project = await createProject(db, config, marco, { name: 'App', templateDir: 'pwa' });
+    const f = fakes(db);
+    const abfolge: string[] = [];
+    let sandboxLaeuft = false;
+    const sandbox: SandboxLifecycle = {
+      ensureRunning: async (context) => {
+        sandboxLaeuft = true;
+        abfolge.push(`ensureRunning:${context.projectId}`);
+      },
+      stop: f.sandbox.stop,
+      forget: f.sandbox.forget,
+    };
+    const chat: ChatSessionPort = {
+      ...f.chat,
+      sendMessage: async (_user, input) => {
+        // Mitten im Fenster: Grace/Eviction stoppt die VM.
+        sandboxLaeuft = false;
+        abfolge.push(`stopp-im-fenster:${input.projectId}`);
+        abfolge.push(`sendMessage:${input.projectId}`);
+      },
+    };
+
+    await sendMessageToProject({ db, sandbox, chat, macvibesHome: home }, marco, {
+      projectId: project.id,
+      text: 'hallo',
+      interrupt: false,
+    });
+
+    expect(abfolge).toEqual([
+      `ensureRunning:${project.id}`,
+      `stopp-im-fenster:${project.id}`,
+      `sendMessage:${project.id}`,
+      `ensureRunning:${project.id}`,
+    ]);
+    expect(sandboxLaeuft).toBe(true);
   });
 
   test('fremder User: getProjectOwned wirft VOR ensureRunning/sendMessage (F10)', async () => {

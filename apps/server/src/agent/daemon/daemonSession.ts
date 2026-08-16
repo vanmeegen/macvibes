@@ -100,6 +100,15 @@ export class DaemonSession {
   private live: LiveQuery | null = null;
   private currentTurnId: string | null = null;
   private interrupted = false;
+  /**
+   * M3: Nach `abandonTurn` generiert die geteilte SDK-Query u. U. weiter
+   * (interrupt() ist fire-and-forget). Alles, was sie bis zu ihrem nächsten
+   * `result` liefert, gehört der AUFGEGEBENEN Generation — ohne diese Sperre
+   * würden die Nachzügler dem nächsten Turn zugeschrieben (Alt-Text unter der
+   * neuen Bubble, vorzeitiges turn-completed). Beide Generationen teilen sich
+   * eine seriell verarbeitete Query, das `result` ist die Generationsgrenze.
+   */
+  private verwerfeBisResult = false;
 
   constructor(private readonly config: DaemonSessionConfig) {}
 
@@ -167,6 +176,8 @@ export class DaemonSession {
     this.currentTurnId = null;
     if (this.live === null) return;
     this.interrupted = true;
+    // Nachzügler der aufgegebenen Generation bis zu ihrem result verwerfen (M3).
+    this.verwerfeBisResult = true;
     this.live.handle.interrupt().catch((error: unknown) => {
       console.error('Agent-Daemon: interrupt() nach Verbindungsabbruch fehlgeschlagen:', error);
     });
@@ -192,6 +203,9 @@ export class DaemonSession {
     if (this.live === null) return;
     const live = this.live;
     this.live = null;
+    // Eine frische Query kann keine Nachzügler der alten Generation liefern —
+    // `consume` filtert die verworfene Query bereits über `this.live === live`.
+    this.verwerfeBisResult = false;
     live.input.end();
     live.handle.interrupt().catch((error: unknown) => {
       console.error('Agent-Daemon: interrupt() beim Verwerfen der Query fehlgeschlagen:', error);
@@ -226,6 +240,18 @@ export class DaemonSession {
   }
 
   private handleMessage(message: unknown): void {
+    // VOR dem "kein Turn"-Early-Return prüfen: die Generationsgrenze (result)
+    // muss auch dann erkannt werden, wenn der nächste Turn noch nicht läuft —
+    // sonst schluckte die Sperre später dessen echte Antwort (M3).
+    if (this.verwerfeBisResult) {
+      const istResult =
+        typeof message === 'object' &&
+        message !== null &&
+        (message as { type?: unknown }).type === 'result';
+      if (istResult) this.verwerfeBisResult = false;
+      return; // Nachzügler der aufgegebenen Generation — still verwerfen.
+    }
+
     const turnId = this.currentTurnId;
     if (turnId === null) return; // Nachzügler ohne aktiven Turn — verwerfen.
 
@@ -246,6 +272,9 @@ export class DaemonSession {
   private handleQueryEnd(live: LiveQuery, error: unknown): void {
     if (this.live !== live) return; // durch Modellwechsel ersetzt — irrelevant.
     this.live = null;
+    // Die Query ist tot — es kann keine Nachzügler mehr geben; die Sperre darf
+    // den Abbruch des laufenden Turns unten nicht überleben (M3).
+    this.verwerfeBisResult = false;
 
     const turnId = this.currentTurnId;
     if (turnId === null) return;

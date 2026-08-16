@@ -165,6 +165,33 @@ describe('Config-Warmup: erster Turn wird schnell, weil beim Öffnen vorgewärmt
     expect((await service.listMessages(projectId)).some((m) => m.content === 'echt')).toBe(true);
   });
 
+  test('ein laufender Warmup zählt als aktiver Turn — Grace/Eviction stoppen keine warmlaufende VM (N9)', async () => {
+    // isTurnActive speist isBusy des SandboxManagers (Grace-Aufschub und
+    // Eviction-Schutz). Der Warmup belegt den Ein-Turn-Daemon wie ein echter
+    // Turn — zählte er nicht als busy, konnte Grace/LRU die VM mitten im
+    // Warmup stoppen (Folge: verlorener Warmup, Doppel-Boot).
+    let warmupGestartet = false;
+    let releaseWarmup: () => void = () => {};
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        warmupGestartet = true;
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          await new Promise<void>((r) => {
+            releaseWarmup = r;
+          });
+          yield { type: 'turn-completed', sessionId: 'w' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { owner, service, projectId } = await setup(runner);
+    await service.prewarm(owner, projectId, '/tmp/ws');
+    await waitFor(() => warmupGestartet);
+    expect(service.isTurnActive(projectId)).toBe(true);
+    releaseWarmup();
+    await waitFor(() => !service.isTurnActive(projectId));
+  });
+
   test('prewarm überspringt, wenn schon eine Session existiert (Config bereits warm)', async () => {
     const prompts: string[] = [];
     const runner: AgentRunner = {
@@ -238,6 +265,128 @@ describe('Watchdog: stiller Hänger wird als Fehler sichtbar', () => {
     await waitFor(() => !service.isTurnActive(projectId), 3000);
     const err = (await service.listMessages(projectId)).find((m) => m.role === 'error');
     expect(err?.content).toContain('ECONNREFUSED');
+  });
+});
+
+/**
+ * M1 aus dem Zustandsmaschinen-Audit, Service-Hälfte: Stoppt der Nutzer,
+ * während der Runner-Stream stumm bleibt (Daemon im Verbindungs-Limbo — sein
+ * abort liefert dann kein turn-aborted), schrieb der Watchdog KEINE Zeile:
+ * die Bedingung für die error-Zeile war auf Versuch 1 beidseitig false, und
+ * die Retry-Schleife brach wegen benutzerAbbruch ab, bevor der letzte Versuch
+ * sie hätte schreiben können. Folgen: kein finales turnActive:false („Agent
+ * arbeitet" für immer) und — schlimmer — die letzte DB-Zeile blieb die
+ * User-Nachricht, sodass resumeUnansweredTurn beim nächsten Öffnen GENAU den
+ * gestoppten Prompt erneut ausführte. Der Backstop hier gilt für JEDEN Runner,
+ * unabhängig vom DaemonRunner-Fix derselben Konstellation.
+ */
+describe('Stop bei nicht erreichbarem Daemon (M1): Terminal-Zeile trotz stummem Runner', () => {
+  test('Nutzer-Stop ohne Runner-Reaktion schreibt „Turn abgebrochen" und beendet turnActive', async () => {
+    let starts = 0;
+    // Vertragsverletzender Runner als Robustheits-Seam: events lösen nie auf,
+    // abort() emittiert NICHTS (Daemon nie verbunden, pre-M1a-Verhalten).
+    const stummerRunner: AgentRunner = {
+      startTurn(): TurnHandle {
+        starts += 1;
+        const events: AsyncIterable<never> = {
+          [Symbol.asyncIterator]: () => ({ next: () => new Promise<never>(() => {}) }),
+        };
+        return { events, abort: () => {} };
+      },
+    };
+    const { owner, service, projectId } = await setupChat(stummerRunner, {
+      agentFirstEventTimeoutMs: 40,
+      agentColdStartTimeoutMs: 60,
+      agentAbortGraceMs: 20,
+    });
+
+    const payloads: ChatEventPayload[] = [];
+    const subscription = service.subscribe(projectId);
+    const collector = (async () => {
+      for await (const payload of subscription) payloads.push(payload);
+    })();
+
+    await service.sendMessage(owner, sendInput(projectId, 'gestoppter Prompt'));
+    await waitFor(() => starts === 1);
+    await service.stopTurn(owner, projectId);
+    await waitFor(() => !service.isTurnActive(projectId), 3000);
+
+    // DER Kern des Befunds: es MUSS eine Terminal-Zeile geben …
+    const messages = await service.listMessages(projectId);
+    const letzte = messages[messages.length - 1];
+    expect(letzte?.role).toBe('system');
+    expect(letzte?.content).toContain('abgebrochen');
+    // … kein error (Nutzer-Stop ist kein Fehler), kein Retry:
+    expect(messages.some((m) => m.role === 'error')).toBe(false);
+    expect(messages.some((m) => m.content.includes('zweiter Versuch'))).toBe(false);
+
+    // Das finale turnActive:false MUSS publiziert worden sein.
+    await waitFor(() => payloads.some((p) => !p.turnActive));
+    await subscription.return?.(undefined);
+    await collector;
+    expect(payloads[payloads.length - 1]?.turnActive).toBe(false);
+
+    // Und der gestoppte Prompt läuft beim nächsten Öffnen NICHT erneut.
+    expect(await service.resumeUnansweredTurn(owner, projectId, '/tmp/fake-workspace')).toBe(false);
+    expect(starts).toBe(1);
+
+    // Ohne sinnvolle Events gibt es nichts fortzusetzen — KEIN weiter-Hinweis.
+    expect(letzte?.content).not.toContain('weiter');
+  });
+});
+
+/**
+ * Halbfertige Arbeit sichtbar fortsetzbar machen: Bricht ein Turn ab, NACHDEM
+ * schon sinnvolle Events liefen (sawMeaningful), bleibt der Zwischenstand im
+ * Workspace liegen und die SDK-Session trägt den Kontext weiter — ein
+ * schlichtes „weiter" setzt nahtlos fort. Ohne Hinweis in der Terminal-Zeile
+ * weiß das aber niemand. Ohne sinnvolle Events gibt es dagegen nichts
+ * fortzusetzen, dann bleibt die Zeile hinweisfrei (Negativfall im M1-Test).
+ */
+describe('Abbruch nach halber Arbeit: Terminal-Zeile fordert zum „weiter" auf', () => {
+  test('Nutzer-Stop nach text-delta: „Turn abgebrochen" enthält den weiter-Hinweis', async () => {
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        let release: (() => void) | null = null;
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          yield { type: 'text-delta', text: 'Ich fange an …' };
+          await new Promise<void>((r) => {
+            release = r;
+          });
+          yield { type: 'turn-aborted' };
+        })();
+        return { events, abort: () => release?.() };
+      },
+    };
+    const { owner, service, projectId, activity } = await setup(runner);
+    await service.sendMessage(owner, sendInput(projectId, 'baue X'));
+    await waitFor(() => activity.length > 0);
+    await service.stopTurn(owner, projectId);
+    await waitFor(() => !service.isTurnActive(projectId), 3000);
+
+    const letzte = (await service.listMessages(projectId)).at(-1);
+    expect(letzte?.role).toBe('system');
+    expect(letzte?.content).toContain('Turn abgebrochen');
+    expect(letzte?.content).toContain('„weiter"');
+  });
+
+  test('Watchdog-Abbruch nach text-delta: error-Zeile enthält den weiter-Hinweis', async () => {
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          yield { type: 'text-delta', text: 'Ich fange an …' };
+          await new Promise<never>(() => {}); // hängt für immer — Watchdog-Fall
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { owner, service, projectId } = await setup(runner, 60, 20);
+    await service.sendMessage(owner, sendInput(projectId, 'baue X'));
+    await waitFor(() => !service.isTurnActive(projectId), 5000);
+
+    const err = (await service.listMessages(projectId)).find((m) => m.role === 'error');
+    expect(err?.content).toContain('nicht reagiert');
+    expect(err?.content).toContain('„weiter"');
   });
 });
 

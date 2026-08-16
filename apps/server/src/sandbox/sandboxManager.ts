@@ -29,6 +29,14 @@ export interface SandboxManagerOptions {
   maxSandboxes: number;
   /** Hook vor jedem Stopp — Auto-Commit eines offenen Stands (R8/R9). */
   onBeforeStop?: (projectId: string) => Promise<void>;
+  /**
+   * Hook vor jedem Frischstart — Auto-Commit eines offenen Stands (N7): msb
+   * startet mit .replace(), eine nach einem Hot-Reload verwaiste VM gleichen
+   * Namens wird also ohne stop() (und damit ohne onBeforeStop) überbootet.
+   * Ihr uncommitteter Workspace-Stand (Host-Mount) wird hier gesichert; bei
+   * leerem git status ist das ein No-op. Fehler blockieren den Start nicht.
+   */
+  onBeforeStart?: (projectId: string) => Promise<void>;
   onStatusChange?: (projectId: string, status: SandboxStatus) => void;
   /**
    * Läuft gerade ein Agent-Turn? Der Grace-Stopp schiebt sich dann um eine
@@ -38,8 +46,12 @@ export interface SandboxManagerOptions {
   /**
    * Setzt die Idle-Frist der VM zurück (ADR 0003). Fehlt sie, verhält sich der
    * Manager wie bisher — nützlich für Tests und den Process-Provider.
+   *
+   * Liefert `false`, wenn die VM nicht (mehr) existiert (M2): der Manager
+   * merkt sich das am Eintrag und heilt beim nächsten enter/ensureRunning per
+   * Stop→Neustart. Ein Fehler (msb hängt) ist KEIN „verschwunden".
    */
-  touchSandbox?: (projectId: string) => Promise<void>;
+  touchSandbox?: (projectId: string) => Promise<boolean>;
   /**
    * Mindestabstand zwischen zwei VM-Berührungen. noteAgentActivity feuert bei
    * JEDEM Agent-Event (also pro Text-Delta) — ungedrosselt wären das dreistellig
@@ -63,6 +75,13 @@ interface SandboxEntry {
   stopPromise: Promise<void> | null;
   /** Wann zuletzt die Idle-Frist der VM zurückgesetzt wurde (ADR 0003). */
   lastVmTouchAt: number;
+  /**
+   * Der VM-Touch hat „nicht gefunden" gemeldet, obwohl der Eintrag `running`
+   * glaubt (M2) — die MicroVM ist tot. Das nächste enter/ensureRunning heilt
+   * per Stop→Neustart. Ein Frischstart erzeugt ein neues Entry-Objekt, das
+   * Flag resettet also natürlich.
+   */
+  vmVerschwunden: boolean;
   /**
    * Wer schaut gerade zu (H11). Ein Betrachter = eine aktive
    * chatEvents-Subscription: `enter` beim Aufbau, `leave` beim Ende des
@@ -163,6 +182,26 @@ export class SandboxManager {
       return;
     }
     if (existing && existing.status === 'running') {
+      // Heilung beim Wieder-Öffnen (M2): meldet der Handle „failed"
+      // (monit-Crash-Loop) oder hat der VM-Touch die VM als verschwunden
+      // gemeldet, ist der running-Eintrag eine Leiche — ohne diesen Zweig
+      // gäbe es KEINEN Weg zurück (kein Restart-Mutation, ensureRunning war
+      // No-op; Heilung erst über Idle/Grace nach Minuten). Ordentlicher Stopp
+      // (inkl. Auto-Commit) und dann der normale Frischstart-Pfad; die
+      // Betrachter überleben das per H11-Übernahme. Nie unter einem laufenden
+      // Turn (auch Warmup, N9) — ein toter Turn löst sich über den Watchdog.
+      const kaputt = existing.vmVerschwunden || existing.handle?.previewStatus() === 'failed';
+      if (kaputt && this.options.isBusy?.(context.projectId) !== true) {
+        console.warn(
+          `Sandbox ${context.projectId} ist kaputt (${
+            existing.vmVerschwunden ? 'VM verschwunden' : 'Dev-Server failed'
+          }) — Heilung per Stop→Neustart.`,
+        );
+        await this.stop(context.projectId);
+        // Nach dem Stopp ist der Eintrag `stopped` — die Rekursion nimmt den
+        // Frischstart-Pfad (Single-Depth, kein weiterer running-Zweig).
+        return this.acquire(context, viewer);
+      }
       if (viewer !== null) {
         existing.viewers.add(viewer);
         this.clearGrace(existing);
@@ -192,6 +231,7 @@ export class SandboxManager {
       startPromise: null,
       stopPromise: null,
       lastVmTouchAt: 0,
+      vmVerschwunden: false,
       viewers,
     };
     this.entries.set(context.projectId, entry);
@@ -203,6 +243,15 @@ export class SandboxManager {
     const startWork = (async () => {
       try {
         await this.evictLeastActiveIfNeeded(context.projectId);
+        if (this.options.onBeforeStart) {
+          try {
+            await this.options.onBeforeStart(context.projectId);
+          } catch (error) {
+            // Sichern ist best effort — ein kaputtes git darf den Start nicht
+            // verhindern (der Stand liegt weiterhin im Host-Mount).
+            console.error(`onBeforeStart für ${context.projectId} schlug fehl:`, error);
+          }
+        }
         entry.handle = await this.options.provider.start(context);
       } catch (error) {
         // Nur auf `stopped` schalten, wenn nicht bereits ein Stopp läuft — der
@@ -278,7 +327,10 @@ export class SandboxManager {
         this.armGrace(entry);
         return;
       }
-      void this.stop(entry.context.projectId);
+      // Mit Rejection-Handler (F18/N5) — wie in forget()/touchVm().
+      void this.stop(entry.context.projectId).catch((error: unknown) => {
+        console.error(`Grace-Stopp für ${entry.context.projectId} schlug fehl:`, error);
+      });
     }, this.options.graceMs);
   }
 
@@ -301,7 +353,11 @@ export class SandboxManager {
   /** Zustand des Dev-Servers laut Watchdog (für das UI-Overlay, R7). */
   previewStatus(projectId: string): PreviewStatus {
     const entry = this.entries.get(projectId);
-    if (!entry || entry.status !== 'running' || !entry.handle) return 'stopped';
+    if (!entry) return 'stopped';
+    // Boot ist kein „stopped" (N6): sonst behauptete das Overlay für die
+    // Dauer des VM-Starts „Sandbox gestoppt", während die Preview STARTET.
+    if (entry.status === 'starting') return 'starting';
+    if (entry.status !== 'running' || !entry.handle) return 'stopped';
     return entry.handle.previewStatus();
   }
 
@@ -395,9 +451,22 @@ export class SandboxManager {
         `forget(${projectId}): Sandbox ist ${entry.status} — erneut stoppen statt vergessen ` +
           '(gleichzeitiger enter auf ein gelöschtes Projekt?).',
       );
-      void this.stop(projectId).catch((error: unknown) => {
-        console.error(`Nachträglicher Stopp für ${projectId} schlug fehl:`, error);
-      });
+      void this.stop(projectId)
+        .then(() => {
+          // Erst NACH dem vollendeten Stopp löschen (N8) — und nur, wenn der
+          // Eintrag noch DERSELBE und wirklich gestoppt ist: ein weiteres
+          // enter() hätte im Frischstart-Pfad ein NEUES Entry-Objekt
+          // installiert, das hier nicht weggeräumt werden darf.
+          const aktuell = this.entries.get(projectId);
+          if (aktuell !== entry || aktuell.status !== 'stopped') return;
+          this.clearGrace(aktuell);
+          this.clearIdle(aktuell);
+          aktuell.viewers.clear();
+          this.entries.delete(projectId);
+        })
+        .catch((error: unknown) => {
+          console.error(`Nachträglicher Stopp für ${projectId} schlug fehl:`, error);
+        });
       return;
     }
     this.clearGrace(entry);
@@ -446,7 +515,10 @@ export class SandboxManager {
     this.clearIdle(entry);
     entry.idleTimer = setTimeout(() => {
       entry.idleTimer = null;
-      void this.stop(entry.context.projectId);
+      // Mit Rejection-Handler (F18/N5) — wie in forget()/touchVm().
+      void this.stop(entry.context.projectId).catch((error: unknown) => {
+        console.error(`Idle-Stopp für ${entry.context.projectId} schlug fehl:`, error);
+      });
     }, this.options.idleMs);
     this.touchVm(entry);
   }
@@ -468,9 +540,16 @@ export class SandboxManager {
     const jetzt = Date.now();
     if (jetzt - entry.lastVmTouchAt < intervalMs) return;
     entry.lastVmTouchAt = jetzt;
-    void touchSandbox(entry.context.projectId).catch((error: unknown) => {
-      console.error(`VM-Idle-Frist für ${entry.context.projectId} nicht zurückgesetzt:`, error);
-    });
+    void touchSandbox(entry.context.projectId)
+      .then((vorhanden) => {
+        // Die VM ist weg, der Eintrag glaubt noch „running" (M2): merken —
+        // NICHT hier stoppen (dieser Pfad hängt an jedem Agent-Event); die
+        // Heilung übernimmt das nächste enter/ensureRunning.
+        if (!vorhanden && entry.status === 'running') entry.vmVerschwunden = true;
+      })
+      .catch((error: unknown) => {
+        console.error(`VM-Idle-Frist für ${entry.context.projectId} nicht zurückgesetzt:`, error);
+      });
   }
 
   private setStatus(entry: SandboxEntry, status: SandboxStatus): void {

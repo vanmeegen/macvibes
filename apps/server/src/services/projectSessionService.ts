@@ -207,5 +207,13 @@ export async function sendMessageToProject(
     text,
     interrupt: input.interrupt,
   });
+  // N4: Zwischen dem ensureRunning oben und dem queue.push im ChatService
+  // liegt ein await (Ownership-Read, M5) — in diesem Mikro-Fenster ist isBusy
+  // noch false, ein Grace-/Idle-/Eviction-Stopp also möglich. Jetzt, wo der
+  // Turn eingereiht ist (isBusy true, inkl. Warmup seit N9), die Sandbox
+  // idempotent erneut zusichern: war sie im Fenster gestoppt worden, bootet
+  // sie hier neu und der wartende DaemonRunner trifft den frischen Daemon.
+  // (Vorbild: der „KEIN await mehr"-Kommentar in resumeUnansweredTurn.)
+  await sandbox.ensureRunning(context);
   await touchProject(db, project.id);
 }

@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DEFAULT_MAX_SANDBOXES } from '@macvibes/shared';
 
 export interface ServerConfig {
   port: number;
@@ -366,7 +367,7 @@ export function loadConfig(): ServerConfig {
     sandbox: {
       graceMs: Number(Bun.env.MACVIBES_GRACE_MS ?? 15 * 60 * 1000),
       idleMs: Number(Bun.env.MACVIBES_IDLE_MS ?? 30 * 60 * 1000),
-      maxSandboxes: Number(Bun.env.MACVIBES_MAX_SANDBOXES ?? 8),
+      maxSandboxes: Number(Bun.env.MACVIBES_MAX_SANDBOXES ?? DEFAULT_MAX_SANDBOXES),
       backend:
         Bun.env.MACVIBES_SANDBOX === 'process' || Bun.env.MACVIBES_SANDBOX === 'microsandbox'
           ? Bun.env.MACVIBES_SANDBOX

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import type { PreviewStatus } from '../../preview/status';
 import type { SandboxContext, SandboxHandle, SandboxProvider } from '../provider';
 import { SandboxManager, viewerKey } from '../sandboxManager';
 
@@ -16,12 +17,14 @@ function ctx(projectId: string): SandboxContext {
 class FakeProvider implements SandboxProvider {
   startCalls: string[] = [];
   stopCalls: string[] = [];
+  /** Settable pro Projekt (Default „ready") — für die M2-Heilungstests. */
+  readonly previewStatusVon = new Map<string, PreviewStatus>();
 
   async start(context: SandboxContext): Promise<SandboxHandle> {
     this.startCalls.push(context.projectId);
     return {
       previewHostPort: 9999,
-      previewStatus: () => 'ready' as const,
+      previewStatus: () => this.previewStatusVon.get(context.projectId) ?? 'ready',
       stop: async () => {
         this.stopCalls.push(context.projectId);
       },
@@ -532,6 +535,7 @@ describe('VM-Idle-Auffangnetz (ADR 0003)', () => {
       maxSandboxes: 8,
       touchSandbox: async (name) => {
         beruehrt.push(name);
+        return true;
       },
       ...(overrides.vmTouchIntervalMs !== undefined
         ? { vmTouchIntervalMs: overrides.vmTouchIntervalMs }
@@ -581,7 +585,7 @@ describe('VM-Idle-Auffangnetz (ADR 0003)', () => {
       graceMs: 10_000,
       idleMs: 10_000,
       maxSandboxes: 8,
-      touchSandbox: async () => {
+      touchSandbox: async (): Promise<boolean> => {
         throw new Error('msb antwortet nicht');
       },
     });
@@ -1024,5 +1028,292 @@ describe('detachForReload (Dev-Hot-Reload)', () => {
     await Bun.sleep(60);
     expect(provider.stopCalls).toEqual([]);
     expect(manager.status('p1')).toBe('running');
+  });
+});
+
+/**
+ * M2 aus dem Zustandsmaschinen-Audit: Starb die MicroVM oder unmonitorte monit
+ * den Dev-Server (Crash-Loop → previewStatus „failed"), blieb der
+ * Manager-Eintrag „running" und ensureRunning war ein No-op — es gab KEINEN
+ * Heilungspfad, der UI-Hinweis „bitte das Projekt neu öffnen" war wirkungslos.
+ * Jetzt heilt das Wieder-Öffnen: der running-Zweig erkennt eine kaputte VM
+ * (previewStatus „failed" oder vom VM-Touch als verschwunden gemeldet) und
+ * macht einen ordentlichen Stop→Neustart — außer ein Turn läuft (isBusy).
+ */
+describe('Heilung beim Wieder-Öffnen: kaputte VM bei Manager-Status running (M2)', () => {
+  test('enter auf running-Eintrag mit previewStatus „failed": Stop (inkl. Auto-Commit) → Neustart', async () => {
+    const { provider, manager, beforeStopLog } = setup({ graceMs: 10_000 });
+    await manager.enter(ctx('p1'), 'u1');
+    provider.previewStatusVon.set('p1', 'failed');
+
+    await manager.enter(ctx('p1'), 'u1');
+
+    expect(provider.stopCalls).toEqual(['p1']);
+    expect(provider.startCalls).toEqual(['p1', 'p1']);
+    // Der Heil-Stopp ist ein ORDENTLICHER Stopp: Auto-Commit lief.
+    expect(beforeStopLog).toContain('p1');
+    expect(manager.status('p1')).toBe('running');
+    // H11: der Betrachter überlebt die Heilung.
+    expect(manager.viewerCount('p1')).toBe(1);
+  });
+
+  test('kein Heil-Neustart, solange ein Turn läuft (isBusy)', async () => {
+    const { provider, manager } = setup({ graceMs: 10_000, isBusy: () => true });
+    await manager.enter(ctx('p1'), 'u1');
+    provider.previewStatusVon.set('p1', 'failed');
+
+    await manager.enter(ctx('p1'), 'u1');
+
+    expect(provider.stopCalls).toEqual([]);
+    expect(provider.startCalls).toEqual(['p1']);
+    expect(manager.status('p1')).toBe('running');
+  });
+
+  test('eine vom VM-Touch als verschwunden gemeldete VM wird beim nächsten enter neu gestartet', async () => {
+    const provider = new FakeProvider();
+    let vorhanden = true;
+    const manager = new SandboxManager({
+      provider,
+      graceMs: 10_000,
+      idleMs: 10_000,
+      maxSandboxes: 8,
+      vmTouchIntervalMs: 0,
+      touchSandbox: async () => vorhanden,
+    });
+    await manager.enter(ctx('p1'), 'u1');
+    await Bun.sleep(10);
+
+    // Die VM stirbt (msb kennt sie nicht mehr) — der nächste Touch meldet das.
+    vorhanden = false;
+    manager.noteAgentActivity('p1');
+    await Bun.sleep(10);
+
+    await manager.enter(ctx('p1'), 'u1');
+    expect(provider.startCalls).toEqual(['p1', 'p1']);
+    expect(manager.status('p1')).toBe('running');
+  });
+
+  test('gesunde VM bleibt beim Wieder-Öffnen unangetastet (kein Über-Eifer)', async () => {
+    const { provider, manager } = setup({ graceMs: 10_000 });
+    await manager.enter(ctx('p1'), 'u1');
+
+    for (const status of ['ready', 'starting', 'restarting'] as const) {
+      provider.previewStatusVon.set('p1', status);
+      await manager.enter(ctx('p1'), 'u1');
+    }
+
+    expect(provider.stopCalls).toEqual([]);
+    expect(provider.startCalls).toEqual(['p1']);
+  });
+});
+
+/** Pollt eine Bedingung, statt blind zu schlafen. */
+async function warteAuf(bedingung: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (bedingung()) return;
+    await Bun.sleep(5);
+  }
+  throw new Error('warteAuf: Bedingung nicht erfüllt');
+}
+
+/**
+ * N5 aus dem Zustandsmaschinen-Audit: die Grace- und Idle-Timer feuerten
+ * `void this.stop(...)` OHNE Rejection-Handler — ein scheiterndes stop()
+ * (z. B. msb weg) wurde zur Unhandled Rejection, entgegen der eigenen
+ * F18-Konvention (forget/touchVm machen es mit .catch richtig).
+ */
+describe('Timer-Stopps ohne Rejection-Handler (N5)', () => {
+  function providerMitKaputtemStop() {
+    const provider: SandboxProvider = {
+      async start(): Promise<SandboxHandle> {
+        return {
+          previewHostPort: 1,
+          previewStatus: () => 'ready' as const,
+          stop: async () => {
+            throw new Error('msb stop kaputt');
+          },
+        };
+      },
+    };
+    return provider;
+  }
+
+  async function mitRejectionFaenger(lauf: () => Promise<void>): Promise<unknown[]> {
+    const abgefangen: unknown[] = [];
+    const faenger = (reason: unknown): void => {
+      abgefangen.push(reason);
+    };
+    process.on('unhandledRejection', faenger);
+    try {
+      await lauf();
+    } finally {
+      process.off('unhandledRejection', faenger);
+    }
+    return abgefangen;
+  }
+
+  test('scheiternder Grace-Stopp wird geloggt statt zur Unhandled Rejection', async () => {
+    const manager = new SandboxManager({
+      provider: providerMitKaputtemStop(),
+      graceMs: 20,
+      idleMs: 10_000,
+      maxSandboxes: 8,
+    });
+    const abgefangen = await mitRejectionFaenger(async () => {
+      await manager.enter(ctx('p1'), 'u1');
+      manager.leave('p1', 'u1'); // letzter Betrachter → Grace scharf
+      await warteAuf(() => manager.status('p1') === 'stopped');
+      await Bun.sleep(30); // Zeit, in der die Rejection hochkäme
+    });
+    expect(abgefangen).toEqual([]);
+  });
+
+  test('scheiternder Idle-Stopp wird geloggt statt zur Unhandled Rejection', async () => {
+    const manager = new SandboxManager({
+      provider: providerMitKaputtemStop(),
+      graceMs: 10_000,
+      idleMs: 30,
+      maxSandboxes: 8,
+    });
+    const abgefangen = await mitRejectionFaenger(async () => {
+      await manager.enter(ctx('p1'), 'u1');
+      await warteAuf(() => manager.status('p1') === 'stopped');
+      await Bun.sleep(30);
+    });
+    expect(abgefangen).toEqual([]);
+  });
+});
+
+/**
+ * N6 aus dem Zustandsmaschinen-Audit: previewStatus() lieferte während des
+ * Boots hart „stopped" (Gate: status !== 'running' || !handle) — das Overlay
+ * behauptete „Sandbox gestoppt", während die Preview gerade STARTETE.
+ */
+describe('previewStatus während des Boots (N6)', () => {
+  test('meldet „starting", solange die Sandbox startet — danach den echten Handle-Status', async () => {
+    const t = torProvider();
+    const manager = new SandboxManager({
+      provider: t.provider,
+      graceMs: 10_000,
+      idleMs: 10_000,
+      maxSandboxes: 8,
+    });
+
+    const start = manager.enter(ctx('p1'), 'u1');
+    await t.warteAufTor('p1');
+    expect(manager.status('p1')).toBe('starting');
+    expect(manager.previewStatus('p1')).toBe('starting');
+
+    t.freigeben('p1');
+    await start;
+    expect(manager.previewStatus('p1')).toBe('ready');
+  });
+
+  test('unbekanntes Projekt und gestoppte Sandbox bleiben „stopped"', async () => {
+    const { manager } = setup();
+    expect(manager.previewStatus('unbekannt')).toBe('stopped');
+    await manager.enter(ctx('p1'), 'u1');
+    await manager.stop('p1');
+    expect(manager.previewStatus('p1')).toBe('stopped');
+  });
+});
+
+/**
+ * N7 aus dem Zustandsmaschinen-Audit: msb startet Sandboxes mit .replace() —
+ * eine nach einem Hot-Reload verwaiste, noch laufende VM gleichen Namens wird
+ * beim nächsten Start kommentarlos ÜBERBOOTET, ohne stop(), also ohne den
+ * onBeforeStop-Auto-Commit. Ihr Workspace-Stand (Host-Mount) ginge zwar nicht
+ * verloren, bliebe aber uncommittet. Der onBeforeStart-Hook sichert ihn,
+ * BEVOR provider.start die alte VM ersetzt (autoCommit ist bei leerem
+ * git status ein No-op — der Normalfall kostet ein git status).
+ */
+describe('onBeforeStart: offener Stand wird gesichert, bevor eine neue VM bootet (N7)', () => {
+  function setupMitBeforeStart(onBeforeStart: (projectId: string) => Promise<void>) {
+    const ablauf: string[] = [];
+    const provider: SandboxProvider = {
+      async start(context: SandboxContext): Promise<SandboxHandle> {
+        ablauf.push(`start:${context.projectId}`);
+        return {
+          previewHostPort: 1,
+          previewStatus: () => 'ready' as const,
+          stop: async () => {},
+        };
+      },
+    };
+    const manager = new SandboxManager({
+      provider,
+      graceMs: 10_000,
+      idleMs: 10_000,
+      maxSandboxes: 8,
+      onBeforeStart: async (projectId) => {
+        ablauf.push(`beforeStart:${projectId}`);
+        await onBeforeStart(projectId);
+      },
+    });
+    return { ablauf, manager };
+  }
+
+  test('läuft beim Frischstart VOR provider.start', async () => {
+    const { ablauf, manager } = setupMitBeforeStart(async () => {});
+    await manager.enter(ctx('p1'), 'u1');
+    expect(ablauf).toEqual(['beforeStart:p1', 'start:p1']);
+  });
+
+  test('ein No-op-enter auf laufender VM ruft den Hook nicht erneut', async () => {
+    const { ablauf, manager } = setupMitBeforeStart(async () => {});
+    await manager.enter(ctx('p1'), 'u1');
+    await manager.enter(ctx('p1'), 'u2');
+    await manager.ensureRunning(ctx('p1'));
+    expect(ablauf).toEqual(['beforeStart:p1', 'start:p1']);
+  });
+
+  test('ein Fehler im Hook blockiert den Start nicht', async () => {
+    const { ablauf, manager } = setupMitBeforeStart(async () => {
+      throw new Error('git kaputt');
+    });
+    await manager.enter(ctx('p1'), 'u1');
+    expect(manager.status('p1')).toBe('running');
+    expect(ablauf).toEqual(['beforeStart:p1', 'start:p1']);
+  });
+});
+
+/**
+ * N8 aus dem Zustandsmaschinen-Audit: kam zwischen stop() und forget() ein
+ * enter() dazwischen, machte forget nur einen Nachhol-Stopp und liess den
+ * Map-Eintrag FÜR IMMER stehen — ein kleines Leck pro Lösch-Race. Rennen-Test
+ * #9 pinnt, dass der Eintrag WÄHREND des Stopps erhalten bleibt (keine
+ * verwaiste VM); hier kommt die zweite Hälfte: NACH dem vollendeten
+ * Nachhol-Stopp verschwindet er.
+ */
+describe('forget() räumt den Eintrag nach dem Nachhol-Stopp ab (N8)', () => {
+  test('der Nachhol-Stopp löscht den Eintrag, sobald er vollendet ist', async () => {
+    const t = torProvider();
+    const manager = new SandboxManager({
+      provider: t.provider,
+      graceMs: 10_000,
+      idleMs: 10_000,
+      maxSandboxes: 8,
+    });
+
+    // Exakt das #9-Szenario: stop(), enter() dazwischen, forget() mitten im Start.
+    const start1 = manager.enter(ctx('p1'), 'u1');
+    await t.warteAufTor('p1');
+    t.freigeben('p1');
+    await start1;
+    await manager.stop('p1');
+    const neuerStart = manager.enter(ctx('p1'), 'u2');
+    await t.warteAufTor('p1');
+
+    manager.forget('p1');
+
+    t.freigeben('p1');
+    await neuerStart;
+
+    // #9 hält hier fest: nicht sofort verwaist. Aber der Nachhol-Stopp muss
+    // den Eintrag danach abräumen — sonst bleibt er für die Prozesslaufzeit.
+    await warteAuf(() => manager.trackedProjects() === 0);
+    expect(manager.status('p1')).toBe('stopped');
+    expect(t.gestoppt).toContain('p1');
   });
 });

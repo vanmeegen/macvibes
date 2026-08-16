@@ -336,6 +336,90 @@ describe('Verbindungsabbruch mitten im Turn', () => {
 });
 
 /**
+ * M3 aus dem Zustandsmaschinen-Audit: Nach abandonTurn laeuft die geteilte
+ * SDK-Query weiter (interrupt() ist fire-and-forget und stoppt eine an totem
+ * Upstream haengende Generierung nicht sofort). handleMessage las die turnId
+ * aber zum LIEFERzeitpunkt — kam nach Reconnect schon der naechste Turn, wurden
+ * die Nachzuegler der aufgegebenen Generation dem NEUEN Turn zugeschrieben:
+ * Alt-Text unter der neuen Bubble, und ihr spaetes result beendete den neuen
+ * Turn vorzeitig. Da beide Generationen dieselbe seriell verarbeitete Query
+ * teilen, gilt: alles bis zum naechsten result gehoert der aufgegebenen
+ * Generation und ist still zu verwerfen.
+ */
+describe('Nachzuegler der aufgegebenen Generation (M3)', () => {
+  test('veraltete SDK-Messages nach abandonTurn landen nicht im naechsten Turn', async () => {
+    const h = makeHarness();
+    h.session.startTurn(START);
+    await tick();
+
+    h.session.abandonTurn();
+    h.session.startTurn({ ...START, turnId: 't-2', prompt: 'neu' });
+    await tick();
+
+    // Nachzuegler der ALTEN Generation (dieselbe haengende Query):
+    h.queries[0]!.push({
+      type: 'stream_event',
+      event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'ALT' } },
+    });
+    h.queries[0]!.push({ type: 'result', subtype: 'success', session_id: 's-alt' });
+    await tick();
+
+    // Weder Alt-Text noch vorzeitiges turn-completed unter t-2.
+    expect(eventsFor(h.emitted, 't-2')).toEqual([]);
+
+    // Die ECHTE Antwort von t-2 kommt danach normal durch.
+    h.queries[0]!.push({
+      type: 'stream_event',
+      event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'NEU' } },
+    });
+    h.queries[0]!.push({ type: 'result', subtype: 'success', session_id: 's-neu' });
+    await tick();
+    expect(eventsFor(h.emitted, 't-2')).toEqual([
+      { type: 'text-delta', text: 'NEU' },
+      { type: 'turn-completed', sessionId: 's-neu' },
+    ]);
+  });
+
+  test('ein Nachzuegler-Result VOR dem naechsten startTurn raeumt die Sperre — der Folge-Turn laeuft normal', async () => {
+    const h = makeHarness();
+    h.session.startTurn(START);
+    await tick();
+
+    h.session.abandonTurn();
+    // Die alte Generation endet, BEVOR der naechste Turn startet.
+    h.queries[0]!.push({ type: 'result', subtype: 'error_during_execution', session_id: 's-1' });
+    await tick();
+
+    h.session.startTurn({ ...START, turnId: 't-2', prompt: 'neu' });
+    await tick();
+    h.queries[0]!.push({ type: 'result', subtype: 'success', session_id: 's-2' });
+    await tick();
+
+    // Pinnt: die Generationsgrenze muss auch OHNE aktiven Turn erkannt werden
+    // (Verwerfen-Check vor dem "kein Turn"-Early-Return) — sonst schluckte die
+    // Sperre die echte Antwort von t-2.
+    expect(eventsFor(h.emitted, 't-2')).toEqual([{ type: 'turn-completed', sessionId: 's-2' }]);
+  });
+
+  test('stirbt die geteilte Query nach abandon + neuem Turn, endet t-2 weiterhin mit turn-aborted', async () => {
+    const h = makeHarness();
+    h.session.startTurn(START);
+    await tick();
+
+    h.session.abandonTurn();
+    h.session.startTurn({ ...START, turnId: 't-2', prompt: 'neu' });
+    await tick();
+
+    h.queries[0]!.fail(new Error('Upstream tot'));
+    await tick();
+
+    // Die Verwerfen-Sperre darf das Query-Ende NICHT unterdruecken — der Host
+    // braucht den Abbruch, sonst haengt t-2 bis in den Watchdog.
+    expect(eventsFor(h.emitted, 't-2').at(-1)).toEqual({ type: 'turn-aborted' });
+  });
+});
+
+/**
  * `resumeSessionId: null` heisst laut protocol.ts „frischer Start (die
  * Recovery-Politik liegt beim Host)". chatService verlaesst sich darauf: nach
  * einem Haenger startet der zweite Versuch bewusst OHNE Resume und stellt dem
