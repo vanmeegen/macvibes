@@ -324,9 +324,12 @@ const sandboxManager = new SandboxManager({
   onStatusChange: (projectId, status) => {
     console.log(`Sandbox ${projectId}: ${status}`);
   },
-  // Grace-Stopp aufschieben, solange ein Agent-Turn läuft — lange (z. B.
-  // lokale qwen-)Turns überleben so das Zurücknavigieren zur Projektliste.
-  isBusy: (projectId) => chatServiceRef?.isTurnActive(projectId) ?? false,
+  // Grace-Stopp aufschieben, solange die Sandbox belegt ist (echter Turn ODER
+  // Config-Warmup) — lange (z. B. lokale qwen-)Turns überleben so das
+  // Zurücknavigieren zur Projektliste. Bewusst isBusy, nicht isTurnActive:
+  // Letzteres ist das UI-Vokabular („Agent arbeitet") und zählt den Warmup
+  // absichtlich nicht mit.
+  isBusy: (projectId) => chatServiceRef?.isBusy(projectId) ?? false,
   // Offenen Stand vor jedem Stopp sichern (R9).
   onBeforeStop: (projectId) => sichereProjektStand(projectId, 'Auto-Commit vor Sandbox-Stopp'),
   // … und vor jedem Frischstart (N7, verwaiste VM nach Hot-Reload): bei leerem

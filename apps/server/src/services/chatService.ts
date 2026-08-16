@@ -194,15 +194,28 @@ export class ChatService {
       .orderBy(sql`rowid`, asc(chatMessages.createdAt));
   }
 
+  /**
+   * Läuft (oder startet gleich) ein ECHTER Agent-Turn? Speist GraphQL
+   * (Project.turnActive) und damit das UI — „Agent arbeitet", Stop-Button.
+   * Der Config-Warmup zählt hier bewusst NICHT: er ist kein Turn, ein Stop
+   * auf ihn wäre ein No-op (activeTurnId ist null), und jedes frisch
+   * geöffnete Projekt zeigte sonst grundlos „Agent arbeitet".
+   */
   isTurnActive(projectId: string): boolean {
-    // Ein Config-Warmup belegt den Ein-Turn-Daemon genauso wie ein echter
-    // Turn — Grace-Stopp und LRU-Eviction (isBusy) dürfen die VM nicht unter
-    // ihm wegstoppen (N9). Der Eintrag verschwindet garantiert im finally
-    // von prewarm — kein Dauer-busy-Risiko.
-    if (this.warmups.has(projectId)) return true;
     const state = this.states.get(projectId);
     if (!state) return false;
     return state.pumpRunning || state.queue.length > 0 || state.currentHandle !== null;
+  }
+
+  /**
+   * Ist die Sandbox dieses Projekts BELEGT? Speist den SandboxManager
+   * (Grace-Aufschub, Eviction-Schutz). Umfasst neben echten Turns auch den
+   * Config-Warmup: der belegt den Ein-Turn-Daemon genauso — Grace/LRU dürfen
+   * die VM nicht unter ihm wegstoppen (N9). Der Warmup-Eintrag verschwindet
+   * garantiert im finally von prewarm — kein Dauer-busy-Risiko.
+   */
+  isBusy(projectId: string): boolean {
+    return this.warmups.has(projectId) || this.isTurnActive(projectId);
   }
 
   /**
@@ -333,7 +346,19 @@ export class ChatService {
     const state = this.state(input.projectId);
     const turnId = crypto.randomUUID();
     state.queue.push({ turnId, prompt: input.text, workspaceDir: input.workspaceDir });
-    await this.insertMessage(input.projectId, turnId, 'user', input.text);
+    try {
+      await this.insertMessage(input.projectId, turnId, 'user', input.text);
+    } catch (error) {
+      // Der Push steht bewusst VOR dem Insert (Startfenster-Semantik). Wirft
+      // der Insert (SQLITE_BUSY, FK-Verletzung bei gleichzeitigem
+      // deleteProject), darf der Eintrag nicht verwaisen: niemand ruft danach
+      // pump(), aber `queue.length > 0` hielte isBusy für immer true — die
+      // Sandbox wäre nie mehr Grace-/Eviction-Kandidat („Agent arbeitet" ohne
+      // Ende). Eintrag zurücknehmen, Fehler sichtbar weiterwerfen.
+      const index = state.queue.findIndex((turn) => turn.turnId === turnId);
+      if (index !== -1) state.queue.splice(index, 1);
+      throw error;
+    }
     // Mid-Turn-Steering (Phase C): Gegenwart statt aufgeschobener Wunsch —
     // abgebrochen wird, was JETZT aktiv ist, mit der eigenen neuen turnId als
     // Ausnahme. Hat die Pump die neue Nachricht während des insertMessage-
@@ -455,8 +480,21 @@ export class ChatService {
   async stopTurn(user: UserRow, projectId: string): Promise<void> {
     await getProjectOwned(this.db, user, projectId);
     const state = this.state(projectId);
-    state.queue.length = 0;
+    // Verworfene Queue-Einträge merken, BEVOR synchron geleert und abgebrochen
+    // wird — das await für ihre Terminal-Zeile kommt erst danach.
+    const verworfen = state.queue.splice(0, state.queue.length);
     this.abortActiveTurn(state, null);
+    // Auch verworfene, noch nicht gestartete Nachrichten brauchen eine
+    // Terminal-Zeile: ihre User-Zeile ist bereits persistiert — bliebe sie die
+    // letzte im Chat (der aktive Turn schreibt seine eigene Zeile ggf. VOR ihr
+    // oder gar nicht, wenn er längst fertig war und die Pump nur noch im
+    // onTurnEnd-Hook hing), führte resumeUnansweredTurn beim nächsten Öffnen
+    // GENAU die gestoppte Nachricht stillschweigend aus. Eine Zeile (für den
+    // letzten Eintrag) genügt: der Resume schaut nur auf die letzte Zeile.
+    const letzter = verworfen[verworfen.length - 1];
+    if (letzter !== undefined) {
+      await this.insertMessage(projectId, letzter.turnId, 'system', 'Turn abgebrochen');
+    }
   }
 
   /**
@@ -598,6 +636,13 @@ export class ChatService {
         state.activeTurnId = turn.turnId;
         try {
           await this.runTurn(projectId, turn);
+        } catch (error) {
+          // Kein Wurf verlässt die Schleife: sonst bliebe die restliche Queue
+          // verwaist liegen (isBusy für immer true, „Agent arbeitet" ohne
+          // Ende) — die wartenden Nachrichten laufen stattdessen weiter.
+          // runTurn fängt seine Kernpfade selbst; hier landen nur Randwürfe
+          // (DB-Read vor dem try in runAttempt, withHistoryContext).
+          console.error(`Turn ${turn.turnId} für ${projectId} scheiterte hart:`, error);
         } finally {
           // Nichts überlebt das Turn-Ende: weder der Aktiv-Marker noch ein
           // nicht eingelöster Abbruch-Pin (er gehörte zu DIESEM Turn).
@@ -675,7 +720,14 @@ export class ChatService {
       this.publish(projectId, lastRow, state.queue.length > 0);
     }
     if (completed) {
-      await this.hooks.onTurnEnd?.(projectId, turn.prompt);
+      try {
+        await this.hooks.onTurnEnd?.(projectId, turn.prompt);
+      } catch (error) {
+        // Ein werfender Hook (Auto-Commit: git kaputt, postMessage nach
+        // deleteProject) darf die Pump-Schleife nicht sprengen — sonst bleibt
+        // die restliche Queue verwaist liegen und isBusy für immer true.
+        console.error(`onTurnEnd-Hook für ${projectId} schlug fehl:`, error);
+      }
     }
   }
 
@@ -859,6 +911,11 @@ export class ChatService {
     // Wenn nicht, war der Start ein msb-Flake und darf wiederholt werden.
     let sawMeaningful = false;
     let sawAnyEvent = false;
+    // Getrennt von sawMeaningful (dem Flake-Detektor der Retry-Politik, den
+    // schon ein session-Event setzt): NUR echte Arbeit — Text, Denken,
+    // Tool-Calls — rechtfertigt den „weiter"-Hinweis. Sonst verspräche die
+    // Terminal-Zeile einen Zwischenstand, den es nicht gibt.
+    let sawArbeit = false;
 
     const insert = async (
       role: ChatMessageRow['role'],
@@ -932,13 +989,16 @@ export class ChatService {
       }
       switch (event.type) {
         case 'text-delta':
+          sawArbeit = true;
           assistantRow = await appendDelta(assistantRow, 'assistant', event.text);
           break;
         case 'thinking-delta':
+          sawArbeit = true;
           // Denken live in eine eigene Zeile streamen (falls die API es liefert).
           thinkingRow = await appendDelta(thinkingRow, 'thinking', event.text);
           break;
         case 'tool-use':
+          sawArbeit = true;
           // Neuer Tool-Call beginnt: die laufende Text-/Denk-Bubble ist zu Ende.
           assistantRow = null;
           thinkingRow = null;
@@ -976,10 +1036,7 @@ export class ChatService {
           // Nutzerabbruch folgt kein Retry, also ist dieser Versuch der letzte
           // — die Rückmeldung MUSS dann sichtbar sein.
           if (benutzerAbbruch || sawMeaningful || isLastAttempt) {
-            await insert(
-              'system',
-              'Turn abgebrochen' + (sawMeaningful ? ` — ${WEITER_HINWEIS}` : ''),
-            );
+            await insert('system', 'Turn abgebrochen' + (sawArbeit ? ` — ${WEITER_HINWEIS}` : ''));
           }
           break;
         case 'turn-completed':
@@ -1014,10 +1071,7 @@ export class ChatService {
             // nächsten Öffnen erneut aus) und mangels lastRow würde
             // turnActive:false nie publiziert („Agent arbeitet" für immer).
             // Gleiches Vokabular wie der turn-aborted-Pfad, EIN Stop-Bild im UI.
-            await insert(
-              'system',
-              'Turn abgebrochen' + (sawMeaningful ? ` — ${WEITER_HINWEIS}` : ''),
-            );
+            await insert('system', 'Turn abgebrochen' + (sawArbeit ? ` — ${WEITER_HINWEIS}` : ''));
           } else if (sawMeaningful || isLastAttempt) {
             const usedMs = sawAnyEvent ? timeouts.idleMs : firstEventBudget;
             const secs = Math.round(usedMs / 1000);
@@ -1028,7 +1082,7 @@ export class ChatService {
                   ? `\n\n${detail}`
                   : ' Kein weiterer Fehlertext verfügbar — mögliche Ursache: die Claude-API ' +
                     'antwortet nicht (Netz-/Rate-Limit-Problem).') +
-                (sawMeaningful ? `\n\n${WEITER_HINWEIS}` : ''),
+                (sawArbeit ? `\n\n${WEITER_HINWEIS}` : ''),
             );
           }
           break;

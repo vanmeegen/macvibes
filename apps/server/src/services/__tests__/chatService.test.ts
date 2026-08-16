@@ -165,11 +165,16 @@ describe('Config-Warmup: erster Turn wird schnell, weil beim Öffnen vorgewärmt
     expect((await service.listMessages(projectId)).some((m) => m.content === 'echt')).toBe(true);
   });
 
-  test('ein laufender Warmup zählt als aktiver Turn — Grace/Eviction stoppen keine warmlaufende VM (N9)', async () => {
-    // isTurnActive speist isBusy des SandboxManagers (Grace-Aufschub und
-    // Eviction-Schutz). Der Warmup belegt den Ein-Turn-Daemon wie ein echter
-    // Turn — zählte er nicht als busy, konnte Grace/LRU die VM mitten im
-    // Warmup stoppen (Folge: verlorener Warmup, Doppel-Boot).
+  test('ein laufender Warmup belegt die Sandbox (isBusy), ist aber KEIN Turn fürs UI (isTurnActive)', async () => {
+    // Zwei Begriffe, bewusst getrennt:
+    //  - isBusy speist den SandboxManager (Grace-Aufschub, Eviction-Schutz):
+    //    der Warmup belegt den Ein-Turn-Daemon wie ein echter Turn, sonst
+    //    stoppte Grace/LRU die VM mitten im Warmup (verlorener Warmup,
+    //    Doppel-Boot).
+    //  - isTurnActive speist GraphQL (Project.turnActive) und damit das UI.
+    //    Zählte der Warmup hier mit, zeigte JEDES frisch geöffnete Projekt
+    //    „Agent arbeitet" samt Stop-Button — und dieser Stop wäre ein No-op,
+    //    weil gar kein Turn läuft (activeTurnId ist null).
     let warmupGestartet = false;
     let releaseWarmup: () => void = () => {};
     const runner: AgentRunner = {
@@ -187,9 +192,37 @@ describe('Config-Warmup: erster Turn wird schnell, weil beim Öffnen vorgewärmt
     const { owner, service, projectId } = await setup(runner);
     await service.prewarm(owner, projectId, '/tmp/ws');
     await waitFor(() => warmupGestartet);
-    expect(service.isTurnActive(projectId)).toBe(true);
+    expect(service.isBusy(projectId)).toBe(true);
+    expect(service.isTurnActive(projectId)).toBe(false);
     releaseWarmup();
+    await waitFor(() => !service.isBusy(projectId));
+  });
+
+  test('ein echter Turn ist in BEIDEN Begriffen aktiv', async () => {
+    // Gegenprobe zur Trennung oben: die Aufspaltung darf den Normalfall nicht
+    // verändern — ein laufender Turn bleibt busy UND turnActive.
+    let release: (() => void) | null = null;
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          yield { type: 'text-delta', text: 'arbeite' };
+          await new Promise<void>((r) => {
+            release = r;
+          });
+          yield { type: 'turn-completed', sessionId: 's' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { owner, service, projectId } = await setup(runner);
+    await service.sendMessage(owner, sendInput(projectId, 'los'));
+    // Erst freigeben, wenn der Generator wirklich am Tor wartet.
+    await waitFor(() => release !== null);
+    expect(service.isTurnActive(projectId)).toBe(true);
+    expect(service.isBusy(projectId)).toBe(true);
+    release!();
     await waitFor(() => !service.isTurnActive(projectId));
+    expect(service.isBusy(projectId)).toBe(false);
   });
 
   test('prewarm überspringt, wenn schon eine Session existiert (Config bereits warm)', async () => {
@@ -333,6 +366,134 @@ describe('Stop bei nicht erreichbarem Daemon (M1): Terminal-Zeile trotz stummem 
     // Ohne sinnvolle Events gibt es nichts fortzusetzen — KEIN weiter-Hinweis.
     expect(letzte?.content).not.toContain('weiter');
   });
+
+  test('Stop verwirft WARTENDE Nachrichten nicht stillschweigend — auch sie enden mit Terminal-Zeile', async () => {
+    // Die Queue-Variante desselben Befunds, in ihrer engsten Form: Turn 1 ist
+    // FERTIG (schreibt keine Zeile mehr), die Pump hängt noch im
+    // onTurnEnd-Auto-Commit (git — Sekunden), Nachricht 2 wartet in der Queue
+    // (User-Zeile persistiert). Stop leert die Queue — ohne Terminal-Zeile für
+    // die verworfene Nachricht bliebe deren User-Zeile die letzte im Chat, und
+    // resumeUnansweredTurn führte GENAU die gestoppte Nachricht beim nächsten
+    // Öffnen stillschweigend aus.
+    let starts = 0;
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        starts += 1;
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          yield { type: 'text-delta', text: 'fertig' };
+          yield { type: 'turn-completed', sessionId: 's-1' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const db = createTestDb();
+    const owner = await createUser(db, 'marco');
+    const projectId = await createProjectRow(db, owner);
+    let turnEndeFreigeben: (() => void) | null = null;
+    const service = new ChatService(db, runner, {
+      onTurnEnd: () =>
+        new Promise<void>((r) => {
+          turnEndeFreigeben = r;
+        }),
+    });
+
+    await service.sendMessage(owner, sendInput(projectId, 'erster Prompt'));
+    // Turn 1 ist fertig, die Pump hängt jetzt im onTurnEnd-Hook.
+    await waitFor(() => turnEndeFreigeben !== null);
+    await service.sendMessage(owner, sendInput(projectId, 'wartender Prompt'));
+    await service.stopTurn(owner, projectId);
+    turnEndeFreigeben!();
+    await waitFor(() => !service.isTurnActive(projectId), 3000);
+
+    // Die verworfene Nachricht hat eine Terminal-Zeile — die letzte Zeile ist
+    // KEINE User-Zeile mehr, der Resume greift nicht, nichts läuft erneut an.
+    const messages = await service.listMessages(projectId);
+    expect(messages[messages.length - 1]?.role).toBe('system');
+    expect(messages[messages.length - 1]?.content).toContain('abgebrochen');
+    expect(await service.resumeUnansweredTurn(owner, projectId, '/tmp/fake-workspace')).toBe(false);
+    expect(starts).toBe(1);
+  });
+});
+
+/**
+ * Eine verwaiste Queue ist ein Dauer-Leck: isBusy bleibt über
+ * `queue.length > 0` für immer true — der Grace-Stopp schiebt sich endlos
+ * auf, die Sandbox ist nie Eviction-Kandidat, im UI steht „Agent arbeitet"
+ * ohne Ende. Zwei Pfade konnten Einträge verwaisen lassen: ein werfender
+ * insertMessage in sendMessage (Push passiert VOR dem Insert) und ein
+ * werfender onTurnEnd-Hook (die Exception verließ die Pump-Schleife, der
+ * Rest der Queue blieb liegen).
+ */
+describe('Pump-Robustheit: kein Pfad hinterlässt eine verwaiste Queue', () => {
+  test('wirft der onTurnEnd-Hook, läuft die nächste Queue-Nachricht trotzdem', async () => {
+    const gelaufen: string[] = [];
+    const runner: AgentRunner = {
+      startTurn(options: TurnOptions): TurnHandle {
+        gelaufen.push(options.prompt);
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          yield { type: 'text-delta', text: 'ok' };
+          yield { type: 'turn-completed', sessionId: 's' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const db = createTestDb();
+    const owner = await createUser(db, 'marco');
+    const projectId = await createProjectRow(db, owner);
+    const service = new ChatService(db, runner, {
+      onTurnEnd: async () => {
+        throw new Error('Auto-Commit kaputt');
+      },
+    });
+
+    await service.sendMessage(owner, sendInput(projectId, 'eins'));
+    await service.sendMessage(owner, sendInput(projectId, 'zwei'));
+    await waitFor(() => gelaufen.length === 2, 3000);
+    await waitFor(() => !service.isBusy(projectId), 3000);
+  });
+
+  test('wirft der User-Zeilen-Insert, bleibt kein verwaister Queue-Eintrag zurück', async () => {
+    const runner = new FakeAgentRunner(1);
+    const db = createTestDb();
+    const owner = await createUser(db, 'marco');
+    const projectId = await createProjectRow(db, owner);
+    // Insert wirft genau einmal — wie SQLITE_BUSY oder eine FK-Verletzung
+    // beim gleichzeitigen deleteProject.
+    let werfen = true;
+    const echterInsert = db.insert.bind(db) as (t: unknown) => {
+      values: (w: unknown) => { returning: () => Promise<unknown> };
+    };
+    const kaputteDb = new Proxy(db, {
+      get(ziel, eigenschaft, empfaenger): unknown {
+        if (eigenschaft !== 'insert') return Reflect.get(ziel, eigenschaft, empfaenger);
+        return (tabelle: unknown) => ({
+          values: (werte: unknown) => ({
+            returning: async (): Promise<unknown> => {
+              if (werfen) {
+                werfen = false;
+                throw new Error('SQLITE_BUSY: database is locked');
+              }
+              return echterInsert(tabelle).values(werte).returning();
+            },
+          }),
+        });
+      },
+    }) as Db;
+    const service = new ChatService(kaputteDb, runner, {});
+
+    await expect(service.sendMessage(owner, sendInput(projectId, 'eins'))).rejects.toThrow(
+      'SQLITE_BUSY',
+    );
+    // Der Fehler ist sichtbar — aber er hinterlässt KEINEN Eintrag, der die
+    // Sandbox für immer busy hält.
+    expect(service.isBusy(projectId)).toBe(false);
+
+    // Und der nächste Versuch funktioniert normal.
+    await service.sendMessage(owner, sendInput(projectId, 'zwei'));
+    await waitFor(() => !service.isBusy(projectId), 3000);
+    const messages = await service.listMessages(projectId);
+    expect(messages.some((m) => m.content.includes('Echo: zwei'))).toBe(true);
+  });
 });
 
 /**
@@ -344,6 +505,38 @@ describe('Stop bei nicht erreichbarem Daemon (M1): Terminal-Zeile trotz stummem 
  * fortzusetzen, dann bleibt die Zeile hinweisfrei (Negativfall im M1-Test).
  */
 describe('Abbruch nach halber Arbeit: Terminal-Zeile fordert zum „weiter" auf', () => {
+  test('nur session/api-retry ist KEINE Arbeit: Stop-Zeile bleibt hinweisfrei', async () => {
+    // sawMeaningful ist ein Flake-Detektor (steuert den Retry) und wird schon
+    // vom session-Init-Event gesetzt. Für den weiter-Hinweis wäre das
+    // irreführend: „Der Zwischenstand bleibt erhalten" — obwohl kein einziges
+    // Byte Arbeit existiert. Der Hinweis hängt deshalb an ECHTER Arbeit
+    // (text-/thinking-Delta, tool-use), nicht an sawMeaningful.
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        let release: (() => void) | null = null;
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          yield { type: 'session', sessionId: 's-1' };
+          yield { type: 'api-retry', attempt: 1, maxRetries: 3, message: 'API zäh' };
+          await new Promise<void>((r) => {
+            release = r;
+          });
+          yield { type: 'turn-aborted' };
+        })();
+        return { events, abort: () => release?.() };
+      },
+    };
+    const { owner, service, projectId, activity } = await setup(runner);
+    await service.sendMessage(owner, sendInput(projectId, 'baue X'));
+    await waitFor(() => activity.length > 0);
+    await service.stopTurn(owner, projectId);
+    await waitFor(() => !service.isTurnActive(projectId), 3000);
+
+    const letzte = (await service.listMessages(projectId)).at(-1);
+    expect(letzte?.role).toBe('system');
+    expect(letzte?.content).toContain('Turn abgebrochen');
+    expect(letzte?.content).not.toContain('weiter');
+  });
+
   test('Nutzer-Stop nach text-delta: „Turn abgebrochen" enthält den weiter-Hinweis', async () => {
     const runner: AgentRunner = {
       startTurn(): TurnHandle {
