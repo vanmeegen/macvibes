@@ -46,8 +46,12 @@ export interface SandboxManagerOptions {
   /**
    * Setzt die Idle-Frist der VM zurück (ADR 0003). Fehlt sie, verhält sich der
    * Manager wie bisher — nützlich für Tests und den Process-Provider.
+   *
+   * Liefert `false`, wenn die VM nicht (mehr) existiert (M2): der Manager
+   * merkt sich das am Eintrag und heilt beim nächsten enter/ensureRunning per
+   * Stop→Neustart. Ein Fehler (msb hängt) ist KEIN „verschwunden".
    */
-  touchSandbox?: (projectId: string) => Promise<void>;
+  touchSandbox?: (projectId: string) => Promise<boolean>;
   /**
    * Mindestabstand zwischen zwei VM-Berührungen. noteAgentActivity feuert bei
    * JEDEM Agent-Event (also pro Text-Delta) — ungedrosselt wären das dreistellig
@@ -71,6 +75,13 @@ interface SandboxEntry {
   stopPromise: Promise<void> | null;
   /** Wann zuletzt die Idle-Frist der VM zurückgesetzt wurde (ADR 0003). */
   lastVmTouchAt: number;
+  /**
+   * Der VM-Touch hat „nicht gefunden" gemeldet, obwohl der Eintrag `running`
+   * glaubt (M2) — die MicroVM ist tot. Das nächste enter/ensureRunning heilt
+   * per Stop→Neustart. Ein Frischstart erzeugt ein neues Entry-Objekt, das
+   * Flag resettet also natürlich.
+   */
+  vmVerschwunden: boolean;
   /**
    * Wer schaut gerade zu (H11). Ein Betrachter = eine aktive
    * chatEvents-Subscription: `enter` beim Aufbau, `leave` beim Ende des
@@ -171,6 +182,26 @@ export class SandboxManager {
       return;
     }
     if (existing && existing.status === 'running') {
+      // Heilung beim Wieder-Öffnen (M2): meldet der Handle „failed"
+      // (monit-Crash-Loop) oder hat der VM-Touch die VM als verschwunden
+      // gemeldet, ist der running-Eintrag eine Leiche — ohne diesen Zweig
+      // gäbe es KEINEN Weg zurück (kein Restart-Mutation, ensureRunning war
+      // No-op; Heilung erst über Idle/Grace nach Minuten). Ordentlicher Stopp
+      // (inkl. Auto-Commit) und dann der normale Frischstart-Pfad; die
+      // Betrachter überleben das per H11-Übernahme. Nie unter einem laufenden
+      // Turn (auch Warmup, N9) — ein toter Turn löst sich über den Watchdog.
+      const kaputt = existing.vmVerschwunden || existing.handle?.previewStatus() === 'failed';
+      if (kaputt && this.options.isBusy?.(context.projectId) !== true) {
+        console.warn(
+          `Sandbox ${context.projectId} ist kaputt (${
+            existing.vmVerschwunden ? 'VM verschwunden' : 'Dev-Server failed'
+          }) — Heilung per Stop→Neustart.`,
+        );
+        await this.stop(context.projectId);
+        // Nach dem Stopp ist der Eintrag `stopped` — die Rekursion nimmt den
+        // Frischstart-Pfad (Single-Depth, kein weiterer running-Zweig).
+        return this.acquire(context, viewer);
+      }
       if (viewer !== null) {
         existing.viewers.add(viewer);
         this.clearGrace(existing);
@@ -200,6 +231,7 @@ export class SandboxManager {
       startPromise: null,
       stopPromise: null,
       lastVmTouchAt: 0,
+      vmVerschwunden: false,
       viewers,
     };
     this.entries.set(context.projectId, entry);
@@ -508,9 +540,16 @@ export class SandboxManager {
     const jetzt = Date.now();
     if (jetzt - entry.lastVmTouchAt < intervalMs) return;
     entry.lastVmTouchAt = jetzt;
-    void touchSandbox(entry.context.projectId).catch((error: unknown) => {
-      console.error(`VM-Idle-Frist für ${entry.context.projectId} nicht zurückgesetzt:`, error);
-    });
+    void touchSandbox(entry.context.projectId)
+      .then((vorhanden) => {
+        // Die VM ist weg, der Eintrag glaubt noch „running" (M2): merken —
+        // NICHT hier stoppen (dieser Pfad hängt an jedem Agent-Event); die
+        // Heilung übernimmt das nächste enter/ensureRunning.
+        if (!vorhanden && entry.status === 'running') entry.vmVerschwunden = true;
+      })
+      .catch((error: unknown) => {
+        console.error(`VM-Idle-Frist für ${entry.context.projectId} nicht zurückgesetzt:`, error);
+      });
   }
 
   private setStatus(entry: SandboxEntry, status: SandboxStatus): void {

@@ -386,15 +386,19 @@ export async function listSandboxNames(): Promise<string[]> {
 /**
  * Setzt die Idle-Frist einer Sandbox zurück (ADR 0003).
  *
- * Eine unbekannte Sandbox ist kein Fehler: Zwischen dem Auslösen und dem
- * Eintreffen kann sie regulär gestoppt worden sein.
+ * Eine unbekannte Sandbox ist kein Fehler, aber auch kein Geheimnis mehr (M2):
+ * Zwischen dem Auslösen und dem Eintreffen kann sie regulär gestoppt worden
+ * sein — oder sie ist gestorben, während der Manager sie noch für `running`
+ * hält. Deshalb `false` statt stillem Schlucken: der SandboxManager markiert
+ * den Eintrag und heilt beim nächsten Wieder-Öffnen.
  */
-export async function touchSandbox(name: string): Promise<void> {
+export async function touchSandbox(name: string): Promise<boolean> {
   try {
     const handle = await Sandbox.get(name);
     await handle.touch();
+    return true;
   } catch (error) {
-    if (istSandboxNichtGefunden(error)) return;
+    if (istSandboxNichtGefunden(error)) return false;
     throw new SandboxRuntimeError(
       `Idle-Frist von „${name}" konnte nicht zurückgesetzt werden: ${fehlertext(error)}`,
       error,

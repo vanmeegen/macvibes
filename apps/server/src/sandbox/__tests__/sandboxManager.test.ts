@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import type { PreviewStatus } from '../../preview/status';
 import type { SandboxContext, SandboxHandle, SandboxProvider } from '../provider';
 import { SandboxManager, viewerKey } from '../sandboxManager';
 
@@ -16,12 +17,14 @@ function ctx(projectId: string): SandboxContext {
 class FakeProvider implements SandboxProvider {
   startCalls: string[] = [];
   stopCalls: string[] = [];
+  /** Settable pro Projekt (Default „ready") — für die M2-Heilungstests. */
+  readonly previewStatusVon = new Map<string, PreviewStatus>();
 
   async start(context: SandboxContext): Promise<SandboxHandle> {
     this.startCalls.push(context.projectId);
     return {
       previewHostPort: 9999,
-      previewStatus: () => 'ready' as const,
+      previewStatus: () => this.previewStatusVon.get(context.projectId) ?? 'ready',
       stop: async () => {
         this.stopCalls.push(context.projectId);
       },
@@ -532,6 +535,7 @@ describe('VM-Idle-Auffangnetz (ADR 0003)', () => {
       maxSandboxes: 8,
       touchSandbox: async (name) => {
         beruehrt.push(name);
+        return true;
       },
       ...(overrides.vmTouchIntervalMs !== undefined
         ? { vmTouchIntervalMs: overrides.vmTouchIntervalMs }
@@ -581,7 +585,7 @@ describe('VM-Idle-Auffangnetz (ADR 0003)', () => {
       graceMs: 10_000,
       idleMs: 10_000,
       maxSandboxes: 8,
-      touchSandbox: async () => {
+      touchSandbox: async (): Promise<boolean> => {
         throw new Error('msb antwortet nicht');
       },
     });
@@ -1024,6 +1028,82 @@ describe('detachForReload (Dev-Hot-Reload)', () => {
     await Bun.sleep(60);
     expect(provider.stopCalls).toEqual([]);
     expect(manager.status('p1')).toBe('running');
+  });
+});
+
+/**
+ * M2 aus dem Zustandsmaschinen-Audit: Starb die MicroVM oder unmonitorte monit
+ * den Dev-Server (Crash-Loop → previewStatus „failed"), blieb der
+ * Manager-Eintrag „running" und ensureRunning war ein No-op — es gab KEINEN
+ * Heilungspfad, der UI-Hinweis „bitte das Projekt neu öffnen" war wirkungslos.
+ * Jetzt heilt das Wieder-Öffnen: der running-Zweig erkennt eine kaputte VM
+ * (previewStatus „failed" oder vom VM-Touch als verschwunden gemeldet) und
+ * macht einen ordentlichen Stop→Neustart — außer ein Turn läuft (isBusy).
+ */
+describe('Heilung beim Wieder-Öffnen: kaputte VM bei Manager-Status running (M2)', () => {
+  test('enter auf running-Eintrag mit previewStatus „failed": Stop (inkl. Auto-Commit) → Neustart', async () => {
+    const { provider, manager, beforeStopLog } = setup({ graceMs: 10_000 });
+    await manager.enter(ctx('p1'), 'u1');
+    provider.previewStatusVon.set('p1', 'failed');
+
+    await manager.enter(ctx('p1'), 'u1');
+
+    expect(provider.stopCalls).toEqual(['p1']);
+    expect(provider.startCalls).toEqual(['p1', 'p1']);
+    // Der Heil-Stopp ist ein ORDENTLICHER Stopp: Auto-Commit lief.
+    expect(beforeStopLog).toContain('p1');
+    expect(manager.status('p1')).toBe('running');
+    // H11: der Betrachter überlebt die Heilung.
+    expect(manager.viewerCount('p1')).toBe(1);
+  });
+
+  test('kein Heil-Neustart, solange ein Turn läuft (isBusy)', async () => {
+    const { provider, manager } = setup({ graceMs: 10_000, isBusy: () => true });
+    await manager.enter(ctx('p1'), 'u1');
+    provider.previewStatusVon.set('p1', 'failed');
+
+    await manager.enter(ctx('p1'), 'u1');
+
+    expect(provider.stopCalls).toEqual([]);
+    expect(provider.startCalls).toEqual(['p1']);
+    expect(manager.status('p1')).toBe('running');
+  });
+
+  test('eine vom VM-Touch als verschwunden gemeldete VM wird beim nächsten enter neu gestartet', async () => {
+    const provider = new FakeProvider();
+    let vorhanden = true;
+    const manager = new SandboxManager({
+      provider,
+      graceMs: 10_000,
+      idleMs: 10_000,
+      maxSandboxes: 8,
+      vmTouchIntervalMs: 0,
+      touchSandbox: async () => vorhanden,
+    });
+    await manager.enter(ctx('p1'), 'u1');
+    await Bun.sleep(10);
+
+    // Die VM stirbt (msb kennt sie nicht mehr) — der nächste Touch meldet das.
+    vorhanden = false;
+    manager.noteAgentActivity('p1');
+    await Bun.sleep(10);
+
+    await manager.enter(ctx('p1'), 'u1');
+    expect(provider.startCalls).toEqual(['p1', 'p1']);
+    expect(manager.status('p1')).toBe('running');
+  });
+
+  test('gesunde VM bleibt beim Wieder-Öffnen unangetastet (kein Über-Eifer)', async () => {
+    const { provider, manager } = setup({ graceMs: 10_000 });
+    await manager.enter(ctx('p1'), 'u1');
+
+    for (const status of ['ready', 'starting', 'restarting'] as const) {
+      provider.previewStatusVon.set('p1', status);
+      await manager.enter(ctx('p1'), 'u1');
+    }
+
+    expect(provider.stopCalls).toEqual([]);
+    expect(provider.startCalls).toEqual(['p1']);
   });
 });
 
