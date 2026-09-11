@@ -47,12 +47,14 @@ export interface HotReloadHandoff {
    */
   vmTokens: VmTokenRegistry | null;
   /**
-   * Selbst gestarteter lokaler Modell-Router (LiteLLM-Shim): er soll Reloads
-   * überleben (Kaltstart dauert Minuten). Ohne Übergabe stufte die nächste
+   * Selbst gestarteter lokaler Modell-Server (oMLX): er soll Reloads
+   * überleben (Modell-Load dauert). Ohne Übergabe stufte die nächste
    * Ausführung ihn als „extern" ein und ihr Shutdown-Schritt wäre ein No-op —
-   * `bun run shutdown` liesse den selbst gestarteten Shim dann als Waise zurück.
+   * `bun run shutdown` liesse den selbst gestarteten Prozess dann als Waise zurück.
    */
   localRouter: Promise<LocalRouterHandle> | null;
+  /** Dito für die optionale LiteLLM-Bridge (venv-Kaltstart dauert Minuten). */
+  litellm: Promise<LocalRouterHandle> | null;
 }
 
 export type HotCleanupFn = () => void | Promise<void>;
@@ -110,7 +112,7 @@ export interface HotReloadOptions {
 }
 
 function emptyHandoff(): HotReloadHandoff {
-  return { vmTokens: null, localRouter: null };
+  return { vmTokens: null, localRouter: null, litellm: null };
 }
 
 /** Läuft dieser Prozess unter `bun --hot`? Empirisch: das Flag steht in execArgv. */

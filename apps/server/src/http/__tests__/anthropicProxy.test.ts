@@ -262,7 +262,10 @@ describe('Modell-Routing (Modellwahl pro Chat: Claude API vs. lokaler Router)', 
     seen.length = 0;
     localSeen.length = 0;
 
-    const response = await proxy(vmRequest({}, bodyWithModel('qwen3.6-coder')), '/v1/messages');
+    const response = await proxy(
+      vmRequest({}, bodyWithModel('Qwen3.8-27B-oQ4e-mtp')),
+      '/v1/messages',
+    );
     expect(await response.json()).toEqual({ ok: true, upstream: 'local' });
     expect(seen).toHaveLength(0);
     expect(localSeen).toHaveLength(1);
@@ -592,9 +595,9 @@ describe('prepareRequestBody: Body genau einmal parsen', () => {
   });
 
   test('liest das Modell auch, wenn am Body nichts zu ändern ist', () => {
-    const body = JSON.stringify({ model: 'qwen3.6-coder', thinking: { type: 'disabled' } });
+    const body = JSON.stringify({ model: 'Qwen3.8-27B-oQ4e-mtp', thinking: { type: 'disabled' } });
     const ergebnis = prepareRequestBody(body);
-    expect(ergebnis.model).toBe('qwen3.6-coder');
+    expect(ergebnis.model).toBe('Qwen3.8-27B-oQ4e-mtp');
     expect(ergebnis.body).toBe(body);
   });
 

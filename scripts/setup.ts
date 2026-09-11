@@ -429,7 +429,7 @@ async function anbieterWaehlen(): Promise<ProviderChoice[]> {
 
   if (
     confirm(
-      'Weitere KI-Anbieter hinzufügen? (Ollama lokal / eigener Anbieter per URL + Token, z. B. OpenRouter, OpenAI)',
+      'Weitere KI-Anbieter hinzufügen? (lokales Qwen auf oMLX / eigener Anbieter per URL + Token, z. B. OpenRouter, OpenAI)',
     )
   ) {
     for (;;) {
@@ -439,7 +439,9 @@ async function anbieterWaehlen(): Promise<ProviderChoice[]> {
       if (wahl === '') break;
       if (wahl === 'ollama') {
         providers.push({ kind: 'ollama' });
-        console.log('  ✓ Ollama (lokal) — der mitgelieferte LiteLLM-Router startet automatisch.');
+        console.log(
+          '  ✓ Lokales Modell (Qwen 3.8 auf oMLX, http://localhost:8000) — keine Env nötig; oMLX per `omlx start` laufen lassen.',
+        );
       } else if (wahl === 'anbieter') {
         const neu = await eigenenAnbieterErfassen(providers);
         if (neu !== null) providers.push(neu);
@@ -477,7 +479,7 @@ async function main(): Promise<void> {
   const providers = await anbieterWaehlen();
   if (providers.length === 0) {
     console.log(
-      '\n⚠ Kein Anbieter gewählt — Fallback auf lokale Modelle (Ollama). Ohne laufendes Ollama/Modell antwortet der Agent nicht.',
+      '\n⚠ Kein Anbieter gewählt — Fallback auf das lokale Modell (oMLX). Ohne laufendes oMLX mit Qwen 3.8 antwortet der Agent nicht.',
     );
     providers.push({ kind: 'ollama' });
   }
@@ -608,7 +610,7 @@ async function main(): Promise<void> {
  *     Unbekanntes ohnehin so).
  *   - `litellm.yaml` — je Modell ein Router-Alias (nur OpenAI-kompatible).
  *     Existiert die Datei noch nicht, startet sie als Kopie der MITGELIEFERTEN
- *     litellm_config.yaml: so behält der Nutzer die Ollama-Basis-Einträge und
+ *     litellm_config.yaml: so behält der Nutzer den Basis-Eintrag (Qwen via Bridge) und
  *     den `'*'`-Catch-all (muss auch nach n Einfügungen letzter Eintrag
  *     bleiben — providerWiring fügt jeweils davor ein). Eine vorhandene Datei
  *     wird ERGÄNZT, nie überschrieben; Duplikate werden nur gemeldet.

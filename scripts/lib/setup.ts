@@ -25,20 +25,25 @@ export interface ModelRoute {
  * NICHT aus (der Credential-Proxy routet pro Request nach dem `model` im Body).
  *   - claude-oauth     : Abo-Token (claude setup-token), bevorzugt
  *   - claude-apikey    : klassischer Anthropic-API-Key
- *   - ollama           : lokale Modelle über den mitgelieferten LiteLLM-Router
+ *   - ollama           : lokales Modell (oMLX, Qwen 3.8) — braucht keine Env,
+ *                        der Credential-Proxy routet direkt an oMLX
  *   - custom-anthropic : eigener Anbieter, dessen Endpunkt die Format-PROBE
  *                        (lib/providerProbe) als Anthropic-/v1/messages-
  *                        kompatibel erkannt hat → direkte Modell-Route
  *   - custom-openai    : eigener Anbieter mit OpenAI-Format (/chat/completions)
- *                        → läuft über den LiteLLM-Router (Format-Übersetzung)
+ *                        → läuft über die LiteLLM-Bridge (Format-Übersetzung)
  *
- * WARUM custom-openai NICHT als Modell-Route: der Credential-Proxy hängt den
- * Request-Pfad an die `upstreamUrl` einer Route an und schickt Anthropic-Format
- * (anthropicProxy.ts) — eine rohe OpenAI-URL in MACVIBES_MODEL_ROUTES kann
- * deshalb NICHT funktionieren (Format-Mismatch). Der Weg ist der mitgelieferte
- * LiteLLM-Router; er liest den Anbieter-Key aus der Env (`os.environ/<envVar>`,
- * Name abgeleitet aus dem Anzeigenamen, s. lib/providerWiring.envVarName).
- * Der Nutzer muss den Unterschied NICHT kennen — die Probe entscheidet.
+ * WARUM custom-openai eine Route auf die BRIDGE bekommt (nicht auf den
+ * Anbieter): der Credential-Proxy hängt den Request-Pfad an die `upstreamUrl`
+ * einer Route an und schickt Anthropic-Format (anthropicProxy.ts) — eine rohe
+ * OpenAI-URL in MACVIBES_MODEL_ROUTES kann deshalb NICHT funktionieren
+ * (Format-Mismatch). Der Weg ist die mitgelieferte LiteLLM-Bridge
+ * (LITELLM_BRIDGE_URL); sie liest den Anbieter-Key aus der Env
+ * (`os.environ/<envVar>`, Name abgeleitet aus dem Anzeigenamen, s.
+ * lib/providerWiring.envVarName). Seit der lokale Standard-Upstream oMLX ist
+ * (kein LiteLLM mehr davor), muss jede OpenAI-kompatible Modell-id explizit
+ * zur Bridge geroutet werden. Der Nutzer muss den Unterschied NICHT kennen —
+ * die Probe entscheidet.
  */
 export type ProviderChoice =
   | { kind: 'claude-oauth'; token: string }
@@ -77,6 +82,12 @@ export interface AnbieterModell {
   label: string;
 }
 
+/**
+ * Endpunkt der mitgelieferten LiteLLM-Bridge (config.ts: MACVIBES_LITELLM_URL,
+ * Default 8787). Routen für OpenAI-kompatible Anbieter zeigen hierhin.
+ */
+export const LITELLM_BRIDGE_URL = 'http://localhost:8787';
+
 /** Sandbox-Backend, exakt die Werte, die config.ts akzeptiert. */
 export type SandboxMode = 'auto' | 'process' | 'microsandbox';
 
@@ -99,11 +110,11 @@ export interface SetupAnswers {
 /**
  * Eine Anbieter-Wahl auf ihre Env-Vars abbilden.
  *
- * `ollama` liefert bewusst eine LEERE Map: der mitgelieferte Router wird von
- * config.ts über den Default von `MACVIBES_LOCAL_ROUTER_CMD`
- * (detectLocalRouterCommand → gebündeltes local-router/run.ts) automatisch
- * gestartet. Es braucht also KEINE Env, um lokale Modelle zu aktivieren; nur
- * ein abweichender Endpunkt/Command würde MACVIBES_LOCAL_* setzen.
+ * `ollama` (historischer Name der Wahl „lokales Modell") liefert bewusst eine
+ * LEERE Map: config.ts zeigt per Default auf oMLX (http://localhost:8000) und
+ * startet `omlx serve`, falls der brew-Service nicht ohnehin läuft. Es braucht
+ * also KEINE Env, um das lokale Modell zu aktivieren; nur ein abweichender
+ * Endpunkt/Command würde MACVIBES_LOCAL_* setzen.
  */
 export function providerEnv(choice: ProviderChoice): Record<string, string> {
   switch (choice.kind) {
@@ -135,10 +146,21 @@ export function providerEnv(choice: ProviderChoice): Record<string, string> {
       );
       return routes.length === 0 ? {} : { MACVIBES_MODEL_ROUTES: JSON.stringify(routes) };
     }
-    case 'custom-openai':
-      // KEINE Modell-Route (Format-Mismatch, s. ProviderChoice) — nur der Key,
-      // den der LiteLLM-Router via `os.environ/<envVar>` liest.
-      return { [choice.envVar]: choice.token };
+    case 'custom-openai': {
+      // Key für die Bridge (liest ihn via `os.environ/<envVar>`) PLUS je Modell
+      // eine Route auf die Bridge (s. ProviderChoice: der Proxy würde sonst an
+      // oMLX schicken). apiKey ist ein Platzhalter: die Bridge prüft keinen
+      // Key (master_key: null), aber der Proxy braucht eine „nutzbare" Route.
+      const routes: ModelRoute[] = choice.modelle.map((modell) => ({
+        prefix: modell.id,
+        upstreamUrl: LITELLM_BRIDGE_URL,
+        apiKey: 'local',
+      }));
+      return {
+        [choice.envVar]: choice.token,
+        ...(routes.length === 0 ? {} : { MACVIBES_MODEL_ROUTES: JSON.stringify(routes) }),
+      };
+    }
   }
 }
 
@@ -283,8 +305,8 @@ export function buildEnvContent(answers: SetupAnswers): string {
     lines.push('# Claude-API-Key (Anthropic Console) — verlässt den Host nie.');
     lines.push(`ANTHROPIC_API_KEY=${envQuote(apiKey, 'ANTHROPIC_API_KEY')}`);
   }
-  // Eigene OpenAI-kompatible Anbieter: je ein abgeleiteter Key (envVar) — der
-  // LiteLLM-Router liest ihn per os.environ/<envVar>. Die Schleife läuft über
+  // Eigene OpenAI-kompatible Anbieter: je ein abgeleiteter Key (envVar) — die
+  // LiteLLM-Bridge liest ihn per os.environ/<envVar>. Die Schleife läuft über
   // die providers (nicht die Env-Map), damit der Kommentar den Anbieter und
   // sein Modell benennen kann.
   for (const provider of answers.providers) {
@@ -292,32 +314,38 @@ export function buildEnvContent(answers: SetupAnswers): string {
     lines.push('');
     lines.push(`# ${provider.name} (OpenAI-kompatibel, von der Setup-Probe erkannt) — läuft über`);
     lines.push(
-      `# den LiteLLM-Router (Anthropic→OpenAI-Übersetzung). ${modellAufzaehlung(provider.modelle)}:`,
+      `# die LiteLLM-Bridge (Anthropic→OpenAI-Übersetzung). ${modellAufzaehlung(provider.modelle)}:`,
     );
-    lines.push('# eingetragen in ~/macvibes/litellm.yaml + ~/macvibes/models.json.');
+    lines.push('# eingetragen in ~/macvibes/litellm.yaml + ~/macvibes/models.json,');
+    lines.push('# je Modell eine Route auf die Bridge in MACVIBES_MODEL_ROUTES (unten).');
     lines.push(`${provider.envVar}=${envQuote(env[provider.envVar] ?? '', provider.envVar)}`);
   }
   const routes = env['MACVIBES_MODEL_ROUTES'];
   if (routes !== undefined) {
     lines.push('');
-    lines.push('# Direkt angebundene Anthropic-kompatible Anbieter (von der Setup-Probe');
-    lines.push('# erkannt) — matchen VOR den Defaults. Der Endpunkt spricht Anthropics');
-    lines.push('# /v1/messages; OpenAI-Format liefe stattdessen über den LiteLLM-Router.');
+    lines.push('# Modell-Routen (von der Setup-Probe erkannt) — matchen VOR den Defaults.');
+    lines.push('# Anthropic-kompatible Anbieter zeigen direkt auf ihren Endpunkt, OpenAI-');
+    lines.push('# kompatible auf die LiteLLM-Bridge (http://localhost:8787), die übersetzt.');
     lines.push('# Format: [{prefix, upstreamUrl, apiKey?}].');
     lines.push(`MACVIBES_MODEL_ROUTES=${envQuote(routes, 'MACVIBES_MODEL_ROUTES')}`);
   }
 
-  // Ollama und OpenAI-kompatible Anbieter laufen über denselben LiteLLM-Router —
-  // er startet automatisch (MACVIBES_LOCAL_ROUTER_CMD-Default), keine weitere Env.
-  const nutztRouter = answers.providers.some(
-    (p) => p.kind === 'ollama' || p.kind === 'custom-openai',
-  );
-  if (nutztRouter) {
+  // Lokales Modell: oMLX ist der Default-Upstream (config.ts), keine Env nötig.
+  if (answers.providers.some((p) => p.kind === 'ollama')) {
     lines.push('');
-    lines.push('# Lokaler LiteLLM-Router (Ollama / OpenAI-kompatible Anbieter) — startet');
-    lines.push('# automatisch (MACVIBES_LOCAL_ROUTER_CMD-Default), keine Env nötig.');
-    lines.push('# Modell-Aliase: ~/macvibes/litellm.yaml (sonst die mitgelieferte');
-    lines.push('# apps/server/local-router/litellm_config.yaml).');
+    lines.push('# Lokales Modell (Qwen 3.8 auf oMLX, http://localhost:8000) — Default-Upstream,');
+    lines.push(
+      '# keine Env nötig; oMLX per `omlx start` laufen lassen (Setup: mac-local-coding-agent).',
+    );
+  }
+  // OpenAI-kompatible Anbieter laufen über die LiteLLM-Bridge — sie startet
+  // automatisch, sobald ~/macvibes/litellm.yaml existiert (legt das Setup an).
+  if (answers.providers.some((p) => p.kind === 'custom-openai')) {
+    lines.push('');
+    lines.push('# LiteLLM-Bridge (OpenAI-kompatible Anbieter) — startet automatisch, weil');
+    lines.push(
+      '# ~/macvibes/litellm.yaml existiert (Modell-Aliase dort); Log ~/macvibes/litellm.log.',
+    );
   }
 
   const hatClaude = oauth !== undefined || apiKey !== undefined;

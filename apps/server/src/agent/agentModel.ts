@@ -36,8 +36,11 @@ export const AGENT_MODELS: readonly AgentModelInfo[] = [
   { id: 'claude-sonnet-5', label: 'Claude Sonnet 5', slow: false },
   { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5', slow: false },
   { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', slow: false },
-  { id: 'qwen3.6-coder', label: 'Qwen 27B (lokal)', slow: true },
-  { id: 'qwen3.6-moe', label: 'Qwen 35B MoE (lokal)', slow: true },
+  // Lokales Modell: Qwen3.8-27B (oQ4e + Lightning MTP) auf oMLX — die id ist
+  // exakt der Modellname, den oMLX unter /v1/models führt (Verzeichnisname in
+  // ~/.omlx/models). Der Credential-Proxy schickt alles ohne claude-Präfix an
+  // MACVIBES_LOCAL_UPSTREAM_URL (Default: oMLX, http://localhost:8000).
+  { id: 'Qwen3.8-27B-oQ4e-mtp', label: 'Qwen 3.8 27B (lokal, oMLX)', slow: true },
 ];
 
 /**

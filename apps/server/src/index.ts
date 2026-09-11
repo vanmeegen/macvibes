@@ -161,10 +161,26 @@ const localRouterReady =
     ? startLocalRouter({
         upstreamUrl: config.localModels.upstreamUrl,
         command: config.localModels.routerCommand,
+        probePath: config.localModels.probePath,
         logFile: join(config.macvibesHome, 'local-router.log'),
       })
     : Promise.resolve({ state: 'unavailable' as const, stop: async () => {} }));
 hot.handOver.localRouter = localRouterReady;
+// Optionale LiteLLM-Bridge (OpenAI-kompatible Cloud-Anbieter): dieselbe
+// Überwachung, eigener Port/Log. Nur wenn konfiguriert (litellm.yaml vorhanden
+// oder MACVIBES_LITELLM_AUTOSTART=1) — das lokale Modell braucht sie nicht.
+const litellmReady =
+  hot.inherited.litellm ??
+  (config.agent.backend === 'claude' && config.litellm.autostart
+    ? startLocalRouter({
+        upstreamUrl: config.litellm.url,
+        command: config.litellm.command,
+        probePath: '/health/liveliness',
+        logFile: join(config.macvibesHome, 'litellm.log'),
+        log: (message) => console.log(`LiteLLM-Bridge: ${message}`),
+      })
+    : Promise.resolve({ state: 'unavailable' as const, stop: async () => {} }));
+hot.handOver.litellm = litellmReady;
 // Selbst gestarteten Shim beim Beenden mitnehmen (SIGTERM = bun run shutdown).
 // Als Schritt, NICHT als eigener Handler: ein zweiter Handler mit eigenem
 // process.exit(0) hat vorher den Auto-Commit der Sandboxes abgeschnitten.
@@ -173,8 +189,8 @@ hot.handOver.localRouter = localRouterReady;
 shutdownSequence.register(
   'lokaler Modell-Router',
   async () => {
-    const router = await localRouterReady;
-    await router.stop();
+    const [router, bridge] = await Promise.all([localRouterReady, litellmReady]);
+    await Promise.all([router.stop(), bridge.stop()]);
   },
   FIXED_SHUTDOWN_STEP_TIMEOUTS_MS['lokaler Modell-Router'],
 );

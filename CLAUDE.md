@@ -15,7 +15,7 @@ Bun-Workspaces-Monorepo:
   - `core/` — Basisschicht ohne Abhängigkeiten nach oben: `errors`
     (DomainError), `workspaceService` (Volume-/Workspace-Layout),
     `gitService` (git-Wrapper), `processSupervisor` (generischer
-    Prozess-Watchdog für Dev-Server und LiteLLM-Shim), `vmTokens` und
+    Prozess-Watchdog für Dev-Server, oMLX und die optionale LiteLLM-Bridge), `vmTokens` und
     `vmContract` (Host↔VM-Vertragskonstanten).
   - `preview/` — geteiltes Preview-Status-Vokabular zwischen Host und
     VM-Daemon (`status`, `monitStatus`, `httpProbe`); bewusst importfrei

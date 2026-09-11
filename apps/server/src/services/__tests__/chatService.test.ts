@@ -947,11 +947,11 @@ describe('Modellwahl pro Projekt (Dropdown im Chat)', () => {
     const { owner, db, service, projectId } = await setup(cap.runner);
     await db
       .update(projects)
-      .set({ agentModel: 'qwen3.6-coder' })
+      .set({ agentModel: 'Qwen3.8-27B-oQ4e-mtp' })
       .where(eq(projects.id, projectId));
     await service.sendMessage(owner, sendInput(projectId, 'Bau ein Board'));
     await waitFor(() => !service.isTurnActive(projectId));
-    expect(cap.model()).toBe('qwen3.6-coder');
+    expect(cap.model()).toBe('Qwen3.8-27B-oQ4e-mtp');
   });
 
   test('ohne explizite Wahl läuft der Turn mit dem Default (Sonnet 5)', async () => {
@@ -989,7 +989,7 @@ describe('Modellwahl pro Projekt (Dropdown im Chat)', () => {
     const { owner, db, service, projectId } = await setup(runner);
     await db
       .update(projects)
-      .set({ agentModel: 'qwen3.6-coder' })
+      .set({ agentModel: 'Qwen3.8-27B-oQ4e-mtp' })
       .where(eq(projects.id, projectId));
     await service.prewarm(owner, projectId, '/tmp/ws');
     await Bun.sleep(30);
@@ -1005,7 +1005,7 @@ describe('Modellwahl pro Projekt (Dropdown im Chat)', () => {
       .set({
         agentModel: 'claude-opus-4-8',
         claudeSessionId: 'qwen-session',
-        claudeSessionModel: 'qwen3.6-coder',
+        claudeSessionModel: 'Qwen3.8-27B-oQ4e-mtp',
       })
       .where(eq(projects.id, projectId));
     await service.sendMessage(owner, sendInput(projectId, 'Weiter'));

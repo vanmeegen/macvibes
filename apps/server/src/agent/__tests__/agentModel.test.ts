@@ -8,13 +8,12 @@ import {
 } from '../agentModel';
 
 describe('Modellkatalog (Modellwahl pro Chat)', () => {
-  test('enthält genau die fünf wählbaren Modelle', () => {
+  test('enthält genau die vier wählbaren Modelle (drei Claude + das lokale Qwen)', () => {
     expect(AGENT_MODELS.map((m) => m.id)).toEqual([
       'claude-sonnet-5',
       'claude-haiku-4-5',
       'claude-opus-4-8',
-      'qwen3.6-coder',
-      'qwen3.6-moe',
+      'Qwen3.8-27B-oQ4e-mtp',
     ]);
   });
 
@@ -28,9 +27,8 @@ describe('Modellkatalog (Modellwahl pro Chat)', () => {
     }
   });
 
-  test('lokale Qwen-Modelle sind als langsam markiert, Claude-Modelle nicht', () => {
-    expect(isSlowAgentModel('qwen3.6-coder')).toBe(true);
-    expect(isSlowAgentModel('qwen3.6-moe')).toBe(true);
+  test('das lokale Qwen-Modell ist als langsam markiert, Claude-Modelle nicht', () => {
+    expect(isSlowAgentModel('Qwen3.8-27B-oQ4e-mtp')).toBe(true);
     expect(isSlowAgentModel('claude-sonnet-5')).toBe(false);
     expect(isSlowAgentModel('claude-haiku-4-5')).toBe(false);
     expect(isSlowAgentModel('claude-opus-4-8')).toBe(false);
@@ -38,7 +36,7 @@ describe('Modellkatalog (Modellwahl pro Chat)', () => {
 
   test('unbekannte Modelle werden erkannt (Validierung der Mutation)', () => {
     expect(isKnownAgentModel('claude-sonnet-5')).toBe(true);
-    expect(isKnownAgentModel('qwen3.6-moe')).toBe(true);
+    expect(isKnownAgentModel('Qwen3.8-27B-oQ4e-mtp')).toBe(true);
     expect(isKnownAgentModel('gpt-5')).toBe(false);
     expect(isKnownAgentModel('')).toBe(false);
   });
@@ -46,7 +44,7 @@ describe('Modellkatalog (Modellwahl pro Chat)', () => {
   test('agentTimeoutsFor wählt langsame Timeouts nur für langsame Modelle', () => {
     const fast = { idleMs: 180_000, firstEventMs: 8_000, coldStartMs: 30_000 };
     const slow = { idleMs: 600_000, firstEventMs: 180_000, coldStartMs: 300_000 };
-    expect(agentTimeoutsFor('qwen3.6-coder', fast, slow)).toEqual(slow);
+    expect(agentTimeoutsFor('Qwen3.8-27B-oQ4e-mtp', fast, slow)).toEqual(slow);
     expect(agentTimeoutsFor('claude-sonnet-5', fast, slow)).toEqual(fast);
     // Unbekannte Modelle (z. B. via Router ergänzt): konservativ langsam behandeln,
     // damit ein träges Fremdmodell nicht sofort abgebrochen wird.

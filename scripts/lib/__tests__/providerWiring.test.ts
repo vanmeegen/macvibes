@@ -136,9 +136,8 @@ describe('litellmYamlMitEintrag — Basis + Nutzer-Eintrag, Catch-all bleibt let
     const ergebnis = litellmYamlMitEintrag(BUNDLED_YAML, EINTRAG);
     expect(ergebnis.geaendert).toBe(true);
     const zeilen = modelNameZeilen(ergebnis.inhalt);
-    // Ollama-Basis-Einträge unverändert vorhanden:
-    expect(zeilen).toContain('- model_name: qwen3.6-coder');
-    expect(zeilen).toContain('- model_name: qwen3.6-moe');
+    // Basis-Eintrag (lokales Modell über die Bridge) unverändert vorhanden:
+    expect(zeilen).toContain('- model_name: Qwen3.8-27B-oQ4e-mtp');
     // Neuer Eintrag vorhanden — und der Catch-all ist die LETZTE model_name-Zeile:
     expect(zeilen).toContain("- model_name: 'qwen/qwen3-coder'");
     expect(zeilen[zeilen.length - 1]).toBe("- model_name: '*'");

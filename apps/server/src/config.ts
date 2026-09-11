@@ -136,18 +136,35 @@ export interface ServerConfig {
   /** MACVIBES_RATE_LIMIT_DISABLED=1: schaltet das Rate-Limit (F14) ab — nur E2E. */
   rateLimitDisabled: boolean;
   /**
-   * Lokaler Modell-Router (LiteLLM-Shim vor Ollama) — Ziel aller NICHT-Claude-
-   * Modelle. Der Credential-Proxy routet pro Request nach dem `model` im Body.
+   * Lokaler Modell-Server (Default: oMLX, spricht Anthropics /v1/messages
+   * nativ) — Ziel aller NICHT-Claude-Modelle ohne eigene Route. Der
+   * Credential-Proxy routet pro Request nach dem `model` im Body.
    */
   localModels: {
     upstreamUrl: string;
     apiKey: string;
     /**
-     * Startkommando für den Shim (Autostart durch macvibes). Env
-     * MACVIBES_LOCAL_ROUTER_CMD; Default: das mitgelieferte
-     * apps/server/local-router/run.ts. null = kein Autostart.
+     * Health-Pfad relativ zur Upstream-URL (MACVIBES_LOCAL_ROUTER_PROBE_PATH).
+     * oMLX: `/health`; eine LiteLLM-Instanz als Upstream: `/health/liveliness`.
+     */
+    probePath: string;
+    /**
+     * Startkommando für den Server (Autostart durch macvibes, nur wenn auf der
+     * URL noch nichts Gesundes antwortet). Env MACVIBES_LOCAL_ROUTER_CMD;
+     * Default: `omlx serve`, falls `omlx` im PATH ist. null = kein Autostart.
      */
     routerCommand: string | null;
+  };
+  /**
+   * Optionale LiteLLM-Bridge (apps/server/local-router): übersetzt Anthropic-
+   * Format auf OpenAI-kompatible Cloud-Anbieter (OpenRouter, OpenAI). Für das
+   * lokale Modell nicht nötig. Startet nur, wenn `<macvibesHome>/litellm.yaml`
+   * existiert (legt `bun run setup` an) oder MACVIBES_LITELLM_AUTOSTART=1.
+   */
+  litellm: {
+    url: string;
+    command: string | null;
+    autostart: boolean;
   };
   /**
    * Zusätzliche Modell-Routen (OpenRouter-Stil) aus MACVIBES_MODEL_ROUTES —
@@ -290,14 +307,25 @@ function parseModelRoutes(
 }
 
 /**
- * Startskript des mitgelieferten Routers (apps/server/local-router/run.ts) —
- * Teil des Repos, legt seine venv beim ersten Start selbst an (~/macvibes).
+ * Startskript der mitgelieferten LiteLLM-Bridge (apps/server/local-router/run.ts)
+ * — Teil des Repos, legt seine venv beim ersten Start selbst an (~/macvibes).
  * Single-Quotes fürs Kommando: die Bun-Shell (core/exec) nimmt sie wörtlich,
  * auch bei Pfaden mit Leerzeichen oder Backslashes.
  */
-function detectLocalRouterCommand(): string | null {
+function detectLitellmCommand(): string | null {
   const script = resolve(fileURLToPath(new URL('../local-router/run.ts', import.meta.url)));
   return existsSync(script) ? `'${process.execPath}' '${script}'` : null;
+}
+
+/**
+ * Startkommando des lokalen Modell-Servers: `omlx serve` im Vordergrund (wird
+ * vom ProcessSupervisor überwacht). Läuft oMLX schon als brew-Service auf der
+ * URL, greift das Kommando nie (der Supervisor übernimmt „extern"). Fehlt
+ * `omlx` im PATH, gibt es keinen Autostart — Claude-Modelle laufen trotzdem.
+ */
+function detectLocalRouterCommand(): string | null {
+  const omlx = Bun.which('omlx');
+  return omlx === null ? null : `'${omlx}' serve`;
 }
 
 /** Zahl aus der Env; undefined (auch bei leerem Wert) = Default des Konsumenten. */
@@ -420,9 +448,16 @@ export function loadConfig(): ServerConfig {
     debugErrors: Bun.env.MACVIBES_DEBUG_ERRORS === '1',
     rateLimitDisabled: Bun.env.MACVIBES_RATE_LIMIT_DISABLED === '1',
     localModels: {
-      upstreamUrl: Bun.env.MACVIBES_LOCAL_UPSTREAM_URL ?? 'http://localhost:8787',
+      upstreamUrl: Bun.env.MACVIBES_LOCAL_UPSTREAM_URL ?? 'http://localhost:8000',
       apiKey: Bun.env.MACVIBES_LOCAL_API_KEY ?? 'local',
+      probePath: Bun.env.MACVIBES_LOCAL_ROUTER_PROBE_PATH ?? '/health',
       routerCommand: Bun.env.MACVIBES_LOCAL_ROUTER_CMD ?? detectLocalRouterCommand(),
+    },
+    litellm: {
+      url: Bun.env.MACVIBES_LITELLM_URL ?? 'http://localhost:8787',
+      command: Bun.env.MACVIBES_LITELLM_CMD ?? detectLitellmCommand(),
+      autostart:
+        envFlag('MACVIBES_LITELLM_AUTOSTART') || existsSync(join(macvibesHome, 'litellm.yaml')),
     },
     modelRoutes: parseModelRoutes(Bun.env.MACVIBES_MODEL_ROUTES),
     mirror: {

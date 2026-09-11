@@ -85,19 +85,50 @@ Gateway auf einem festen Port (`MACVIBES_PREVIEW_GATEWAY_PORT`, Default **4173**
 Damit die Preview von unterwegs sichtbar ist, muss neben der UI (5173 bzw. prod 4000) **einmalig auch Port 4173** im Router/WireGuard geforwardet werden — die
 dynamischen VM-Ports müssen dann nicht mehr freigegeben werden.
 
+## Lokales Modell (oMLX + Qwen 3.8)
+
+Neben den Claude-Modellen steht im Chat-Dropdown **`Qwen 3.8 27B (lokal, oMLX)`**
+— ein Modell, das komplett auf dem Mac läuft. Es wird von
+[oMLX](https://github.com/jundot/omlx) serviert, das Anthropics
+`/v1/messages` **nativ** spricht (Streaming, Tool-Calls, Thinking). Der
+Credential-Proxy schickt deshalb alle Nicht-Claude-Modelle ohne eigene Route
+direkt an `MACVIBES_LOCAL_UPSTREAM_URL` (Default `http://localhost:8000`); ein
+Übersetzer ist nicht nötig.
+
+Einrichtung (einmalig, ~17 GB Download) über das Schwesterprojekt
+[mac-local-coding-agent](https://github.com/vanmeegen/mac-local-coding-agent):
+
+```bash
+git clone https://github.com/vanmeegen/mac-local-coding-agent && cd mac-local-coding-agent
+./setup.sh      # brew tap jundot/omlx, Modell nach ~/.omlx/models, Lightning MTP + 128K Kontext
+```
+
+Danach läuft oMLX als brew-Service (`omlx start|stop|restart`, Admin-UI
+`http://localhost:8000/admin`). macvibes prüft beim Start `GET /health`; läuft
+dort schon etwas, wird es benutzt, sonst startet macvibes `omlx serve` selbst
+und überwacht es (`MACVIBES_LOCAL_ROUTER_CMD`, Log `~/macvibes/local-router.log`).
+Gemessen auf einem M5 Pro 48 GB: ~31 tok/s Decode, Prefill 458 tok/s, und der
+Prefix-Cache von oMLX macht Folge-Turns mit 20–30k Token Kontext in Sekunden
+statt Minuten (`cache_read_input_tokens` ≈ 22k im zweiten Turn).
+
+Der Katalogeintrag lebt in `apps/server/src/agent/agentModel.ts`; die id ist
+exakt der Modellname, den oMLX unter `/v1/models` führt. Ein anderes
+oMLX-Modell bekommt man ohne Codeänderung über `~/macvibes/models.json`
+(`{"id":"<oMLX-Modellname>","label":"…","slow":true}`).
+
 ## Andere Modelle (OpenRouter & Co.)
 
-Neben Claude (Anthropic) und lokalen Ollama-Modellen lässt sich **jeder
-weitere Anbieter** einhängen — OpenRouter, OpenAI oder ein eigener Endpunkt.
-Der einfachste Weg ist `bun run setup`: dort gibt man für einen eigenen
-Anbieter nur **Anzeigename, Basis-URL und Token** an. Das Setup holt dann die
-**Modell-Liste des Anbieters** (`GET /models`, mit und ohne `/v1`; OpenRouter,
-OpenAI und Anthropic antworten gleichförmig) und man wählt daraus **beliebig
-viele Modelle** — per Suchbegriff und nummerierten Treffern (`1,3,7` oder
-`alle`), in mehreren Suchdurchgängen; bei hunderten Modellen (OpenRouter)
-wird nie die ganze Liste ausgekippt. Ist die Liste nicht abrufbar, fällt das
-Setup auf die manuelle Eingabe kommagetrennter Modell-IDs zurück. Modelle mit
-`claude`-Präfix sind reserviert und werden mit Hinweis übersprungen.
+Auch **jeder weitere Anbieter** lässt sich einhängen — OpenRouter, OpenAI oder
+ein eigener Endpunkt. Der einfachste Weg ist `bun run setup`: dort gibt man für
+einen eigenen Anbieter nur **Anzeigename, Basis-URL und Token** an. Das Setup
+holt dann die **Modell-Liste des Anbieters** (`GET /models`, mit und ohne
+`/v1`; OpenRouter, OpenAI und Anthropic antworten gleichförmig) und man wählt
+daraus **beliebig viele Modelle** — per Suchbegriff und nummerierten Treffern
+(`1,3,7` oder `alle`), in mehreren Suchdurchgängen; bei hunderten Modellen
+(OpenRouter) wird nie die ganze Liste ausgekippt. Ist die Liste nicht
+abrufbar, fällt das Setup auf die manuelle Eingabe kommagetrennter Modell-IDs
+zurück. Modelle mit `claude`-Präfix sind reserviert und werden mit Hinweis
+übersprungen.
 
 Welches API-Format der Anbieter spricht, muss man **nicht wissen** — das
 Setup schickt je eine Mini-Probe (`max_tokens: 1`, Timeout 10 s, mit dem
@@ -110,44 +141,64 @@ Anthropics `/v1/messages` und OpenAIs `/chat/completions` (mit und ohne
   gemeinsamer, automatisch berechneter Präfix könnte fremde Modelle
   mit-matchen) + je Modell ein Eintrag in `~/macvibes/models.json`
   (Chat-Dropdown).
-- **OpenAI-kompatibel** → je Modell ein Eintrag in `~/macvibes/litellm.yaml`
-  (der mitgelieferte LiteLLM-Router übersetzt Anthropic↔OpenAI), Key als
-  `<ANZEIGENAME>_API_KEY` in der `.env`, je Modell ein Eintrag in
-  `models.json`. Die erzeugte `litellm.yaml` enthält weiterhin die
-  Ollama-Basis-Einträge und den `'*'`-Catch-all als **letzten** Eintrag —
-  auch nach beliebig vielen neuen Einträgen (ohne ihn brechen Claude Codes
-  Hilfsmodell-Aufrufe).
+- **OpenAI-kompatibel** → läuft über die mitgelieferte **LiteLLM-Bridge**
+  (s. u.): je Modell ein Alias in `~/macvibes/litellm.yaml`, der Key als
+  `<ANZEIGENAME>_API_KEY` in der `.env`, je Modell eine Route auf die Bridge
+  in `MACVIBES_MODEL_ROUTES` und ein Eintrag in `models.json`. Die erzeugte
+  `litellm.yaml` enthält weiterhin den Basis-Eintrag (Qwen über oMLX) und den
+  `'*'`-Catch-all als **letzten** Eintrag — auch nach beliebig vielen neuen
+  Einträgen (ohne ihn brechen Claude Codes Hilfsmodell-Aufrufe).
 - **Token abgelehnt (401/403)** → das ist **kein** Formatproblem; das Setup
   meldet es genau so und bietet einen neuen Versuch an.
 - **Nicht erreichbar / kein Format** → klare Meldung, erneut versuchen oder
   überspringen — es wird nie halb konfiguriert.
 
+### Die LiteLLM-Bridge
+
 Hintergrund: der Credential-Proxy spricht Anthropics `/v1/messages`-Format
 (er hängt den Request-Pfad an die Ziel-URL an). OpenRouter und OpenAI bieten
 nur einen OpenAI-kompatiblen Endpunkt — eine rohe Anbieter-URL in
-`MACVIBES_MODEL_ROUTES` scheitert dort am Format-Mismatch, deshalb führt der
-Weg für diese Anbieter über den LiteLLM-Router.
+`MACVIBES_MODEL_ROUTES` scheitert dort am Format-Mismatch. Deshalb liegt in
+`apps/server/local-router/` eine [LiteLLM](https://docs.litellm.ai)-Bridge:
+sie nimmt Anthropic-Format auf `http://localhost:8787/v1/messages` entgegen
+und übersetzt (inkl. Streaming + Tool-Calling) auf die OpenAI-kompatiblen
+Anbieter aus ihrer Config.
+
+- **Start:** automatisch mit `bun run dev`/`start`, sobald
+  `~/macvibes/litellm.yaml` existiert (legt `bun run setup` an) oder
+  `MACVIBES_LITELLM_AUTOSTART=1` gesetzt ist; manuell `bun run router`. Beim
+  allerersten Start legt sie ihre Python-venv unter
+  `~/macvibes/local-router-venv` an (1–2 min). Log: `~/macvibes/litellm.log`.
+  Health: `http://localhost:8787/health/liveliness`.
+- **Config:** existiert `~/macvibes/litellm.yaml`, nutzt die Bridge NUR sie
+  (upgrade-fest; abweichender Pfad über `MACVIBES_LOCAL_ROUTER_CONFIG`), sonst
+  die mitgelieferte `litellm_config.yaml`.
+- **Das lokale Qwen-Modell ist auch über die Bridge erreichbar** (Alias
+  `Qwen3.8-27B-oQ4e-mtp` auf oMLX' OpenAI-Endpunkt `http://localhost:8000/v1`)
+  — für Tools, die zwingend mit LiteLLM reden sollen. Der Agent selbst geht
+  direkt zu oMLX.
 
 Alle Konfigurationsorte sind **nutzereigene Dateien unter `~/macvibes`**
 (bzw. `MACVIBES_HOME`) — Quellcode muss dafür nicht angefasst werden, und bei
 einer Installation (Homebrew) überleben nur diese Dateien ein Upgrade (der
 Installationsbaum in `libexec` wird bei jedem `brew upgrade` ersetzt).
 
-Manuell geht es weiterhin in drei Schritten (Beispiel OpenRouter,
+Manuell geht es weiterhin in vier Schritten (Beispiel OpenRouter,
 OpenAI-kompatibel):
 
 ```bash
 # 1) Key in apps/server/.env (Repo-Betrieb) bzw. ~/macvibes/.env (Installation)
 OPENROUTER_API_KEY='sk-or-...'
+# 2) Route auf die Bridge (Proxy → LiteLLM :8787), exakte Modell-id als prefix
+MACVIBES_MODEL_ROUTES='[{"prefix":"openrouter/qwen/qwen3-coder","upstreamUrl":"http://localhost:8787","apiKey":"local"}]'
 ```
 
 ```yaml
-# 2) Modell im Router führen — ~/macvibes/litellm.yaml
+# 3) Modell in der Bridge führen — ~/macvibes/litellm.yaml
 #    Beim ersten Mal die mitgelieferte apps/server/local-router/litellm_config.yaml
-#    dorthin kopieren (existiert ~/macvibes/litellm.yaml, nutzt der Router NUR
-#    noch sie; ein abweichender Pfad geht über MACVIBES_LOCAL_ROUTER_CONFIG).
-#    Der model_name darf NICHT mit "claude" beginnen, sonst routet der Proxy ihn
-#    an die Anthropic-API statt an den lokalen Router.
+#    dorthin kopieren (existiert ~/macvibes/litellm.yaml, nutzt die Bridge NUR
+#    noch sie). Der model_name darf NICHT mit "claude" beginnen, sonst routet
+#    der Proxy ihn an die Anthropic-API.
 - model_name: openrouter/qwen/qwen3-coder
   litellm_params:
     model: openrouter/qwen/qwen3-coder
@@ -155,7 +206,7 @@ OPENROUTER_API_KEY='sk-or-...'
 ```
 
 ```json
-// 3) Modell im Chat-Dropdown wählbar machen — ~/macvibes/models.json,
+// 4) Modell im Chat-Dropdown wählbar machen — ~/macvibes/models.json,
 //    ein JSON-Array, exakt derselbe Name als "id" ("slow": true empfohlen,
 //    großzügige Timeouts). Kaputte Einträge werden beim Start nur gewarnt.
 [{ "id": "openrouter/qwen/qwen3-coder", "label": "Qwen3 Coder (OpenRouter)", "slow": true }]
@@ -163,9 +214,8 @@ OPENROUTER_API_KEY='sk-or-...'
 
 Danach den Server neu starten und das Modell im Chat auswählen. Für OpenAI identisch mit
 `OPENAI_API_KEY` und dem Präfix `openai/`. Ein **eigener** Endpunkt, der bereits
-Anthropics `/v1/messages` spricht (z. B. ein selbst betriebener LiteLLM-Shim),
-kann alternativ direkt über `MACVIBES_MODEL_ROUTES` eingehängt werden (siehe
-`apps/server/.env.example`).
+Anthropics `/v1/messages` spricht, kann direkt über `MACVIBES_MODEL_ROUTES`
+eingehängt werden (siehe `apps/server/.env.example`).
 
 ## HTTPS im LAN (Caddy — nötig für Mikrofon/Web Audio)
 

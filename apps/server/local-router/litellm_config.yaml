@@ -1,8 +1,14 @@
-# Lokaler Modell-Router (LiteLLM): bietet einen Anthropic-/v1/messages-Endpunkt
-# und übersetzt Requests (inkl. Streaming + Tool-Calling) auf lokale Ollama-
-# Modelle. Wird von macvibes automatisch mitgestartet (localRouterService);
-# die Modell-Aliase hier müssen zum Modellkatalog passen (eingebaute Modelle in
-# src/agent/agentModel.ts + eigene in ~/macvibes/models.json).
+# Optionale LiteLLM-Bridge: bietet einen Anthropic-/v1/messages-Endpunkt und
+# übersetzt Requests (inkl. Streaming + Tool-Calling) auf OpenAI-kompatible
+# Anbieter (OpenRouter, OpenAI, jeder /chat/completions-Endpunkt).
+#
+# Das LOKALE Modell braucht diese Bridge NICHT mehr: oMLX spricht Anthropics
+# /v1/messages nativ, und der Credential-Proxy schickt alle Nicht-Claude-
+# Modelle direkt dorthin (MACVIBES_LOCAL_UPSTREAM_URL, Default
+# http://localhost:8000). Die Bridge wird nur gestartet, wenn ~/macvibes/litellm.yaml
+# existiert (legt `bun run setup` für OpenAI-kompatible Anbieter an) oder
+# MACVIBES_LITELLM_AUTOSTART=1 gesetzt ist; manuell: `bun run router`.
+# Endpunkt der Bridge: http://localhost:8787 (MACVIBES_LITELLM_URL).
 #
 # EIGENE Änderungen gehören nicht hierher, sondern in eine Kopie unter
 # ~/macvibes/litellm.yaml (existiert sie, nutzt der Router NUR noch sie;
@@ -10,29 +16,18 @@
 # einer Installation in libexec und wird bei jedem brew upgrade ersetzt.
 
 model_list:
-  # qwen3.6-coder-fixed = unsloth-GGUF mit gepatchtem Chat-Template
-  # (froggeric v21.3, https://huggingface.co/froggeric/Qwen-Fixed-Chat-Templates).
-  # Bauen: Blob-Kopie mit `gguf-new-metadata --chat-template-file chat_template.jinja`
-  # umschreiben, dann `ollama create qwen3.6-coder-fixed` aus dem Original-Modelfile.
-  # Direkter Alias für A/B-Tests gegen das Original:
-  - model_name: qwen3.6-coder-fixed
+  # Lokales Modell auch ÜBER die Bridge erreichbar (z. B. für Tools, die nur
+  # mit LiteLLM reden sollen). oMLX bietet parallel /v1/chat/completions
+  # (OpenAI-Format), LiteLLM übersetzt Anthropic <-> OpenAI. Der Name ist
+  # derselbe wie im Katalog (agentModel.ts) und wie in ~/.omlx/models.
+  - model_name: Qwen3.8-27B-oQ4e-mtp
     litellm_params:
-      model: ollama_chat/qwen3.6-coder-fixed
-      api_base: http://localhost:11434
-  - model_name: qwen3.6-coder
-    litellm_params:
-      # Fix-Template (froggeric v21.3) — behebt vorzeitige Turn-Enden und den
-      # Kaltstart-502 (Nacht-Testserie 2026-07-15: 4/4 Turns OK vs. 502+zäh davor).
-      model: ollama_chat/qwen3.6-coder-fixed
-      api_base: http://localhost:11434
-  # MoE-„fast gear" (Katalog: "Qwen 35B MoE (lokal)")
-  - model_name: qwen3.6-moe
-    litellm_params:
-      model: ollama_chat/qwen3.6:35b-a3b-coding-mxfp8
-      api_base: http://localhost:11434
+      model: openai/Qwen3.8-27B-oQ4e-mtp
+      api_base: http://localhost:8000/v1
+      api_key: omlx
 
   # --- OpenRouter (optional) -------------------------------------------------
-  # OpenRouter bietet NUR einen OpenAI-kompatiblen Endpunkt; dieser Router
+  # OpenRouter bietet NUR einen OpenAI-kompatiblen Endpunkt; diese Bridge
   # übersetzt Anthropic-/v1/messages darauf. Der Eintrag ist AKTIV, stört den
   # Start aber NICHT, solange OPENROUTER_API_KEY fehlt (empirisch verifiziert:
   # LiteLLM startet, `os.environ/…` bleibt bis zum ersten Aufruf ungenutzt).
@@ -40,9 +35,11 @@ model_list:
   #   1) OPENROUTER_API_KEY in apps/server/.env setzen (`bun run setup` erledigt das).
   #   2) Gewünschtes Modell hier als `model_name` führen (Slug von openrouter.ai).
   #   3) Denselben `model_name` in ~/macvibes/models.json aufnehmen
-  #      ("slow": true empfohlen), damit er im Chat-Dropdown erscheint.
-  # Beispiel (Slug anpassen) — der `model_name` darf NICHT mit "claude" beginnen,
-  # sonst würde der Credential-Proxy ihn an die Anthropic-API statt hierher routen:
+  #      ("slow": true empfohlen), damit er im Chat-Dropdown erscheint, und
+  #      eine Route in MACVIBES_MODEL_ROUTES auf die Bridge legen
+  #      (`bun run setup` erledigt beides).
+  # Der `model_name` darf NICHT mit "claude" beginnen, sonst würde der
+  # Credential-Proxy ihn an die Anthropic-API statt hierher routen.
   - model_name: openrouter/qwen/qwen3-coder
     litellm_params:
       model: openrouter/qwen/qwen3-coder
@@ -65,8 +62,9 @@ model_list:
   # Ohne diesen Eintrag antwortet der Router darauf mit 400 → der Agent stolpert.
   - model_name: '*'
     litellm_params:
-      model: ollama_chat/qwen3.6-coder-fixed
-      api_base: http://localhost:11434
+      model: openai/Qwen3.8-27B-oQ4e-mtp
+      api_base: http://localhost:8000/v1
+      api_key: omlx
 
 litellm_settings:
   drop_params: true # unbekannte Anthropic-Felder (z. B. thinking) verwerfen statt Fehler

@@ -73,7 +73,9 @@ describe('parseUserAgentModels (Nutzer-Modelle aus <macvibesHome>/models.json)',
   });
 
   test('Kollision mit eingebautem Modell: eingebauter Eintrag gewinnt, Warnung', () => {
-    const raw = JSON.stringify([{ id: 'qwen3.6-coder', label: 'Übernahmeversuch', slow: false }]);
+    const raw = JSON.stringify([
+      { id: 'Qwen3.8-27B-oQ4e-mtp', label: 'Übernahmeversuch', slow: false },
+    ]);
     const result = parseUserAgentModels(raw);
     expect(result.models).toEqual([]);
     expect(result.warnings.length).toBe(1);

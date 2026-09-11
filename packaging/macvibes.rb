@@ -90,7 +90,7 @@ class Macvibes < Formula
 
       Voraussetzungen, die das Setup prüft:
         • Ein Anthropic-Zugang (claude setup-token oder API-Key) — ohne ihn
-          laufen nur lokale Modelle.
+          läuft nur das lokale Modell (oMLX).
         • microsandbox + Hypervisor für echte VM-Isolation. Fehlt msb, richtet
           das Setup den Prozess-Modus ein (OHNE Isolation, nur für Dev).
         • Die Template-Baselines baut das Setup einmalig; das braucht msb.

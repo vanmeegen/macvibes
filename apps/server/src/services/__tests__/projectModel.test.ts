@@ -31,11 +31,11 @@ describe('setProjectAgentModel (Modellwahl pro Chat)', () => {
 
   test('setzt ein bekanntes Modell, persistiert es und liefert das Projekt zurück', async () => {
     const { db, owner } = await setup();
-    const project = await setProjectAgentModel(db, owner, 'p1', 'qwen3.6-moe');
-    expect(project.agentModel).toBe('qwen3.6-moe');
+    const project = await setProjectAgentModel(db, owner, 'p1', 'Qwen3.8-27B-oQ4e-mtp');
+    expect(project.agentModel).toBe('Qwen3.8-27B-oQ4e-mtp');
     expect(project.owner.id).toBe(owner.id);
     const row = (await db.select().from(projects).where(eq(projects.id, 'p1')))[0];
-    expect(row?.agentModel).toBe('qwen3.6-moe');
+    expect(row?.agentModel).toBe('Qwen3.8-27B-oQ4e-mtp');
   });
 
   test('weist unbekannte Modelle mit DomainError ab', async () => {
@@ -52,7 +52,7 @@ describe('setProjectAgentModel (Modellwahl pro Chat)', () => {
   test('weist einen fremden Nutzer ab — auch bei direktem Service-Aufruf (M5)', async () => {
     const { db } = await setup();
     const fremd = await createUser(db, 'eve');
-    await expect(setProjectAgentModel(db, fremd, 'p1', 'qwen3.6-moe')).rejects.toThrow(
+    await expect(setProjectAgentModel(db, fremd, 'p1', 'Qwen3.8-27B-oQ4e-mtp')).rejects.toThrow(
       /Eigentümer/,
     );
     const row = (await db.select().from(projects).where(eq(projects.id, 'p1')))[0];
@@ -63,7 +63,7 @@ describe('setProjectAgentModel (Modellwahl pro Chat)', () => {
     // Bewusst strenger als delete/rename (dort Owner ODER Admin): die
     // Chat-Fläche — und dazu gehört die Modellwahl — bleibt Owner-only.
     const { db, admin } = await setup();
-    await expect(setProjectAgentModel(db, admin, 'p1', 'qwen3.6-moe')).rejects.toThrow(
+    await expect(setProjectAgentModel(db, admin, 'p1', 'Qwen3.8-27B-oQ4e-mtp')).rejects.toThrow(
       /Eigentümer/,
     );
     const row = (await db.select().from(projects).where(eq(projects.id, 'p1')))[0];
@@ -72,8 +72,8 @@ describe('setProjectAgentModel (Modellwahl pro Chat)', () => {
 
   test('unbekanntes Projekt wird mit DomainError abgewiesen', async () => {
     const { db, owner } = await setup();
-    await expect(setProjectAgentModel(db, owner, 'gibt-es-nicht', 'qwen3.6-moe')).rejects.toThrow(
-      /nicht gefunden/,
-    );
+    await expect(
+      setProjectAgentModel(db, owner, 'gibt-es-nicht', 'Qwen3.8-27B-oQ4e-mtp'),
+    ).rejects.toThrow(/nicht gefunden/);
   });
 });

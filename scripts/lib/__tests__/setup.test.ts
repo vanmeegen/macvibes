@@ -20,6 +20,7 @@ import {
   type DoctorInput,
   type ProviderChoice,
   type SetupAnswers,
+  LITELLM_BRIDGE_URL,
 } from '../setup';
 
 /**
@@ -144,10 +145,12 @@ describe('providerEnv — Anbieter-Wahl auf Env-Vars abbilden', () => {
     ]);
   });
 
-  test('custom-openai erzeugt KEINE Route, nur den abgeleiteten Env-Key', () => {
-    // OpenAI-kompatibel erkannt → LiteLLM-Router übersetzt; er liest den Key
-    // per os.environ/<VAR>. Eine rohe Route (Anthropic-Format) würde am
-    // Format-Mismatch scheitern.
+  test('custom-openai erzeugt den abgeleiteten Env-Key UND je Modell eine Route auf die LiteLLM-Bridge', () => {
+    // OpenAI-kompatibel erkannt → die LiteLLM-Bridge übersetzt; sie liest den
+    // Key per os.environ/<VAR>. Eine rohe Route auf den Anbieter (Anthropic-
+    // Format) würde am Format-Mismatch scheitern — die Route zeigt deshalb auf
+    // die Bridge, nicht auf den Anbieter. Ohne Route ginge das Modell an den
+    // lokalen Standard-Upstream (oMLX), der es nicht kennt.
     const env = providerEnv({
       kind: 'custom-openai',
       name: 'OpenRouter',
@@ -156,8 +159,10 @@ describe('providerEnv — Anbieter-Wahl auf Env-Vars abbilden', () => {
       envVar: 'OPENROUTER_API_KEY',
       token: 'sk-or-123',
     });
-    expect(env).toEqual({ OPENROUTER_API_KEY: 'sk-or-123' });
-    expect(env['MACVIBES_MODEL_ROUTES']).toBeUndefined();
+    expect(env['OPENROUTER_API_KEY']).toBe('sk-or-123');
+    expect(JSON.parse(env['MACVIBES_MODEL_ROUTES'] ?? '[]')).toEqual([
+      { prefix: 'qwen/qwen3-coder', upstreamUrl: LITELLM_BRIDGE_URL, apiKey: 'local' },
+    ]);
   });
 });
 
@@ -217,7 +222,9 @@ describe('mergeProviderEnv — kombinierbare Anbieter', () => {
     ]);
     expect(merged['CLAUDE_CODE_OAUTH_TOKEN']).toBe('tok');
     expect(merged['OPENROUTER_API_KEY']).toBe('sk-or');
-    expect(merged['MACVIBES_MODEL_ROUTES']).toBeUndefined();
+    expect(JSON.parse(merged['MACVIBES_MODEL_ROUTES'] ?? '[]')).toEqual([
+      { prefix: 'qwen/qwen3-coder', upstreamUrl: LITELLM_BRIDGE_URL, apiKey: 'local' },
+    ]);
   });
 });
 
@@ -300,7 +307,9 @@ describe('buildEnvContent — .env-Inhalt aus den Antworten', () => {
     // BEIDE ausgewählten Modelle stehen im Kommentar (nicht nur das erste):
     expect(content).toContain('qwen/qwen3-coder');
     expect(content).toContain('qwen/qwen3-max');
-    expect(content).not.toContain('MACVIBES_MODEL_ROUTES=');
+    // Beide Modelle bekommen eine Route auf die Bridge:
+    expect(content).toContain("MACVIBES_MODEL_ROUTES='");
+    expect(content).toContain(LITELLM_BRIDGE_URL);
   });
 
   test('custom-openai mit vielen Modellen: der Kommentar bleibt gedeckelt (kein Wall-of-Text)', () => {
@@ -323,10 +332,15 @@ describe('buildEnvContent — .env-Inhalt aus den Antworten', () => {
         },
       ],
     });
-    // Erste Modelle genannt, der Rest als Anzahl — nicht alle 12 ids im Kommentar:
-    expect(content).toContain('acme-modell-1');
-    expect(content).not.toContain('acme-modell-12');
-    expect(content).toContain('weitere');
+    // Erste Modelle genannt, der Rest als Anzahl — nicht alle 12 ids im KOMMENTAR
+    // (die MODEL_ROUTES-Zeile führt bewusst jede id, das ist kein Wall-of-Text):
+    const kommentare = content
+      .split('\n')
+      .filter((zeile) => zeile.startsWith('#'))
+      .join('\n');
+    expect(kommentare).toContain('acme-modell-1');
+    expect(kommentare).not.toContain('acme-modell-12');
+    expect(kommentare).toContain('weitere');
   });
 
   test('mehrere custom-openai-Anbieter: jeder Key erscheint genau einmal', () => {
@@ -404,10 +418,12 @@ describe('buildEnvContent — echter Round-Trip gegen Buns .env-Parser (kein Han
     expect(env['ACME_API_KEY']).toBe('sk#acme');
     expect(env['SENTINEL']).toBe('intact');
     // Das ganze MODEL_ROUTES-JSON (mit inneren `"` und `#` im apiKey) muss
-    // literal durchkommen und wieder parsebar sein — mit EINER Route pro Modell.
+    // literal durchkommen und wieder parsebar sein — mit EINER Route pro Modell,
+    // inkl. der Bridge-Route des OpenAI-kompatiblen Anbieters.
     expect(JSON.parse(env['MACVIBES_MODEL_ROUTES'] ?? 'null')).toEqual([
       { prefix: 'glm-4.7', upstreamUrl: 'https://shim.example.com', apiKey: 'k#1' },
       { prefix: 'glm-4.7-air', upstreamUrl: 'https://shim.example.com', apiKey: 'k#1' },
+      { prefix: 'acme-1', upstreamUrl: LITELLM_BRIDGE_URL, apiKey: 'local' },
     ]);
   });
 

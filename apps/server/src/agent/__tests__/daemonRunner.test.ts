@@ -90,7 +90,7 @@ const TURN = {
   prompt: 'Baue eine Todo-App',
   workspaceDir: '/host/pfad/egal',
   resumeSessionId: 'sess-1',
-  model: 'qwen3.6-coder',
+  model: 'Qwen3.8-27B-oQ4e-mtp',
 };
 
 /** turnId des zuerst gesendeten start-turn-Kommandos. */
@@ -126,7 +126,7 @@ describe('DaemonAgentRunner', () => {
       kind: 'start-turn',
       prompt: 'Baue eine Todo-App',
       resumeSessionId: 'sess-1',
-      model: 'qwen3.6-coder',
+      model: 'Qwen3.8-27B-oQ4e-mtp',
     });
     const turnId = start.kind === 'start-turn' ? start.turnId : '';
 
