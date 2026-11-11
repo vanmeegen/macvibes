@@ -1,4 +1,5 @@
 import { makeAutoObservable, runInAction } from 'mobx';
+import { toErrorMessage } from '../api/errors';
 import { gqlRequest } from '../api/graphqlClient';
 import type { ChatMessage } from '../api/types';
 
@@ -54,10 +55,6 @@ const CHAT_EVENTS_SUBSCRIPTION = (projectId: string): string => /* GraphQL */ `
     }
   }
 `;
-
-function toErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 /**
  * Presentation Model der Chat-Page: Verlauf, Streaming-Events (SSE via

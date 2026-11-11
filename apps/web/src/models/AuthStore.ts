@@ -1,4 +1,5 @@
 import { makeAutoObservable, runInAction } from 'mobx';
+import { toErrorMessage } from '../api/errors';
 import { gqlRequest } from '../api/graphqlClient';
 import type { User } from '../api/types';
 
@@ -57,10 +58,6 @@ const PENDING_NOTICE =
 
 /** Ergebnis einer Registrierung aus Sicht des UI. */
 export type RegisterOutcome = 'loggedIn' | 'pending' | 'failed';
-
-function toErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 /**
  * Authentifizierungs-Store: hält den aktuell angemeldeten Benutzer sowie

@@ -18,9 +18,9 @@ import { allAgentModels, type AgentModelInfo } from '../agent/agentModel';
 import {
   copyProject,
   createProject,
-  getProject,
   listProjects,
   renameProject,
+  requireProject,
   setProjectAgentModel,
   type ProjectWithOwner,
 } from '../services/projectsService';
@@ -145,15 +145,6 @@ function requireAdmin(ctx: GraphQLContext): UserRow {
   return user;
 }
 
-/** Lädt ein Projekt ohne Ownership-Prüfung (R10, lesender Zugriff). */
-async function getProjectAny(ctx: GraphQLContext, id: string): Promise<ProjectWithOwner> {
-  const project = await getProject(ctx.db, id);
-  if (!project) {
-    throw new DomainError('Projekt nicht gefunden');
-  }
-  return project;
-}
-
 const AgentModelRef = builder.objectRef<AgentModelInfo>('AgentModel');
 AgentModelRef.implement({
   fields: (t) => ({
@@ -247,7 +238,7 @@ builder.subscriptionType({
         // `releaseOnClose` meldet den Betrachter ZUVERLÄSSIG ab. Die früheren
         // enter/leave-Mutationen hatten dieses Signal nicht: ohne leave blieb
         // der Schlüssel für immer im Refcount, die VM stoppte nie.
-        const project = await getProjectAny(ctx, String(args.projectId));
+        const project = await requireProject(ctx.db, String(args.projectId));
         // Schlüssel SERVERSEITIG erzeugen: pro Subscription eindeutig (keine
         // Kollisionen, #12) und von außen nicht erratbar — niemand kann einen
         // fremden Betrachter austragen.
@@ -449,7 +440,7 @@ builder.mutationType({
         // Auch Nur-Lese-Besucher starten die Sandbox — sonst gäbe es für
         // fremde Projekte keine Live-Preview (R10). Chatten bleibt Owner-only.
         const user = requireUser(ctx);
-        const project = await getProjectAny(ctx, String(args.id));
+        const project = await requireProject(ctx.db, String(args.id));
         await enterProjectSession(
           {
             db: ctx.db,

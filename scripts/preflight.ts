@@ -7,26 +7,12 @@
  * Bun-TS-Fassung von scripts/preflight.sh (plattformneutral, P6);
  * Port-Prüfung per TCP-Connect statt lsof.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { wertAusEnvDatei } from './lib/env';
 import { portKonfiguration } from './lib/ports';
 import { istPortBelegt } from './lib/prozesse';
-
-/** Erster nicht auskommentierter Eintrag (letzter gewinnt), ohne Quotes. */
-export function adminNameAusEnvDatei(envDatei: string): string {
-  if (!existsSync(envDatei)) return '';
-  let name = '';
-  for (const zeile of readFileSync(envDatei, 'utf8').split('\n')) {
-    const match = /^\s*MACVIBES_ADMIN_USERNAME\s*=\s*(.*)$/.exec(zeile);
-    if (match)
-      name = (match[1] ?? '')
-        .trim()
-        .replace(/^["']/, '')
-        .replace(/["']\s*$/, '');
-  }
-  return name;
-}
 
 export async function preflight(): Promise<boolean> {
   const ports = portKonfiguration();
@@ -47,7 +33,10 @@ export async function preflight(): Promise<boolean> {
   // nicht. Das hier fängt es vor dem Start ab. Existiert die Datenbank schon,
   // bleibt die Prüfung still (ensureAdmin warnt sonst beim Serverstart).
   const envDatei = join('apps', 'server', '.env');
-  const adminName = process.env['MACVIBES_ADMIN_USERNAME'] ?? adminNameAusEnvDatei(envDatei);
+  const adminName =
+    process.env['MACVIBES_ADMIN_USERNAME'] ??
+    wertAusEnvDatei(envDatei, 'MACVIBES_ADMIN_USERNAME') ??
+    '';
 
   // DB-Pfad wie resolveDbPath() in apps/server/src/config.ts: der Legacy-Ort ist
   // jetzt DETERMINISTISCH `<serverRoot>/data/<name>` (= apps/server/data/app.db),

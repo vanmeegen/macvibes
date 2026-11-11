@@ -124,8 +124,7 @@ export class SpeechStore {
 
   /** Grundvoraussetzungen prüfen (beim Mount) — nur synchrone Checks. */
   init(): void {
-    const support = this.supportFn();
-    this.availability = support === 'unknown' ? 'unknown' : support;
+    this.availability = this.supportFn();
   }
 
   /**

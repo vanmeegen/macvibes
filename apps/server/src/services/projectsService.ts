@@ -50,6 +50,15 @@ export async function getProject(db: Db, id: string): Promise<ProjectWithOwner |
   return row ? { ...row.projects, owner: row.users } : null;
 }
 
+/** Lädt ein Projekt oder wirft „Projekt nicht gefunden" (ohne Ownership-Prüfung). */
+export async function requireProject(db: Db, id: string): Promise<ProjectWithOwner> {
+  const project = await getProject(db, id);
+  if (!project) {
+    throw new DomainError('Projekt nicht gefunden');
+  }
+  return project;
+}
+
 /**
  * Lädt ein Projekt und erzwingt STRIKTE Ownership — bewusst OHNE Admin-
  * Ausnahme, anders als renameProject/deleteProject (dort Owner ODER Admin):
@@ -66,10 +75,7 @@ export async function getProjectOwned(
   currentUser: UserRow,
   id: string,
 ): Promise<ProjectWithOwner> {
-  const project = await getProject(db, id);
-  if (!project) {
-    throw new DomainError('Projekt nicht gefunden');
-  }
+  const project = await requireProject(db, id);
   if (project.ownerId !== currentUser.id) {
     throw new DomainError('Nur der Eigentümer kann mit diesem Projekt arbeiten');
   }
@@ -235,10 +241,7 @@ export async function copyProject(
   owner: UserRow,
   input: { sourceProjectId: string; name: string },
 ): Promise<ProjectWithOwner> {
-  const source = await getProject(db, input.sourceProjectId);
-  if (!source) {
-    throw new DomainError('Projekt nicht gefunden');
-  }
+  const source = await requireProject(db, input.sourceProjectId);
   await ensureBareRepo(config.bareRepoPath);
   const { name, branchName } = await resolveNewProjectName(db, config, owner, input.name);
 
@@ -269,10 +272,7 @@ export async function renameProject(
   }
   const name = nameResult.data;
 
-  const project = await getProject(db, id);
-  if (!project) {
-    throw new DomainError('Projekt nicht gefunden');
-  }
+  const project = await requireProject(db, id);
   if (project.ownerId !== currentUser.id && currentUser.role !== 'admin') {
     throw new DomainError('Nur der Eigentümer oder ein Admin kann ein Projekt umbenennen');
   }
@@ -303,10 +303,7 @@ export async function assertCanDeleteProject(
   currentUser: UserRow,
   id: string,
 ): Promise<void> {
-  const project = await getProject(db, id);
-  if (!project) {
-    throw new DomainError('Projekt nicht gefunden');
-  }
+  const project = await requireProject(db, id);
   if (project.ownerId !== currentUser.id && currentUser.role !== 'admin') {
     throw new DomainError('Nur der Eigentümer oder ein Admin kann ein Projekt löschen');
   }

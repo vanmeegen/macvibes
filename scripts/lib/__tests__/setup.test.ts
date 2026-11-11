@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
-import { adminNameAusEnvDatei } from '../../preflight';
+import { wertAusEnvDatei } from '../env';
 import {
   buildEnvContent,
   doctor,
@@ -255,7 +255,7 @@ describe('buildEnvContent — .env-Inhalt aus den Antworten', () => {
     try {
       const datei = join(dir, '.env');
       writeFileSync(datei, buildEnvContent(claudeAnswers));
-      expect(adminNameAusEnvDatei(datei)).toBe('marco');
+      expect(wertAusEnvDatei(datei, 'MACVIBES_ADMIN_USERNAME')).toBe('marco');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
