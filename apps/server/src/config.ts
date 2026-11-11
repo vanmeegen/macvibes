@@ -4,6 +4,13 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_MAX_SANDBOXES } from '@macvibes/shared';
 
+/** Modell-Route aus `MACVIBES_MODEL_ROUTES`: Präfix → Upstream samt optionalem Key. */
+interface ModelRouteConfig {
+  prefix: string;
+  upstreamUrl: string;
+  apiKey?: string;
+}
+
 export interface ServerConfig {
   port: number;
   hostname: string;
@@ -171,7 +178,7 @@ export interface ServerConfig {
    * JSON-Array [{prefix, upstreamUrl, apiKey?}], matcht VOR den Default-Routen.
    * So lassen sich weitere Anbieter samt eigenem Key einhängen.
    */
-  modelRoutes: Array<{ prefix: string; upstreamUrl: string; apiKey?: string }>;
+  modelRoutes: ModelRouteConfig[];
   mirror: {
     /** GitHub-Remote für macvibes-apps (mit Token). Null = Mirror aus. */
     remoteUrl: string | null;
@@ -186,6 +193,11 @@ const DEFAULT_WEB_DIST_DIR = resolve(fileURLToPath(new URL('../../web/dist', imp
 
 /** <serverRoot> = apps/server (das Verzeichnis über src/), modul-relativ. */
 const SERVER_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
+
+/** Datenverzeichnis: `MACVIBES_HOME`, sonst `~/macvibes`. */
+function defaultMacvibesHome(): string {
+  return Bun.env.MACVIBES_HOME ?? join(homedir(), 'macvibes');
+}
 
 /**
  * Pfad der SQLite-DB.
@@ -208,7 +220,7 @@ export function resolveDbPath(macvibesHome?: string, serverRoot: string = SERVER
   const name = Bun.env.MACVIBES_TEST_MODE === '1' ? 'app-test.db' : 'app.db';
   const legacy = join(serverRoot, 'data', name);
   if (existsSync(legacy)) return legacy;
-  const home = macvibesHome ?? Bun.env.MACVIBES_HOME ?? join(homedir(), 'macvibes');
+  const home = macvibesHome ?? defaultMacvibesHome();
   return join(home, 'data', name);
 }
 
@@ -243,27 +255,6 @@ export function parseEnvFile(content: string): Record<string, string> {
 }
 
 /**
- * Reine Vorrang-Auflösung der drei Konfig-Quellen (OHNE Prozess-Env-Mutation,
- * damit testbar). Später = höhere Priorität:
- *   (3) homeEnv  <  (2) repoEnv  <  (1) explicitEnv
- * Zur Laufzeit hat Bun explicitEnv und repoEnv (die cwd-`.env`) bereits in
- * `Bun.env` verschmolzen — die explizite Env gewinnt dort schon (empirisch
- * gegen Bun 1.3.14 verifiziert). `loadHomeEnvFile` füllt danach nur noch die in
- * `Bun.env` FEHLENDEN Home-Keys, wodurch genau diese Ordnung entsteht.
- */
-export function resolveEnvPrecedence(
-  explicitEnv: Record<string, string | undefined>,
-  repoEnv: Record<string, string>,
-  homeEnv: Record<string, string>,
-): Record<string, string> {
-  const merged: Record<string, string> = { ...homeEnv, ...repoEnv };
-  for (const [key, value] of Object.entries(explicitEnv)) {
-    if (value !== undefined) merged[key] = value;
-  }
-  return merged;
-}
-
-/**
  * Fall 3 der Konfig-Vorrangregel: `<macvibesHome>/.env` als upgrade-feste
  * Fallback-Datei laden. Bun lädt automatisch NUR die cwd-`.env` (Fall 2), dieser
  * Ort muss EXPLIZIT geladen werden. Bereits gesetzte Variablen (explizit ODER
@@ -286,15 +277,13 @@ export function loadHomeEnvFile(homeEnvPath: string): void {
 }
 
 /** MACVIBES_MODEL_ROUTES parsen — nie werfen, ungültige Werte klar melden. */
-function parseModelRoutes(
-  raw: string | undefined,
-): Array<{ prefix: string; upstreamUrl: string; apiKey?: string }> {
+function parseModelRoutes(raw: string | undefined): ModelRouteConfig[] {
   if (!raw) return [];
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) throw new Error('kein Array');
     return parsed.filter(
-      (r): r is { prefix: string; upstreamUrl: string; apiKey?: string } =>
+      (r): r is ModelRouteConfig =>
         typeof r === 'object' &&
         r !== null &&
         typeof (r as Record<string, unknown>)['prefix'] === 'string' &&
@@ -375,11 +364,11 @@ function parseAllowedOrigins(raw: string | undefined): string[] {
  * Auflösungsfunktion.
  */
 export function homeEnvPathFor(macvibesHome?: string): string {
-  return join(macvibesHome ?? Bun.env.MACVIBES_HOME ?? homedir() + '/macvibes', '.env');
+  return join(macvibesHome ?? defaultMacvibesHome(), '.env');
 }
 
 export function loadConfig(): ServerConfig {
-  const macvibesHome = Bun.env.MACVIBES_HOME ?? join(homedir(), 'macvibes');
+  const macvibesHome = defaultMacvibesHome();
   return {
     port: Number(Bun.env.PORT ?? 4000),
     hostname: Bun.env.HOST ?? '0.0.0.0',
@@ -419,8 +408,7 @@ export function loadConfig(): ServerConfig {
     agent: {
       backend: Bun.env.MACVIBES_AGENT === 'fake' ? 'fake' : 'claude',
       fakeDelayMs: Number(Bun.env.MACVIBES_FAKE_DELAY_MS ?? 25),
-      prewarm:
-        Bun.env.MACVIBES_DISABLE_PREWARM !== '1' && Bun.env.MACVIBES_DISABLE_PREWARM !== 'true',
+      prewarm: !envFlag('MACVIBES_DISABLE_PREWARM'),
       allowHostAgent: envFlag('MACVIBES_ALLOW_HOST_AGENT'),
       appendSystemPrompt: Bun.env.MACVIBES_AGENT_APPEND_PROMPT ?? null,
       timeouts: {

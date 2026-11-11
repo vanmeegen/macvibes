@@ -38,15 +38,12 @@ describe('isCrossSiteRequest (F6)', () => {
   const allowed = ['http://mac.local:4000'];
 
   test('Sec-Fetch-Site: cross-site wird abgelehnt', () => {
-    expect(
-      isCrossSiteRequest({ method: 'POST', origin: null, secFetchSite: 'cross-site', allowed }),
-    ).toBe(true);
+    expect(isCrossSiteRequest({ origin: null, secFetchSite: 'cross-site', allowed })).toBe(true);
   });
 
   test('fremde Origin wird abgelehnt', () => {
     expect(
       isCrossSiteRequest({
-        method: 'POST',
         origin: 'http://boese.example',
         secFetchSite: null,
         allowed,
@@ -62,7 +59,6 @@ describe('isCrossSiteRequest (F6)', () => {
   test('die Preview-Origin auf anderem Port derselben Site wird abgelehnt', () => {
     expect(
       isCrossSiteRequest({
-        method: 'POST',
         origin: 'http://mac.local:4173',
         secFetchSite: 'same-site',
         allowed,
@@ -73,7 +69,6 @@ describe('isCrossSiteRequest (F6)', () => {
   test('eigene Origin ist erlaubt', () => {
     expect(
       isCrossSiteRequest({
-        method: 'POST',
         origin: 'http://mac.local:4000',
         secFetchSite: 'same-origin',
         allowed,
@@ -82,9 +77,7 @@ describe('isCrossSiteRequest (F6)', () => {
   });
 
   test('ohne beide Signale wird durchgelassen (curl, Tests)', () => {
-    expect(isCrossSiteRequest({ method: 'POST', origin: null, secFetchSite: null, allowed })).toBe(
-      false,
-    );
+    expect(isCrossSiteRequest({ origin: null, secFetchSite: null, allowed })).toBe(false);
   });
 });
 
@@ -111,7 +104,6 @@ describe('Nachbesserungen aus dem 2. Scan', () => {
   test('F8: Origin "null" gilt als cross-site, nicht als "kein Origin"', () => {
     expect(
       isCrossSiteRequest({
-        method: 'POST',
         origin: 'null',
         secFetchSite: null,
         allowed: ['http://a'],

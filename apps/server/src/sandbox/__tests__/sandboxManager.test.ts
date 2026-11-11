@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import type { PreviewStatus } from '../../preview/status';
 import type { SandboxContext, SandboxHandle, SandboxProvider } from '../provider';
 import { SandboxManager, viewerKey } from '../sandboxManager';
+import { waitFor } from '../../services/__tests__/testUtils';
 
 function ctx(projectId: string): SandboxContext {
   return {
@@ -1152,7 +1153,7 @@ describe('Zombie-Timer eines toten Eintrags darf die nächste VM nicht stoppen',
     });
 
     const ersterStart = manager.enter(ctx('p1'), 'u1');
-    await warteAuf(() => manager.status('p1') === 'starting');
+    await waitFor(() => manager.status('p1') === 'starting');
     manager.leave('p1', 'u1'); // Tab zu → Grace scharf, obwohl noch „starting"
     freigeben();
     await expect(ersterStart).rejects.toThrow();
@@ -1206,16 +1207,6 @@ describe('Heilung ist gedeckelt (kein Neustart-Sturm)', () => {
   });
 });
 
-/** Pollt eine Bedingung, statt blind zu schlafen. */
-async function warteAuf(bedingung: () => boolean, timeoutMs = 2_000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    if (bedingung()) return;
-    await Bun.sleep(5);
-  }
-  throw new Error('warteAuf: Bedingung nicht erfüllt');
-}
-
 /**
  * N5 aus dem Zustandsmaschinen-Audit: die Grace- und Idle-Timer feuerten
  * `void this.stop(...)` OHNE Rejection-Handler — ein scheiterndes stop()
@@ -1262,7 +1253,7 @@ describe('Timer-Stopps ohne Rejection-Handler (N5)', () => {
     const abgefangen = await mitRejectionFaenger(async () => {
       await manager.enter(ctx('p1'), 'u1');
       manager.leave('p1', 'u1'); // letzter Betrachter → Grace scharf
-      await warteAuf(() => manager.status('p1') === 'stopped');
+      await waitFor(() => manager.status('p1') === 'stopped');
       await Bun.sleep(30); // Zeit, in der die Rejection hochkäme
     });
     expect(abgefangen).toEqual([]);
@@ -1277,7 +1268,7 @@ describe('Timer-Stopps ohne Rejection-Handler (N5)', () => {
     });
     const abgefangen = await mitRejectionFaenger(async () => {
       await manager.enter(ctx('p1'), 'u1');
-      await warteAuf(() => manager.status('p1') === 'stopped');
+      await waitFor(() => manager.status('p1') === 'stopped');
       await Bun.sleep(30);
     });
     expect(abgefangen).toEqual([]);
@@ -1412,7 +1403,7 @@ describe('forget() räumt den Eintrag nach dem Nachhol-Stopp ab (N8)', () => {
 
     // forget auf laufender Sandbox → Nachhol-Stopp (der wirft).
     manager.forget('p1');
-    await warteAuf(() => manager.trackedProjects() === 0);
+    await waitFor(() => manager.trackedProjects() === 0);
   });
 
   test('der Nachhol-Stopp löscht den Eintrag, sobald er vollendet ist', async () => {
@@ -1440,7 +1431,7 @@ describe('forget() räumt den Eintrag nach dem Nachhol-Stopp ab (N8)', () => {
 
     // #9 hält hier fest: nicht sofort verwaist. Aber der Nachhol-Stopp muss
     // den Eintrag danach abräumen — sonst bleibt er für die Prozesslaufzeit.
-    await warteAuf(() => manager.trackedProjects() === 0);
+    await waitFor(() => manager.trackedProjects() === 0);
     expect(manager.status('p1')).toBe('stopped');
     expect(t.gestoppt).toContain('p1');
   });

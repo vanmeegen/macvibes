@@ -18,9 +18,9 @@ import { allAgentModels, type AgentModelInfo } from '../agent/agentModel';
 import {
   copyProject,
   createProject,
-  getProject,
   listProjects,
   renameProject,
+  requireProject,
   setProjectAgentModel,
   type ProjectWithOwner,
 } from '../services/projectsService';
@@ -30,6 +30,7 @@ import {
   enterProjectSession,
   sandboxContextFor,
   sendMessageToProject,
+  type ProjectSessionDeps,
 } from '../services/projectSessionService';
 import { viewerKey } from '../sandbox/sandboxManager';
 import { builder, type GraphQLContext } from './builder';
@@ -106,17 +107,17 @@ ChatEventRef.implement({
 });
 
 /**
- * Rate-Limit für die unauthentifizierte Fläche (F14): jeder Versuch kostet ein
- * argon2id-verify bzw. -hash. Zwei Schlüssel — pro IP gegen Dauerfeuer, pro
- * Username gegen verteiltes Raten auf ein einzelnes Konto.
- */
-/**
  * Takt für die Session-Nachprüfung laufender Subscriptions (H6). 15 s ist der
  * Kompromiss: schnell genug, dass ein Logout spürbar greift, selten genug, dass
  * die Chat-Deltas keine DB-Abfrage pro Event auslösen.
  */
 const SUBSCRIPTION_REVALIDATE_MS = 15_000;
 
+/**
+ * Rate-Limit für die unauthentifizierte Fläche (F14): jeder Versuch kostet ein
+ * argon2id-verify bzw. -hash. Zwei Schlüssel — pro IP gegen Dauerfeuer, pro
+ * Username gegen verteiltes Raten auf ein einzelnes Konto.
+ */
 const loginLimiter = createRateLimiter({ windowMs: 5 * 60_000, max: 20 });
 const registerLimiter = createRateLimiter({ windowMs: 60 * 60_000, max: 10 });
 
@@ -145,13 +146,14 @@ function requireAdmin(ctx: GraphQLContext): UserRow {
   return user;
 }
 
-/** Lädt ein Projekt ohne Ownership-Prüfung (R10, lesender Zugriff). */
-async function getProjectAny(ctx: GraphQLContext, id: string): Promise<ProjectWithOwner> {
-  const project = await getProject(ctx.db, id);
-  if (!project) {
-    throw new DomainError('Projekt nicht gefunden');
-  }
-  return project;
+/** Abhängigkeiten der Projekt-Session-Use-Cases aus dem Request-Kontext. */
+function sessionDeps(ctx: GraphQLContext): ProjectSessionDeps {
+  return {
+    db: ctx.db,
+    sandbox: ctx.sandboxManager,
+    chat: ctx.chatService,
+    macvibesHome: ctx.config.macvibesHome,
+  };
 }
 
 const AgentModelRef = builder.objectRef<AgentModelInfo>('AgentModel');
@@ -247,7 +249,7 @@ builder.subscriptionType({
         // `releaseOnClose` meldet den Betrachter ZUVERLÄSSIG ab. Die früheren
         // enter/leave-Mutationen hatten dieses Signal nicht: ohne leave blieb
         // der Schlüssel für immer im Refcount, die VM stoppte nie.
-        const project = await getProjectAny(ctx, String(args.projectId));
+        const project = await requireProject(ctx.db, String(args.projectId));
         // Schlüssel SERVERSEITIG erzeugen: pro Subscription eindeutig (keine
         // Kollisionen, #12) und von außen nicht erratbar — niemand kann einen
         // fremden Betrachter austragen.
@@ -392,16 +394,7 @@ builder.mutationType({
       },
       resolve: async (_root, args, ctx) => {
         const user = requireUser(ctx);
-        await deleteProjectAndCleanup(
-          {
-            db: ctx.db,
-            sandbox: ctx.sandboxManager,
-            chat: ctx.chatService,
-            macvibesHome: ctx.config.macvibesHome,
-          },
-          user,
-          String(args.id),
-        );
+        await deleteProjectAndCleanup(sessionDeps(ctx), user, String(args.id));
         return true;
       },
     }),
@@ -449,17 +442,8 @@ builder.mutationType({
         // Auch Nur-Lese-Besucher starten die Sandbox — sonst gäbe es für
         // fremde Projekte keine Live-Preview (R10). Chatten bleibt Owner-only.
         const user = requireUser(ctx);
-        const project = await getProjectAny(ctx, String(args.id));
-        await enterProjectSession(
-          {
-            db: ctx.db,
-            sandbox: ctx.sandboxManager,
-            chat: ctx.chatService,
-            macvibesHome: ctx.config.macvibesHome,
-          },
-          user,
-          project,
-        );
+        const project = await requireProject(ctx.db, String(args.id));
+        await enterProjectSession(sessionDeps(ctx), user, project);
         return project;
       },
     }),
@@ -486,20 +470,11 @@ builder.mutationType({
       },
       resolve: async (_root, args, ctx) => {
         const user = requireUser(ctx);
-        await sendMessageToProject(
-          {
-            db: ctx.db,
-            sandbox: ctx.sandboxManager,
-            chat: ctx.chatService,
-            macvibesHome: ctx.config.macvibesHome,
-          },
-          user,
-          {
-            projectId: String(args.projectId),
-            text: args.text,
-            interrupt: args.interrupt === true,
-          },
-        );
+        await sendMessageToProject(sessionDeps(ctx), user, {
+          projectId: String(args.projectId),
+          text: args.text,
+          interrupt: args.interrupt === true,
+        });
         return true;
       },
     }),

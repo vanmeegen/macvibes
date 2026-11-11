@@ -125,14 +125,5 @@ export async function writeSessionCookie(
 }
 
 export async function clearSessionCookie(request: Request): Promise<void> {
-  await cookieStoreOf(request).set({
-    name: SESSION_COOKIE,
-    value: '',
-    expires: 0,
-    path: '/',
-    domain: null,
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: isSecureRequest(request),
-  });
+  await writeSessionCookie(request, '', new Date(0));
 }

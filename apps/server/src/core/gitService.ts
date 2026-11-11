@@ -133,6 +133,20 @@ export async function ensureBareRepo(bareRepoPath: string): Promise<void> {
   await runGit(['init', '--bare', '--initial-branch=main', bareRepoPath]);
 }
 
+/** `git commit`-Argumente mit der festen macvibes-Identität (Initial- und Auto-Commits). */
+export function commitArgs(message: string): string[] {
+  return [
+    '-c',
+    'user.name=macvibes',
+    '-c',
+    'user.email=macvibes@local',
+    'commit',
+    '-q',
+    '-m',
+    message,
+  ];
+}
+
 export async function listBranches(bareRepoPath: string): Promise<string[]> {
   const out = await runGit(
     ['for-each-ref', '--format=%(refname:short)', 'refs/heads'],
@@ -166,19 +180,7 @@ export async function createProjectBranch(
     });
     await runGit(['init', '-q', '--initial-branch=init'], workDir);
     await runGit(['add', '-A'], workDir);
-    await runGit(
-      [
-        '-c',
-        'user.name=macvibes',
-        '-c',
-        'user.email=macvibes@local',
-        'commit',
-        '-q',
-        '-m',
-        `Initial: Template ${basename(templatePath)}`,
-      ],
-      workDir,
-    );
+    await runGit(commitArgs(`Initial: Template ${basename(templatePath)}`), workDir);
     await runGit(['push', '-q', bareRepoPath, `HEAD:refs/heads/${branchName}`], workDir);
   } finally {
     rmSync(workDir, { recursive: true, force: true });

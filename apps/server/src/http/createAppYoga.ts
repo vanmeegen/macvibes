@@ -126,7 +126,6 @@ function useCsrfGuard(originsFor: (request: Request) => string[]): Plugin<YogaSe
     onRequest({ request, endResponse }) {
       const allowed = originsFor(request);
       const crossSite = isCrossSiteRequest({
-        method: request.method,
         origin: request.headers.get('origin'),
         secFetchSite: request.headers.get('sec-fetch-site'),
         allowed,

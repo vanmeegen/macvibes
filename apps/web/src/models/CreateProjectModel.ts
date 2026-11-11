@@ -1,29 +1,15 @@
 import { makeAutoObservable, runInAction } from 'mobx';
+import { toErrorMessage } from '../api/errors';
 import { gqlRequest } from '../api/graphqlClient';
-import type { Project } from '../api/types';
 import type { ProjectsStore } from './ProjectsStore';
 
 const CREATE_PROJECT_MUTATION = /* GraphQL */ `
   mutation CreateProject($name: String!, $templateDir: String!) {
     createProject(name: $name, templateDir: $templateDir) {
       id
-      name
-      branchName
-      templateDir
-      owner {
-        id
-        username
-      }
-      createdAt
-      lastActivityAt
-      sandboxStatus
     }
   }
 `;
-
-function toErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 /**
  * Präsentationsmodell für den "Neues Projekt"-Dialog.
@@ -83,7 +69,7 @@ export class CreateProjectModel {
     this.submitting = true;
     this.error = null;
     try {
-      const data = await gqlRequest<{ createProject: Project }>(CREATE_PROJECT_MUTATION, {
+      const data = await gqlRequest<{ createProject: { id: string } }>(CREATE_PROJECT_MUTATION, {
         name: this.name.trim(),
         templateDir: this.selectedTemplateDir,
       });

@@ -15,6 +15,8 @@
  * wird der Prozess erst, wenn alle Schritte durch sind.
  */
 
+import { runStepWithTimeout } from './core/stepTimeout';
+
 export type ShutdownStepFn = () => Promise<void> | void;
 
 export interface ShutdownSequenceOptions {
@@ -114,25 +116,12 @@ export class ShutdownSequence {
    * werden gemeldet.
    */
   private runStep(step: ShutdownStep): Promise<void> {
-    return new Promise<void>((resolve) => {
-      const timer = setTimeout(() => {
-        this.log(`Abschaltschritt „${step.name}" hängt (>${step.timeoutMs}ms) — übersprungen.`);
-        resolve();
-      }, step.timeoutMs);
-      // async-Wrapper fängt auch synchrone Würfe; der Reject-Zweig fängt einen
-      // späten Fehler nach dem Timeout ab, sodass keine unhandled rejection
-      // entsteht.
-      void (async () => step.run())().then(
-        () => {
-          clearTimeout(timer);
-          resolve();
-        },
-        (error: unknown) => {
-          clearTimeout(timer);
-          this.log(`Abschaltschritt „${step.name}" schlug fehl: ${String(error)}`);
-          resolve();
-        },
-      );
-    });
+    return runStepWithTimeout(
+      'Abschaltschritt',
+      step.name,
+      () => step.run(),
+      step.timeoutMs,
+      this.log,
+    );
   }
 }

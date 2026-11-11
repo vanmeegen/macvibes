@@ -1,14 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { PreviewStatus } from '../../../sandbox/provider';
 import { PreviewStatusReporter } from '../previewStatusReporter';
-
-async function until(cond: () => boolean, timeoutMs = 1000): Promise<void> {
-  const start = Date.now();
-  while (!cond()) {
-    if (Date.now() - start > timeoutMs) throw new Error('Bedingung nicht erreicht');
-    await Bun.sleep(5);
-  }
-}
+import { waitFor } from '../../../services/__tests__/testUtils';
 
 function monitText(devserverStatus: string): string {
   return [
@@ -31,7 +24,7 @@ describe('PreviewStatusReporter (ADR 0001: Status-Push über die Daemon-Verbindu
       keepaliveMs: 10_000,
     });
     reporter.start();
-    await until(() => sent.includes('ready'));
+    await waitFor(() => sent.includes('ready'));
     reporter.stop();
     expect(sent[0]).toBe('ready');
   });
@@ -46,7 +39,7 @@ describe('PreviewStatusReporter (ADR 0001: Status-Push über die Daemon-Verbindu
       keepaliveMs: 40,
     });
     reporter.start();
-    await until(() => sent.length >= 2, 2000);
+    await waitFor(() => sent.length >= 2, 2000);
     reporter.stop();
     // Mindestens 2 Sends (Initial + Keepalive), aber deutlich weniger als
     // die Anzahl der Poll-Zyklen — kein Push pro Poll.
@@ -65,9 +58,9 @@ describe('PreviewStatusReporter (ADR 0001: Status-Push über die Daemon-Verbindu
       keepaliveMs: 10_000,
     });
     reporter.start();
-    await until(() => sent.includes('ready'));
+    await waitFor(() => sent.includes('ready'));
     text = monitText('Restart pending');
-    await until(() => sent.includes('restarting'));
+    await waitFor(() => sent.includes('restarting'));
     reporter.stop();
     expect(sent).toEqual(['ready', 'restarting']);
   });
@@ -115,7 +108,7 @@ describe('PreviewStatusReporter (ADR 0001: Status-Push über die Daemon-Verbindu
       keepaliveMs: 10_000,
     });
     reporter.start();
-    await until(() => calls > 0);
+    await waitFor(() => calls > 0);
     reporter.stop();
     const after = calls;
     await Bun.sleep(30);

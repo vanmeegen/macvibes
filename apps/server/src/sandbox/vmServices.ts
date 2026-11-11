@@ -17,13 +17,6 @@ import { GUEST_WORKDIR, MONIT_HTTPD_PORT } from '../core/vmContract';
 export const VM_ETC_DIR = '/opt/macvibes/etc';
 /** Mountpunkt des Agent-Daemon-Bundles in der VM. */
 export const VM_BIN_DIR = '/opt/macvibes/bin';
-/**
- * Port der monit-Status-API in der VM (wird auf den Host gemappt). Teil des
- * Host↔VM-Vertrags (core/vmContract): der Daemon in der VM nutzt denselben
- * Default — re-exportiert statt kopiert, damit die Werte nicht driften.
- */
-export { MONIT_HTTPD_PORT };
-
 export interface VmServicesSpec {
   /** devCommand aus templates.json — einziger Vertrag zum Template. */
   devCommand: string;

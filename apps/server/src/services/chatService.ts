@@ -54,6 +54,11 @@ interface QueuedTurn {
 const WEITER_HINWEIS =
   'Der Zwischenstand bleibt erhalten — mit „weiter" setzt der Agent an dieser Stelle fort.';
 
+/** System-Zeile nach einem Abbruch — mit Weiter-Hinweis, wenn schon Arbeit sichtbar war. */
+function abbruchText(sawArbeit: boolean): string {
+  return 'Turn abgebrochen' + (sawArbeit ? ` — ${WEITER_HINWEIS}` : '');
+}
+
 interface ProjectChatState {
   queue: QueuedTurn[];
   pumpRunning: boolean;
@@ -123,6 +128,12 @@ export interface ChatServiceOptions {
    * Ein-Turn-Daemon und der erste echte Prompt wird abgewiesen.
    */
   prewarmEnabled?: boolean | undefined;
+  /**
+   * Zeitfenster in ms, in dem Text-/Denk-Deltas gebündelt werden: pro Fenster
+   * EIN DB-Update und EIN Event an die Abonnenten statt eines pro Delta
+   * (sonst quadratisch in der Antwortlänge). 0 = jedes Delta sofort.
+   */
+  agentDeltaFlushMs?: number | undefined;
 }
 
 export class ChatService {
@@ -139,6 +150,8 @@ export class ChatService {
   private readonly slowFirstEventTimeoutMs: number;
   private readonly slowColdStartTimeoutMs: number;
   private readonly prewarmEnabled: boolean;
+  /** Bündel-Zeitfenster für Streaming-Deltas (s. ChatServiceOptions.agentDeltaFlushMs). */
+  private readonly deltaFlushMs: number;
 
   constructor(
     private readonly db: Db,
@@ -168,6 +181,7 @@ export class ChatService {
       this.slowIdleTimeoutMs,
     );
     this.prewarmEnabled = options.prewarmEnabled ?? true;
+    this.deltaFlushMs = options.agentDeltaFlushMs ?? 50;
   }
 
   private state(projectId: string): ProjectChatState {
@@ -367,11 +381,7 @@ export class ChatService {
     if (input.interrupt === true) {
       this.abortActiveTurn(state, turnId);
     }
-    // Kein floating void (F18): ohne Rejection-Handler beendet ein Fehler in
-    // der Pump den ganzen Serverprozess.
-    this.pump(input.projectId).catch((error: unknown) => {
-      console.error(`Chat-Pump für ${input.projectId} abgebrochen:`, error);
-    });
+    this.startPump(input.projectId);
   }
 
   /**
@@ -435,11 +445,7 @@ export class ChatService {
     if (lastRow === undefined || lastRow.role !== 'user') return false;
     const state = this.state(projectId);
     state.queue.push({ turnId: lastRow.turnId, prompt: lastRow.content, workspaceDir });
-    // Kein floating void (F18): ohne Rejection-Handler beendet ein Fehler in
-    // der Pump den ganzen Serverprozess.
-    this.pump(projectId).catch((error: unknown) => {
-      console.error(`Chat-Pump für ${projectId} abgebrochen:`, error);
-    });
+    this.startPump(projectId);
     return true;
   }
 
@@ -552,7 +558,16 @@ export class ChatService {
     let closed = false;
 
     const push = (payload: ChatEventPayload): void => {
-      buffer.push(payload);
+      // Neuester Stand gewinnt: liegt der letzte noch ungelesene Eintrag zur
+      // SELBEN Zeile vor (Streaming), wird er ersetzt statt ein weiterer
+      // Voll-Schnappschuss angehängt. Ein langsamer Abonnent hält so pro Zeile
+      // einen Stand statt einer wachsenden Reihe; Clients upserten per ID.
+      const letzter = buffer[buffer.length - 1];
+      if (letzter !== undefined && letzter.message.id === payload.message.id) {
+        buffer[buffer.length - 1] = payload;
+      } else {
+        buffer.push(payload);
+      }
       notify?.();
     };
     state.subscribers.add(push);
@@ -596,12 +611,33 @@ export class ChatService {
     }
   }
 
+  /**
+   * Startet die Pump ohne floating void (F18): ohne Rejection-Handler beendet
+   * ein Fehler in der Pump den ganzen Serverprozess.
+   */
+  private startPump(projectId: string): void {
+    this.pump(projectId).catch((error: unknown) => {
+      console.error(`Chat-Pump für ${projectId} abgebrochen:`, error);
+    });
+  }
+
+  /**
+   * Sichert die Agent-Session samt Modell am Projekt (R9). Das Modell gehört
+   * dazu: ein späterer Modellwechsel darf diese Session NICHT fortsetzen
+   * (--resume + anderes --model hängt).
+   */
+  private async saveSession(projectId: string, sessionId: string, model: string): Promise<void> {
+    await this.db
+      .update(projects)
+      .set({ claudeSessionId: sessionId, claudeSessionModel: model })
+      .where(eq(projects.id, projectId));
+  }
+
   private async insertMessage(
     projectId: string,
     turnId: string,
     role: ChatMessageRow['role'],
     content: string,
-    turnActive?: boolean,
   ): Promise<ChatMessageRow> {
     // Zweiter Riegel gegen zu lange Inhalte: MAX_MESSAGE_CHARS griff nur im
     // Append-Pfad (appendDelta), nicht hier. Damit kam jede Nicht-Delta-Quelle
@@ -618,7 +654,7 @@ export class ChatService {
     if (!row) {
       throw new Error('Chat-Insert lieferte keine Zeile zurück');
     }
-    this.publish(projectId, row, turnActive ?? this.isTurnActive(projectId));
+    this.publish(projectId, row, this.isTurnActive(projectId));
     return row;
   }
 
@@ -917,10 +953,44 @@ export class ChatService {
     // Terminal-Zeile einen Zwischenstand, den es nicht gibt.
     let sawArbeit = false;
 
+    // Gebündeltes Streaming: Deltas landen sofort im Speicher (assistantRow/
+    // thinkingRow/lastRow tragen immer den vollen Text), in die DB und an die
+    // Abonnenten gehen sie höchstens einmal pro Zeitfenster. Ohne Bündelung
+    // schrieb und sendete JEDES Delta die ganze Zeile neu — quadratisch in der
+    // Antwortlänge, auf dem Event-Loop, den sich Proxy und Gateways teilen.
+    const offeneDeltas = new Map<string, ChatMessageRow>();
+    let flushTimer: ReturnType<typeof setTimeout> | undefined;
+    // Schreibvorgänge strikt hintereinander: der Timer feuert neben der
+    // Event-Schleife, die Stände einer Zeile dürfen sich nie überholen.
+    let flushKette: Promise<void> = Promise.resolve();
+    const flushDeltas = (): Promise<void> => {
+      if (flushTimer !== undefined) {
+        clearTimeout(flushTimer);
+        flushTimer = undefined;
+      }
+      const lauf = flushKette.then(async () => {
+        const rows = [...offeneDeltas.values()];
+        offeneDeltas.clear();
+        for (const row of rows) {
+          await this.db
+            .update(chatMessages)
+            .set({ content: row.content })
+            .where(eq(chatMessages.id, row.id));
+          this.publish(projectId, row, true);
+        }
+      });
+      // Ein gescheiterter Lauf (Projekt gelöscht) darf die Kette nicht vergiften.
+      flushKette = lauf.catch(() => {});
+      return lauf;
+    };
+
+    // Jede NEUE Zeile schließt vorher die laufenden ab — Reihenfolge und Inhalt
+    // stimmen so auch dann, wenn das Zeitfenster noch nicht abgelaufen ist.
     const insert = async (
       role: ChatMessageRow['role'],
       content: string,
     ): Promise<ChatMessageRow> => {
+      await flushDeltas();
       lastRow = await this.insertMessage(projectId, turn.turnId, role, content);
       return lastRow;
     };
@@ -942,12 +1012,23 @@ export class ChatService {
         return insert(role, text);
       }
       const updated: ChatMessageRow = { ...current, content: current.content + text };
-      await this.db
-        .update(chatMessages)
-        .set({ content: updated.content })
-        .where(eq(chatMessages.id, updated.id));
-      this.publish(projectId, updated, true);
       lastRow = updated;
+      offeneDeltas.set(updated.id, updated);
+      if (this.deltaFlushMs <= 0) {
+        await flushDeltas();
+      } else {
+        // Ein Timer pro Fenster — er schreibt auch dann, wenn kein weiteres
+        // Event mehr kommt (der Agent denkt nach), der Text bleibt nie hängen.
+        flushTimer ??= setTimeout(() => {
+          flushTimer = undefined;
+          flushDeltas().catch((error: unknown) => {
+            console.error(
+              `Streaming-Stand für ${projectId} konnte nicht gespeichert werden:`,
+              error,
+            );
+          });
+        }, this.deltaFlushMs);
+      }
       return updated;
     };
 
@@ -1006,6 +1087,7 @@ export class ChatService {
           break;
         case 'block-stop':
           // Blockgrenze: die nächste Text-/Denk-Sequenz startet eine neue Bubble.
+          await flushDeltas();
           assistantRow = null;
           thinkingRow = null;
           break;
@@ -1013,10 +1095,7 @@ export class ChatService {
           // Session-ID früh sichern — überlebt auch einen abgebrochenen Turn (R9).
           // Modell mitschreiben: ein späterer Modellwechsel darf diese Session
           // NICHT fortsetzen (--resume + anderes --model hängt).
-          await this.db
-            .update(projects)
-            .set({ claudeSessionId: event.sessionId, claudeSessionModel: model })
-            .where(eq(projects.id, projectId));
+          await this.saveSession(projectId, event.sessionId, model);
           break;
         case 'api-retry':
           // Sichtbar machen (R6) — aber nur einmal pro Turn, kein Retry-Spam.
@@ -1036,16 +1115,13 @@ export class ChatService {
           // Nutzerabbruch folgt kein Retry, also ist dieser Versuch der letzte
           // — die Rückmeldung MUSS dann sichtbar sein.
           if (benutzerAbbruch || sawMeaningful || isLastAttempt) {
-            await insert('system', 'Turn abgebrochen' + (sawArbeit ? ` — ${WEITER_HINWEIS}` : ''));
+            await insert('system', abbruchText(sawArbeit));
           }
           break;
         case 'turn-completed':
           completed = true;
           if (event.sessionId !== null) {
-            await this.db
-              .update(projects)
-              .set({ claudeSessionId: event.sessionId, claudeSessionModel: model })
-              .where(eq(projects.id, projectId));
+            await this.saveSession(projectId, event.sessionId, model);
           }
           break;
       }
@@ -1071,7 +1147,7 @@ export class ChatService {
             // nächsten Öffnen erneut aus) und mangels lastRow würde
             // turnActive:false nie publiziert („Agent arbeitet" für immer).
             // Gleiches Vokabular wie der turn-aborted-Pfad, EIN Stop-Bild im UI.
-            await insert('system', 'Turn abgebrochen' + (sawArbeit ? ` — ${WEITER_HINWEIS}` : ''));
+            await insert('system', abbruchText(sawArbeit));
           } else if (sawMeaningful || isLastAttempt) {
             const usedMs = sawAnyEvent ? timeouts.idleMs : firstEventBudget;
             const secs = Math.round(usedMs / 1000);
@@ -1106,6 +1182,17 @@ export class ChatService {
       }
     } finally {
       state.currentHandle = null;
+      // Rest schreiben, BEVOR das Turn-Ende signalisiert wird — sonst stünde in
+      // der DB ein älterer Stand als im letzten Event. Darf nicht werfen (F18,
+      // wie der Fehler-Insert oben: Projekt während des Turns gelöscht).
+      try {
+        await flushDeltas();
+      } catch (flushError) {
+        console.error(
+          `Streaming-Stand für ${projectId} konnte nicht gespeichert werden (Projekt gelöscht?):`,
+          flushError,
+        );
+      }
     }
 
     return { completed, sawMeaningful, lastRow, benutzerAbbruch };

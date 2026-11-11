@@ -18,6 +18,7 @@ import {
   createTestDb,
   createUser,
   removeDir,
+  waitFor,
 } from './testUtils';
 import { projects } from '../../db/schema';
 import type { Db } from '../../db/client';
@@ -30,18 +31,6 @@ afterEach(async () => {
     if (dir) await removeDir(dir);
   }
 });
-
-async function waitFor(
-  condition: () => boolean | Promise<boolean>,
-  timeoutMs = 5000,
-): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    if (await condition()) return;
-    await Bun.sleep(10);
-  }
-  throw new Error('waitFor: Bedingung nicht erfüllt');
-}
 
 async function setupWorkspace(): Promise<{
   home: string;

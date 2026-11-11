@@ -1,5 +1,5 @@
 import { runInAction } from 'mobx';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { gqlRequest } from '../../api/graphqlClient';
 import type { Project, Template } from '../../api/types';
 import { AuthStore } from '../AuthStore';
@@ -264,13 +264,13 @@ describe('copyProject („Kopieren und Anpassen" — für JEDEN User)', () => {
     const store = storeWithForeignProject();
     store.requestCopy('p-bob');
     expect(store.pendingCopyProject?.id).toBe('p-bob');
-    expect(store.copyName).toBe('Bobs Dashboard Kopie');
+    expect(store.copyDialog.name).toBe('Bobs Dashboard Kopie');
   });
 
   it('confirmCopy ruft die Mutation, hängt das neue Projekt an und liefert dessen ID', async () => {
     const store = storeWithForeignProject();
     store.requestCopy('p-bob');
-    store.setCopyName('Mein Fork');
+    store.copyDialog.setName('Mein Fork');
     const created = makeProject({ id: 'p-neu', name: 'Mein Fork' });
     mockGql.mockResolvedValueOnce({ copyProject: created });
 
@@ -288,14 +288,14 @@ describe('copyProject („Kopieren und Anpassen" — für JEDEN User)', () => {
   it('lässt den Dialog bei Server-Fehler offen (Name korrigierbar)', async () => {
     const store = storeWithForeignProject();
     store.requestCopy('p-bob');
-    store.setCopyName('Doppelt');
+    store.copyDialog.setName('Doppelt');
     mockGql.mockRejectedValueOnce(new Error('Du hast bereits ein Projekt namens „Doppelt"'));
 
     const newId = await store.confirmCopy();
 
     expect(newId).toBeNull();
     expect(store.pendingCopyProject?.id).toBe('p-bob');
-    expect(store.copyError).toContain('bereits ein Projekt');
+    expect(store.copyDialog.error).toContain('bereits ein Projekt');
   });
 });
 
@@ -345,29 +345,29 @@ describe('renameProject (Menü auf der Projektkarte)', () => {
     const store = storeWithProjects();
     store.requestRename('p1');
     expect(store.pendingRenameProject?.id).toBe('p1');
-    expect(store.renameName).toBe('Altes Projekt');
+    expect(store.renameDialog.name).toBe('Altes Projekt');
   });
 
-  it('cancelRename schließt den Dialog', () => {
+  it('renameDialog.cancel schließt den Dialog', () => {
     const store = storeWithProjects();
     store.requestRename('p1');
-    store.cancelRename();
+    store.renameDialog.cancel();
     expect(store.pendingRenameProject).toBeNull();
   });
 
-  it('canConfirmRename ist bei leerem/weißem Namen false', () => {
+  it('renameDialog.canConfirm ist bei leerem/weißem Namen false', () => {
     const store = storeWithProjects();
     store.requestRename('p1');
-    store.setRenameName('   ');
-    expect(store.canConfirmRename).toBe(false);
-    store.setRenameName('Neuer Name');
-    expect(store.canConfirmRename).toBe(true);
+    store.renameDialog.setName('   ');
+    expect(store.renameDialog.canConfirm).toBe(false);
+    store.renameDialog.setName('Neuer Name');
+    expect(store.renameDialog.canConfirm).toBe(true);
   });
 
   it('confirmRename ruft die Mutation, übernimmt den Namen und schließt den Dialog', async () => {
     const store = storeWithProjects();
     store.requestRename('p1');
-    store.setRenameName('Neuer Name');
+    store.renameDialog.setName('Neuer Name');
     mockGql.mockResolvedValueOnce({ renameProject: { id: 'p1', name: 'Neuer Name' } });
 
     const ok = await store.confirmRename();
@@ -384,7 +384,7 @@ describe('renameProject (Menü auf der Projektkarte)', () => {
   it('lässt den Dialog bei Server-Fehler offen und zeigt den Fehler dort an', async () => {
     const store = storeWithProjects();
     store.requestRename('p1');
-    store.setRenameName('Zweites Projekt');
+    store.renameDialog.setName('Zweites Projekt');
     mockGql.mockRejectedValueOnce(
       new Error('Du hast bereits ein Projekt namens „Zweites Projekt"'),
     );
@@ -393,18 +393,18 @@ describe('renameProject (Menü auf der Projektkarte)', () => {
 
     expect(ok).toBe(false);
     expect(store.pendingRenameProject?.id).toBe('p1');
-    expect(store.renameError).toContain('bereits ein Projekt');
+    expect(store.renameDialog.error).toContain('bereits ein Projekt');
     expect(store.projects[0]?.name).toBe('Altes Projekt');
   });
 
-  it('setRenameName löscht einen alten Fehler', async () => {
+  it('renameDialog.setName löscht einen alten Fehler', async () => {
     const store = storeWithProjects();
     store.requestRename('p1');
     mockGql.mockRejectedValueOnce(new Error('Kaputt'));
     await store.confirmRename();
-    expect(store.renameError).toBe('Kaputt');
-    store.setRenameName('Anders');
-    expect(store.renameError).toBeNull();
+    expect(store.renameDialog.error).toBe('Kaputt');
+    store.renameDialog.setName('Anders');
+    expect(store.renameDialog.error).toBeNull();
   });
 });
 
@@ -488,5 +488,122 @@ describe('enterProject: Eager-Start ohne Betrachter-Kennung', () => {
   it('der Store kennt kein leaveProject mehr — Abmelden ist Subscription-Sache', () => {
     const store = new ProjectsStore(makeAuthStore('alice'));
     expect('leaveProject' in store).toBe(false);
+  });
+});
+
+describe('Status-Polling: unveränderte Antworten lösen kein Neu-Rendern aus', () => {
+  const payload = (overrides: Partial<Project> = {}) => ({
+    projects: [makeProject({ id: 'p1', name: 'Eins', ...overrides })],
+    templates,
+    previewGatewayPort: 4173,
+    previewGatewayHttpsPort: null,
+    agentModels: [{ id: 'claude-sonnet-5', label: 'Sonnet 5', slow: false }],
+  });
+
+  beforeEach(() => {
+    mockGql.mockReset();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+
+  it('behält bei identischer Antwort dieselben Objekte (kein Austausch der Liste)', async () => {
+    const store = new ProjectsStore(makeAuthStore('alice'));
+    mockGql.mockResolvedValueOnce(payload());
+    await store.load();
+    const liste = store.projects;
+    const projekt = store.projects[0];
+    const vorlagen = store.templates;
+    const modelle = store.agentModels;
+
+    // Jeder Tick liefert frisch geparste, inhaltsgleiche Objekte.
+    mockGql.mockResolvedValueOnce(payload());
+    await store.refresh();
+
+    expect(store.projects).toBe(liste);
+    expect(store.projects[0]).toBe(projekt);
+    expect(store.templates).toBe(vorlagen);
+    expect(store.agentModels).toBe(modelle);
+  });
+
+  it('übernimmt eine geänderte Antwort', async () => {
+    const store = new ProjectsStore(makeAuthStore('alice'));
+    mockGql.mockResolvedValueOnce(payload());
+    await store.load();
+    const vorlagen = store.templates;
+
+    mockGql.mockResolvedValueOnce(payload({ sandboxStatus: 'running' }));
+    await store.refresh();
+
+    expect(store.projects[0]?.sandboxStatus).toBe('running');
+    // Nur das Geänderte wird getauscht — die Vorlagen bleiben dieselben.
+    expect(store.templates).toBe(vorlagen);
+  });
+
+  it('übernimmt den Server-Stand auch nach einer lokalen Änderung', async () => {
+    const store = new ProjectsStore(makeAuthStore('alice'));
+    mockGql.mockResolvedValueOnce(payload());
+    await store.load();
+    runInAction(() => {
+      const projekt = store.projects[0];
+      if (projekt) projekt.name = 'Lokal geändert';
+    });
+
+    mockGql.mockResolvedValueOnce(payload());
+    await store.refresh();
+
+    expect(store.projects[0]?.name).toBe('Eins');
+  });
+});
+
+describe('Status-Polling pausiert im versteckten Tab', () => {
+  const setHidden = (hidden: boolean): void => {
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
+    document.dispatchEvent(new Event('visibilitychange'));
+  };
+
+  beforeEach(() => {
+    mockGql.mockReset();
+    mockGql.mockResolvedValue({
+      projects: [],
+      templates: [],
+      previewGatewayPort: 4173,
+      previewGatewayHttpsPort: null,
+      agentModels: [],
+    });
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    setHidden(false);
+    vi.useRealTimers();
+  });
+
+  it('fragt nicht ab, solange der Tab versteckt ist', () => {
+    const store = new ProjectsStore(makeAuthStore('alice'));
+    store.startPolling(1000);
+    setHidden(true);
+    vi.advanceTimersByTime(5000);
+    expect(mockGql).not.toHaveBeenCalled();
+    store.stopPolling();
+  });
+
+  it('lädt sofort nach, wenn der Tab wieder sichtbar wird', () => {
+    const store = new ProjectsStore(makeAuthStore('alice'));
+    store.startPolling(1000);
+    setHidden(true);
+    vi.advanceTimersByTime(5000);
+    setHidden(false);
+    expect(mockGql).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1000);
+    expect(mockGql).toHaveBeenCalledTimes(2);
+    store.stopPolling();
+  });
+
+  it('reagiert nach stopPolling nicht mehr auf Sichtbarkeitswechsel', () => {
+    const store = new ProjectsStore(makeAuthStore('alice'));
+    store.startPolling(1000);
+    store.stopPolling();
+    setHidden(true);
+    setHidden(false);
+    expect(mockGql).not.toHaveBeenCalled();
   });
 });

@@ -151,12 +151,12 @@ test('Modellwahl: Default ist Sonnet 5, Wechsel persistiert über Reload', async
   await expect(chatPage.modelSelect).toContainText('Claude Sonnet 5');
 
   // Umschalten auf das lokale Qwen-Modell …
-  await chatPage.selectModel('qwen3.6-coder');
-  await expect(chatPage.modelSelect).toContainText('Qwen 27B (lokal)');
+  await chatPage.selectModel('Qwen3.8-27B-oQ4e-mtp');
+  await expect(chatPage.modelSelect).toContainText('Qwen 3.8 27B (lokal, oMLX)');
 
   // … und die Wahl ist persistent (DB, nicht nur UI-State).
   await page.reload();
-  await expect(chatPage.modelSelect).toContainText('Qwen 27B (lokal)');
+  await expect(chatPage.modelSelect).toContainText('Qwen 3.8 27B (lokal, oMLX)');
 
   // Zurück auf ein Claude-Modell.
   await chatPage.selectModel('claude-haiku-4-5');

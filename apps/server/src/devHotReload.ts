@@ -1,3 +1,4 @@
+import { runStepWithTimeout } from './core/stepTimeout';
 import type { VmTokenRegistry } from './core/vmTokens';
 import type { LocalRouterHandle } from './services/localRouterService';
 
@@ -121,36 +122,6 @@ function isHotMode(execArgv: readonly string[]): boolean {
 }
 
 /**
- * Führt einen Abräum-Schritt mit Frist aus. Weder Fehler noch Hänger dürfen
- * die übrigen Schritte verhindern — sonst bliebe genau der Listener gebunden,
- * dessentwegen der Reload vorher starb. Gemeldet wird trotzdem beides.
- */
-async function runStep(
-  step: HotReloadStep,
-  timeoutMs: number,
-  log: (message: string) => void,
-): Promise<void> {
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(() => {
-      log(`Hot-Reload: Abräum-Schritt „${step.name}" hängt (>${timeoutMs}ms) — übersprungen.`);
-      resolve();
-    }, timeoutMs);
-    // async-Wrapper fängt auch synchrone Würfe (wie ShutdownSequence.runStep).
-    void (async () => step.dispose())().then(
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        log(`Hot-Reload: Abräum-Schritt „${step.name}" schlug fehl: ${String(error)}`);
-        resolve();
-      },
-    );
-  });
-}
-
-/**
  * Muss als ERSTES in `index.ts` laufen, vor jedem Binden: räumt die Ressourcen
  * der vorigen Ausführung ab und liefert das Handle, über das die aktuelle
  * Ausführung ihre eigenen registriert. In Produktion (ohne `--hot`) ein
@@ -171,7 +142,13 @@ export async function initHotReload(options: HotReloadOptions = {}): Promise<Hot
     log(`Hot-Reload: räume ${previous.steps.length} Listener/Timer der vorigen Ausführung ab…`);
     // Umgekehrte Reihenfolge: zuletzt Gebundenes zuerst geschlossen.
     for (const step of [...previous.steps].reverse()) {
-      await runStep(step, stepTimeoutMs, log);
+      await runStepWithTimeout(
+        'Hot-Reload: Abräum-Schritt',
+        step.name,
+        () => step.dispose(),
+        stepTimeoutMs,
+        log,
+      );
     }
     inherited = previous.handOver;
   }

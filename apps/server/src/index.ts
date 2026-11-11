@@ -19,9 +19,8 @@ import {
   MSB_HOST_ALIAS,
   MicrosandboxSandboxProvider,
   microsandboxSandboxName,
-  msbAvailable,
 } from './sandbox/microsandboxProvider';
-import { touchSandbox } from './sandbox/msbClient';
+import { msbAvailable, touchSandbox } from './sandbox/msbClient';
 import { ProcessSandboxProvider } from './sandbox/processProvider';
 import { selectBackends, type BackendSelection } from './sandbox/backendSelection';
 import { SandboxManager } from './sandbox/sandboxManager';
@@ -260,7 +259,6 @@ const sandboxProvider = useMicrosandbox
   ? new MicrosandboxSandboxProvider({
       macvibesHome: config.macvibesHome,
       bareRepoPath: config.bareRepoPath,
-      image: config.sandbox.image,
       cpus: config.sandbox.cpus,
       memoryMib: config.sandbox.memoryMib,
       // ADR 0003: Auffangnetz für den Fall, dass dieser Prozess stirbt und

@@ -1,13 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
-import {
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildDaemonBundle } from '../../agent/daemonBundle';
 import { baselineExists, buildTemplateBaseline } from '../baselineService';
@@ -18,15 +10,9 @@ import {
 } from '../../services/__tests__/testUtils';
 import { createProjectBranch, ensureBareRepo } from '../../core/gitService';
 import { workspaceDirFor } from '../../core/workspaceService';
-import {
-  AGENT_CONFIG_GUEST_DIR,
-  microsandboxSandboxName,
-  MicrosandboxSandboxProvider,
-  mountSource,
-  msbAvailable,
-  previewPortMapping,
-} from '../microsandboxProvider';
-import { execShell, listSandboxNames } from '../msbClient';
+import { AGENT_CONFIG_GUEST_DIR } from '../../core/vmContract';
+import { microsandboxSandboxName, MicrosandboxSandboxProvider } from '../microsandboxProvider';
+import { execShell, listSandboxNames, msbAvailable } from '../msbClient';
 import { PortAllocator } from '../portService';
 import type { SandboxHandle } from '../provider';
 import type { MicrosandboxProviderConfig } from '../microsandboxProvider';
@@ -91,63 +77,11 @@ afterAll(async () => {
   if (bundleDir.length > 0) await removeDir(bundleDir);
 });
 
-// Läuft immer (reine Funktionen, kein msb nötig).
-describe('Mount-Quellen (msb 0.6.8)', () => {
-  test('löst symbolische Links im Quellpfad auf', async () => {
-    // msb 0.6.8 folgt Symlinks in der Mount-Quelle NICHT mehr und scheitert mit
-    // "Not a directory". Auf macOS trifft das jeden Pfad unter $TMPDIR, weil
-    // /var ein Symlink auf /private/var ist.
-    const echt = await createTempDir('macvibes-mount-echt-');
-    tempDirs.push(echt);
-    const link = join(echt, 'zeiger');
-    mkdirSync(join(echt, 'ziel'));
-    // 'junction' braucht unter Windows keine Sonderrechte; auf POSIX wird
-    // der Typ-Parameter ignoriert — identisches Verhalten wie zuvor.
-    symlinkSync(join(echt, 'ziel'), link, 'junction');
-
-    const aufgeloest = realpathSync(link);
-    const quelle = mountSource(link, '/work');
-    // Plattformneutral über realpathSync statt '/ziel:'-Literal (der
-    // Host-Pfad-Trenner ist unter Windows '\').
-    expect(quelle).toBe(`${aufgeloest}:/work`);
-    expect(quelle.startsWith(link)).toBe(false);
-  });
-
-  test('hängt Optionen unverändert an', async () => {
-    const dir = await createTempDir('macvibes-mount-opt-');
-    tempDirs.push(dir);
-    expect(mountSource(dir, '/etc/macvibes', 'ro').endsWith(':/etc/macvibes:ro')).toBe(true);
-  });
-
-  test('lässt einen bereits aufgelösten Pfad unverändert', async () => {
-    const dir = await createTempDir('macvibes-mount-plain-');
-    tempDirs.push(dir);
-    const aufgeloest = realpathSync(dir);
-    expect(mountSource(aufgeloest, '/work')).toBe(`${aufgeloest}:/work`);
-  });
-});
-
-describe('Preview-Port-Mapping (H1)', () => {
-  test('bindet den VM-Port ausschließlich an das Host-Loopback', () => {
-    expect(previewPortMapping(43210, 5173)).toBe('127.0.0.1:43210:5173');
-  });
-
-  test('veröffentlicht den Port NICHT im LAN', () => {
-    // 0.0.0.0 machte den hohen VM-Port direkt aus dem LAN erreichbar und
-    // umging damit beide Kontrollen des Preview-Gateways: die Session-Prüfung
-    // (F19) und das Entfernen des Session-Cookies auf dem Weg in die VM (F2).
-    const mapping = previewPortMapping(43210, 5173);
-    expect(mapping).not.toContain('0.0.0.0');
-    expect(mapping.startsWith('127.0.0.1:')).toBe(true);
-  });
-});
-
 /** Provider-Konfiguration mit totem Gateway — der Daemon idlet nur (Reconnects). */
 function providerConfig(home: string, bare: string): MicrosandboxProviderConfig {
   return {
     macvibesHome: home,
     bareRepoPath: bare,
-    image: 'oven/bun:1.3.14',
     cpus: 1,
     memoryMib: 512,
     agentDaemon: {

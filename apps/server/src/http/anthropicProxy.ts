@@ -8,11 +8,8 @@
 
 import { logSafe } from '../logSafe';
 // Teil des Host↔VM-Vertrags (core/vmContract): die VM setzt denselben Header
-// beim Bau ihrer Agent-Umgebung (agent/vmAgentEnv) — Single Source of Truth
-// dort, hier nur re-exportiert für die Proxy-Verwender.
+// beim Bau ihrer Agent-Umgebung (agent/vmAgentEnv) — Single Source of Truth dort.
 import { PROXY_TOKEN_HEADER } from '../core/vmContract';
-
-export { PROXY_TOKEN_HEADER };
 
 /** Abo-Token (claude setup-token) werden nur mit diesem Beta-Header akzeptiert. */
 export const OAUTH_BETA = 'oauth-2025-04-20';
@@ -75,14 +72,8 @@ export function prepareRequestBody(bodyText: string): AufbereiteterBody {
   return { body: JSON.stringify(parsed), model };
 }
 
-/** Nur noch die Thinking-Anpassung — bleibt für die bestehenden Tests erhalten. */
-export function injectThinkingDisplay(bodyText: string): string {
-  return prepareRequestBody(bodyText).body;
-}
-
 export interface AnthropicProxyConfig {
   upstreamUrl: string;
-  /** Shared Secret VM → Proxy (pro Serverstart zufällig). */
   /** Prüft das VM-Token und liefert die Identität (F12); null = ungültig. */
   verifyToken: (token: string | null) => { sandbox: string } | null;
   /** Abo-Token (claude setup-token) — bevorzugt. */
@@ -109,7 +100,7 @@ export interface AnthropicProxyConfig {
   extraRoutes?: ModelRoute[] | undefined;
   /**
    * Obergrenze für den gepufferten Request-Body in Bytes (H5). Der Proxy
-   * materialisiert den Body vollständig (nötig für `injectThinkingDisplay` und
+   * materialisiert den Body vollständig (nötig für `prepareRequestBody` und
    * die Modellwahl) — ohne Grenze ist das ein Speicher-Hebel für die untrusted
    * VM. Default 32 MiB, das deckt auch Requests mit Bildern.
    */
@@ -216,7 +207,6 @@ function withKeepAlive(
 
 export type AnthropicProxyHandler = (request: Request, upstreamPath: string) => Promise<Response>;
 
-/** Modellname aus dem (JSON-)Request-Body — null bei GET/kein JSON/kein model. */
 /** Eine Route ist nutzbar, wenn sie irgendeine Auth mitbringen kann. */
 function routeUsable(route: ModelRoute): boolean {
   return route.oauthToken != null || route.apiKey != null;

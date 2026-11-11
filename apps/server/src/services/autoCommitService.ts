@@ -1,4 +1,4 @@
-import { runGitInRepo, type ProjectRepo } from '../core/gitService';
+import { commitArgs, runGitInRepo, type ProjectRepo } from '../core/gitService';
 import { projectRepoFor } from '../core/workspaceService';
 import type { ChatService } from './chatService';
 
@@ -25,16 +25,7 @@ export async function autoCommit(repo: ProjectRepo, message: string): Promise<Au
   if (status.trim().length === 0) {
     return 'nothing-to-commit';
   }
-  await runGitInRepo(repo, [
-    '-c',
-    'user.name=macvibes',
-    '-c',
-    'user.email=macvibes@local',
-    'commit',
-    '-q',
-    '-m',
-    message,
-  ]);
+  await runGitInRepo(repo, commitArgs(message));
   await runGitInRepo(repo, ['push', '-q', 'origin', 'HEAD']);
   return 'committed';
 }

@@ -1,4 +1,4 @@
-import { mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
   agentConfigDirFor,
@@ -6,7 +6,7 @@ import {
   ensureWorkspace,
   projectVolumeDir,
 } from '../core/workspaceService';
-import { AGENT_CONFIG_GUEST_DIR, GUEST_WORKDIR } from '../core/vmContract';
+import { AGENT_CONFIG_GUEST_DIR, GUEST_WORKDIR, MONIT_HTTPD_PORT } from '../core/vmContract';
 import { baselineBootstrapScript, baselineExists, baselineSnapshotName } from './baselineService';
 import { httpProbe } from '../preview/httpProbe';
 import {
@@ -20,10 +20,8 @@ import {
 import { PreviewStatusPoller } from './previewStatusPoller';
 import { PushedPreviewStatus } from './previewStatusPush';
 import { PortAllocator } from './portService';
-import { MONIT_HTTPD_PORT, VM_BIN_DIR, VM_ETC_DIR, buildVmServices } from './vmServices';
+import { VM_BIN_DIR, VM_ETC_DIR, buildVmServices } from './vmServices';
 import type { PreviewStatus, SandboxContext, SandboxHandle, SandboxProvider } from './provider';
-
-export { msbAvailable } from './msbClient';
 
 /** Konfiguration des Agent-Daemons (einziger Transport in die VM). */
 export interface AgentDaemonProviderConfig {
@@ -38,8 +36,6 @@ export interface AgentDaemonProviderConfig {
 export interface MicrosandboxProviderConfig {
   macvibesHome: string;
   bareRepoPath: string;
-  /** OCI-Image für die Sandbox-VMs (Default: oven/bun, Version gepinnt). */
-  image: string;
   cpus: number;
   memoryMib: number;
   /** Agent-Daemon-Transport — Pflicht: die VM läuft immer unter tini+monit. */
@@ -96,46 +92,6 @@ export function microsandboxSandboxName(projectId: string): string {
  * hartkodiert zu sein — ein Backend-Wechsel tauscht nur die Injektion.
  */
 export const MSB_HOST_ALIAS = 'host.microsandbox.internal';
-
-/**
- * Das `-p`-Argument für `msb run`: der Preview-Port der VM wird ausschließlich
- * an das Host-Loopback gebunden (H1).
- *
- * Früher stand hier `0.0.0.0`, weil das iframe laut R7 direkt auf den
- * gemappten Port zeigte. Seit dem Preview-Gateway ist das überholt: das iframe
- * zeigt auf das Gateway (`PreviewModel.ts`), und das Gateway spricht die VM nur
- * über 127.0.0.1 an (`previewGateway.ts`), ebenso die Status-Probe. Die
- * LAN-Bindung hatte damit keine Funktion mehr, umging aber beide Kontrollen des
- * Gateways: die Session-Prüfung (F19) und das Entfernen des Session-Cookies auf
- * dem Weg in die VM (F2). Für Remote/LAN wird nur der Gateway-Port gebraucht.
- */
-export function previewPortMapping(hostPort: number, guestPort: number): string {
-  return `127.0.0.1:${hostPort}:${guestPort}`;
-}
-
-/**
- * Baut ein `-v`-Argument (`QUELLE:ZIEL[:OPTIONEN]`) und löst die Quelle vorher
- * zu einem echten Pfad auf.
- *
- * msb 0.6.8 folgt symbolischen Links in der Mount-Quelle nicht mehr (Migration
- * `migrate_bind_rootfs_source`) und bricht mit „Not a directory" ab. Auf macOS
- * trifft das jeden Pfad unter `$TMPDIR`, weil `/var` ein Symlink auf
- * `/private/var` ist — im Produktivbetrieb liegt `~/macvibes` dagegen auf einem
- * echten Pfad, weshalb dort nichts brach. Auflösen ist unabhängig davon
- * richtig: msb bekommt so immer genau den Pfad, den es auch mountet.
- */
-export function mountSource(hostPath: string, guestPath: string, options?: string): string {
-  const quelle = realpathSync(hostPath);
-  return options === undefined ? `${quelle}:${guestPath}` : `${quelle}:${guestPath}:${options}`;
-}
-
-/**
- * Mountpunkt der persistenten Agent-Config in der VM. Claude Code schreibt
- * dorthin (CLAUDE_CONFIG_DIR), damit die Session einen VM-Neustart übersteht (R9).
- * Teil des Host↔VM-Vertrags (core/vmContract): die VM nutzt denselben Pfad in
- * ihrer Agent-Umgebung (agent/vmAgentEnv) — Single Source of Truth dort.
- */
-export { AGENT_CONFIG_GUEST_DIR };
 
 /**
  * Mountpunkt des persistenten Bun-Install-Caches (ADR 0002): hält die per

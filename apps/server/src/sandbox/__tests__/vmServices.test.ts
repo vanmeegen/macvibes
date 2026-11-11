@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { MONIT_HTTPD_PORT, buildVmServices } from '../vmServices';
+import { MONIT_HTTPD_PORT } from '../../core/vmContract';
+import { buildVmServices } from '../vmServices';
 
 const SPEC = {
   devCommand: "bun run dev --port '5199'",

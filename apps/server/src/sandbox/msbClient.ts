@@ -32,6 +32,25 @@ function fehlertext(error: unknown): string {
   return typeof error === 'string' ? error : '';
 }
 
+/**
+ * Führt einen SDK-Aufruf aus und kapselt jeden Fehler als SandboxRuntimeError
+ * (`<beschreibung>: <Fehlertext>`). Mit `nichtGefunden` wird genau dieser eine
+ * Fehlerfall zum Rückgabewert — alles andere fliegt weiter, statt als „war
+ * halt nicht da" durchzugehen.
+ */
+async function msbCall<T>(
+  beschreibung: string,
+  aufruf: () => Promise<T>,
+  nichtGefunden?: { ist: (error: unknown) => boolean; wert: T },
+): Promise<T> {
+  try {
+    return await aufruf();
+  } catch (error) {
+    if (nichtGefunden?.ist(error) === true) return nichtGefunden.wert;
+    throw new SandboxRuntimeError(`${beschreibung}: ${fehlertext(error)}`, error);
+  }
+}
+
 /** Ist das der Fehler „diese Sandbox gibt es nicht"? */
 export function istSandboxNichtGefunden(error: unknown): boolean {
   return error instanceof SandboxNotFoundError;
@@ -69,16 +88,14 @@ export async function msbAvailable(): Promise<boolean> {
  * verwandelt sich ein kaputtes Werkzeug in eine irreführende Fachmeldung.
  */
 export async function snapshotExists(name: string): Promise<boolean> {
-  try {
-    await Snapshot.get(name);
-    return true;
-  } catch (error) {
-    if (istSnapshotNichtGefunden(error)) return false;
-    throw new SandboxRuntimeError(
-      `Snapshot „${name}" konnte nicht geprüft werden: ${fehlertext(error)}`,
-      error,
-    );
-  }
+  return msbCall(
+    `Snapshot „${name}" konnte nicht geprüft werden`,
+    async () => {
+      await Snapshot.get(name);
+      return true;
+    },
+    { ist: istSnapshotNichtGefunden, wert: false },
+  );
 }
 
 /**
@@ -87,29 +104,22 @@ export async function snapshotExists(name: string): Promise<boolean> {
  * Fehler fliegt weiter, statt als „war halt schon weg" durchzugehen.
  */
 export async function stopSandbox(name: string): Promise<void> {
-  try {
-    const handle = await Sandbox.get(name);
-    await handle.stop();
-  } catch (error) {
-    if (istSandboxNichtGefunden(error)) return;
-    throw new SandboxRuntimeError(
-      `Sandbox „${name}" konnte nicht gestoppt werden: ${fehlertext(error)}`,
-      error,
-    );
-  }
+  await msbCall(
+    `Sandbox „${name}" konnte nicht gestoppt werden`,
+    async () => {
+      const handle = await Sandbox.get(name);
+      await handle.stop();
+    },
+    { ist: istSandboxNichtGefunden, wert: undefined },
+  );
 }
 
 /** Entfernt eine Sandbox. Unbekannt = kein Fehler (siehe stopSandbox). */
 export async function removeSandbox(name: string): Promise<void> {
-  try {
-    await Sandbox.remove(name);
-  } catch (error) {
-    if (istSandboxNichtGefunden(error)) return;
-    throw new SandboxRuntimeError(
-      `Sandbox „${name}" konnte nicht entfernt werden: ${fehlertext(error)}`,
-      error,
-    );
-  }
+  await msbCall(`Sandbox „${name}" konnte nicht entfernt werden`, () => Sandbox.remove(name), {
+    ist: istSandboxNichtGefunden,
+    wert: undefined,
+  });
 }
 
 export interface WaitForReadyOptions {
@@ -155,7 +165,7 @@ export async function waitForSandboxReady(
         letzterFehler,
       );
     }
-    await new Promise((r) => setTimeout(r, intervalMs));
+    await Bun.sleep(intervalMs);
   }
 }
 
@@ -310,14 +320,9 @@ function bauBuilder(spec: SandboxSpec) {
  * erst später erreichbar).
  */
 export async function startSandbox(spec: SandboxSpec): Promise<void> {
-  try {
+  await msbCall(`Sandbox „${spec.name}" konnte nicht gestartet werden`, async () => {
     await bauBuilder(spec).create();
-  } catch (error) {
-    throw new SandboxRuntimeError(
-      `Sandbox „${spec.name}" konnte nicht gestartet werden: ${fehlertext(error)}`,
-      error,
-    );
-  }
+  });
 }
 
 /**
@@ -347,40 +352,28 @@ export async function execShell(name: string, script: string): Promise<string> {
 
 /** Erzeugt einen Snapshot aus einer (gestoppten) Sandbox. */
 export async function createSnapshot(name: string, fromSandbox: string): Promise<void> {
-  try {
+  await msbCall(`Snapshot „${name}" konnte nicht erzeugt werden`, async () => {
     await Snapshot.builder(name).fromSandbox(fromSandbox).force().create();
-  } catch (error) {
-    throw new SandboxRuntimeError(
-      `Snapshot „${name}" konnte nicht erzeugt werden: ${fehlertext(error)}`,
-      error,
-    );
-  }
+  });
 }
 
 /** Entfernt einen Snapshot. Nicht vorhanden = kein Fehler. */
 export async function removeSnapshot(name: string): Promise<void> {
-  try {
-    await Snapshot.remove(name, { force: true });
-  } catch (error) {
-    if (istSnapshotNichtGefunden(error)) return;
-    throw new SandboxRuntimeError(
-      `Snapshot „${name}" konnte nicht entfernt werden: ${fehlertext(error)}`,
-      error,
-    );
-  }
+  await msbCall(
+    `Snapshot „${name}" konnte nicht entfernt werden`,
+    async () => {
+      await Snapshot.remove(name, { force: true });
+    },
+    { ist: istSnapshotNichtGefunden, wert: undefined },
+  );
 }
 
 /** Namen aller bekannten Sandboxes (laufend und gestoppt). */
 export async function listSandboxNames(): Promise<string[]> {
-  try {
+  return msbCall('Sandboxes konnten nicht aufgelistet werden', async () => {
     const seite = await Sandbox.list();
     return seite.sandboxes.map((s) => s.name);
-  } catch (error) {
-    throw new SandboxRuntimeError(
-      `Sandboxes konnten nicht aufgelistet werden: ${fehlertext(error)}`,
-      error,
-    );
-  }
+  });
 }
 
 /**
@@ -393,15 +386,13 @@ export async function listSandboxNames(): Promise<string[]> {
  * den Eintrag und heilt beim nächsten Wieder-Öffnen.
  */
 export async function touchSandbox(name: string): Promise<boolean> {
-  try {
-    const handle = await Sandbox.get(name);
-    await handle.touch();
-    return true;
-  } catch (error) {
-    if (istSandboxNichtGefunden(error)) return false;
-    throw new SandboxRuntimeError(
-      `Idle-Frist von „${name}" konnte nicht zurückgesetzt werden: ${fehlertext(error)}`,
-      error,
-    );
-  }
+  return msbCall(
+    `Idle-Frist von „${name}" konnte nicht zurückgesetzt werden`,
+    async () => {
+      const handle = await Sandbox.get(name);
+      await handle.touch();
+      return true;
+    },
+    { ist: istSandboxNichtGefunden, wert: false },
+  );
 }

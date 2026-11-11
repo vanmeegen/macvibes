@@ -97,3 +97,20 @@ export async function createUser(db: Db, username = 'marco'): Promise<UserRow> {
   }
   return approveUser(db, result.user.id);
 }
+
+/**
+ * Pollt eine Bedingung, statt blind zu schlafen. Erfüllte Bedingungen kehren
+ * sofort zurück; die Frist greift nur im Fehlerfall (deshalb großzügig — knappe
+ * Fristen rissen auf langsameren Maschinen korrekte Tests).
+ */
+export async function waitFor(
+  condition: () => boolean | Promise<boolean>,
+  timeoutMs = 10_000,
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (await condition()) return;
+    await Bun.sleep(5);
+  }
+  throw new Error('waitFor: Bedingung nicht erfüllt');
+}

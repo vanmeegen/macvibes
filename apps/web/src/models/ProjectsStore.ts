@@ -1,6 +1,8 @@
 import { makeAutoObservable, runInAction } from 'mobx';
+import { toErrorMessage } from '../api/errors';
 import { gqlRequest } from '../api/graphqlClient';
 import type { AgentModelInfo, Project, Template } from '../api/types';
+import { NameDialogModel } from './NameDialogModel';
 import type { AuthStore } from './AuthStore';
 
 export type ProjectFilter = 'mine' | 'all';
@@ -93,8 +95,28 @@ const SET_PROJECT_MODEL_MUTATION = /* GraphQL */ `
   }
 `;
 
-function toErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+function sameJson(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * Übernimmt `incoming`, behält aber inhaltsgleiche Einträge als DIESELBEN
+ * Objekte — und die Liste selbst, wenn sich gar nichts geändert hat. So
+ * rendert nach einem Poll-Tick nur neu, was sich wirklich geändert hat.
+ */
+function mergeById<T extends { id: string }>(current: T[], incoming: T[]): T[] {
+  const byId = new Map(current.map((item) => [item.id, item]));
+  let changed = current.length !== incoming.length;
+  const merged = incoming.map((item, index) => {
+    const existing = byId.get(item.id);
+    if (existing === undefined || !sameJson(existing, item)) {
+      changed = true;
+      return item;
+    }
+    if (current[index] !== existing) changed = true;
+    return existing;
+  });
+  return changed ? merged : current;
 }
 
 function readFilterFromStorage(): ProjectFilter {
@@ -191,18 +213,10 @@ export class ProjectsStore {
   loading = false;
   /** Projekt-ID, für die gerade der Lösch-Bestätigungsdialog offen ist. */
   pendingDeleteId: string | null = null;
-  /** Projekt-ID, für die gerade der Kopieren-Dialog offen ist. */
-  pendingCopyId: string | null = null;
-  /** Eingabewert im Kopieren-Dialog (vorgefüllt mit „<Name> Kopie"). */
-  copyName = '';
-  /** Fehler im Kopieren-Dialog — der Dialog bleibt offen, Name korrigierbar. */
-  copyError: string | null = null;
-  /** Projekt-ID, für die gerade der Umbenennen-Dialog offen ist. */
-  pendingRenameId: string | null = null;
-  /** Eingabewert im Umbenennen-Dialog (vorgefüllt mit dem aktuellen Namen). */
-  renameName = '';
-  /** Fehler im Umbenennen-Dialog — der Dialog bleibt offen, Name korrigierbar. */
-  renameError: string | null = null;
+  /** Kopieren-Dialog (Name vorgefüllt mit „<Name> Kopie"). */
+  readonly copyDialog = new NameDialogModel('ProjectsStore.confirmCopy');
+  /** Umbenennen-Dialog (Name vorgefüllt mit dem aktuellen Namen). */
+  readonly renameDialog = new NameDialogModel('ProjectsStore.confirmRename');
   /** Interval-Handle fürs Status-Polling — bewusst nicht observable. */
   pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -247,32 +261,17 @@ export class ProjectsStore {
     this.pendingDeleteId = id;
   }
 
-  get pendingCopyProject(): Project | null {
-    if (this.pendingCopyId === null) {
-      return null;
-    }
-    return this.projects.find((p) => p.id === this.pendingCopyId) ?? null;
+  private projectById(id: string | null): Project | null {
+    return id === null ? null : (this.projects.find((p) => p.id === id) ?? null);
   }
 
-  get canConfirmCopy(): boolean {
-    return this.copyName.trim().length > 0;
+  get pendingCopyProject(): Project | null {
+    return this.projectById(this.copyDialog.projectId);
   }
 
   requestCopy(id: string): void {
-    const project = this.projects.find((p) => p.id === id);
-    this.pendingCopyId = id;
-    this.copyName = project ? `${project.name} Kopie` : '';
-    this.copyError = null;
-  }
-
-  cancelCopy(): void {
-    this.pendingCopyId = null;
-    this.copyError = null;
-  }
-
-  setCopyName(name: string): void {
-    this.copyName = name;
-    this.copyError = null;
+    const project = this.projectById(id);
+    this.copyDialog.open(id, project ? `${project.name} Kopie` : '');
   }
 
   /**
@@ -280,58 +279,25 @@ export class ProjectsStore {
    * (für die Navigation in den Chat). Bei Server-Fehler (z. B. doppelter Name)
    * bleibt der Dialog offen.
    */
-  async confirmCopy(): Promise<string | null> {
-    const sourceId = this.pendingCopyId;
-    const name = this.copyName.trim();
-    if (sourceId === null || name.length === 0) {
-      return null;
-    }
-    try {
+  confirmCopy(): Promise<string | null> {
+    return this.copyDialog.confirm(async (sourceId, name) => {
       const data = await gqlRequest<{ copyProject: Project }>(COPY_PROJECT_MUTATION, {
         sourceId,
         name,
       });
       runInAction(() => {
         this.projects = [data.copyProject, ...this.projects];
-        this.pendingCopyId = null;
-        this.copyError = null;
       });
       return data.copyProject.id;
-    } catch (err) {
-      console.error('ProjectsStore.confirmCopy fehlgeschlagen', err);
-      runInAction(() => {
-        this.copyError = toErrorMessage(err);
-      });
-      return null;
-    }
+    });
   }
 
   get pendingRenameProject(): Project | null {
-    if (this.pendingRenameId === null) {
-      return null;
-    }
-    return this.projects.find((p) => p.id === this.pendingRenameId) ?? null;
-  }
-
-  get canConfirmRename(): boolean {
-    return this.renameName.trim().length > 0;
+    return this.projectById(this.renameDialog.projectId);
   }
 
   requestRename(id: string): void {
-    const project = this.projects.find((p) => p.id === id);
-    this.pendingRenameId = id;
-    this.renameName = project?.name ?? '';
-    this.renameError = null;
-  }
-
-  cancelRename(): void {
-    this.pendingRenameId = null;
-    this.renameError = null;
-  }
-
-  setRenameName(name: string): void {
-    this.renameName = name;
-    this.renameError = null;
+    this.renameDialog.open(id, this.projectById(id)?.name ?? '');
   }
 
   /**
@@ -339,12 +305,7 @@ export class ProjectsStore {
    * Name) bleibt der Dialog offen, damit der Name korrigiert werden kann.
    */
   async confirmRename(): Promise<boolean> {
-    const id = this.pendingRenameId;
-    const name = this.renameName.trim();
-    if (id === null || name.length === 0) {
-      return false;
-    }
-    try {
+    const renamed = await this.renameDialog.confirm(async (id, name) => {
       const data = await gqlRequest<{ renameProject: { id: string; name: string } }>(
         RENAME_PROJECT_MUTATION,
         { id, name },
@@ -354,17 +315,10 @@ export class ProjectsStore {
         if (project) {
           project.name = data.renameProject.name;
         }
-        this.pendingRenameId = null;
-        this.renameError = null;
       });
       return true;
-    } catch (err) {
-      console.error('ProjectsStore.confirmRename fehlgeschlagen', err);
-      runInAction(() => {
-        this.renameError = toErrorMessage(err);
-      });
-      return false;
-    }
+    });
+    return renamed ?? false;
   }
 
   cancelDelete(): void {
@@ -424,26 +378,40 @@ export class ProjectsStore {
       agentModels: AgentModelInfo[];
     }>(PROJECTS_AND_TEMPLATES_QUERY);
     runInAction(() => {
-      this.projects = data.projects;
-      this.templates = data.templates;
+      // Das Polling liefert meist inhaltsgleiche Antworten. Würden sie blind
+      // zugewiesen, entstünden bei jedem Tick neue Objekte — und jede Karte
+      // bzw. die ganze Chat-Seite renderte neu, obwohl sich nichts geändert hat.
+      this.projects = mergeById(this.projects, data.projects);
+      if (!sameJson(this.templates, data.templates)) this.templates = data.templates;
+      if (!sameJson(this.agentModels, data.agentModels)) this.agentModels = data.agentModels;
       this.previewGatewayPort = data.previewGatewayPort;
       this.previewGatewayHttpsPort = data.previewGatewayHttpsPort;
-      this.agentModels = data.agentModels;
     });
   }
 
+  /**
+   * Hält den Status per Polling aktuell — aber nur im sichtbaren Tab: ein
+   * versteckter Tab fragt nicht ab und holt den Stand nach, sobald er wieder
+   * sichtbar wird.
+   */
   startPolling(intervalMs = 2000): void {
     if (this.pollTimer !== null) return;
     this.pollTimer = setInterval(() => {
-      void this.refresh();
+      if (!document.hidden) void this.refresh();
     }, intervalMs);
+    document.addEventListener('visibilitychange', this.refreshWhenVisible);
   }
 
   stopPolling(): void {
     if (this.pollTimer !== null) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
+      document.removeEventListener('visibilitychange', this.refreshWhenVisible);
     }
+  }
+
+  private refreshWhenVisible(): void {
+    if (!document.hidden) void this.refresh();
   }
 
   /**

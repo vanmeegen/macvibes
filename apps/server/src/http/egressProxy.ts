@@ -270,6 +270,8 @@ interface ConnState extends FlushZustand {
   upstreamZu: boolean;
 }
 
+const BAD_REQUEST = 'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n';
+
 export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle {
   /** Zerlegt "Basic base64(mv:<token>)" und gibt das Token zurück. */
   const tokenFromAuth = (header: string): string | null => {
@@ -333,16 +335,26 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
     flushPending(state, up);
   };
 
+  /**
+   * Lehnt eine Client-Verbindung terminal ab: erst `macheTerminal` (JEDER
+   * Abbruchpfad muss darüber laufen, s. dort), dann optional eine
+   * Antwortzeile, dann die Schreibseite beenden.
+   */
+  const lehneAb = (client: Socket<ConnState>, antwort?: string): void => {
+    macheTerminal(client.data);
+    if (antwort !== undefined) client.write(antwort);
+    client.end();
+  };
+
   const refuse = (client: Socket<ConnState>, reason: string): void => {
     console.warn(`EgressProxy: Ziel abgelehnt — ${reason}`);
     // Terminal: Puffer freigeben und alles Weitere verwerfen. Ohne die
     // Phasen-Umschaltung fielen Restbytes, die zwischen refuse und dem
     // tatsächlichen Close noch eintreffen, erneut in das Kopf-Parsing.
-    macheTerminal(client.data);
-    client.write(
+    lehneAb(
+      client,
       `HTTP/1.1 403 Forbidden\r\nConnection: close\r\ncontent-length: 0\r\nx-macvibes-reason: ${reason.replace(/[\r\n]/g, ' ')}\r\n\r\n`,
     );
-    client.end();
   };
 
   /** Prüft das Ziel und verbindet nur bei positivem Bescheid (F3). */
@@ -412,9 +424,7 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
     }).catch((error: unknown) => {
       console.error(`EgressProxy: Connect zu ${host}:${port} fehlgeschlagen:`, error);
       // Kein Upstream, also läuft kein Flush mehr — terminal, Rest verwerfen.
-      macheTerminal(state);
-      client.write('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
-      client.end();
+      lehneAb(client, 'HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
     });
   };
 
@@ -493,8 +503,7 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
             // ohne Phase 'zu' wüchse buf mit jedem weiteren Segment unbegrenzt
             // (Speicherhebel der untrusted VM), und ein nachgereichter
             // Terminator würde doch noch geparst und geproxied.
-            macheTerminal(state);
-            socket.end();
+            lehneAb(socket);
           }
           return;
         }
@@ -504,9 +513,7 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
 
         const parsed = parseProxyHead(head);
         if (parsed === null) {
-          macheTerminal(state);
-          socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
-          socket.end();
+          lehneAb(socket, BAD_REQUEST);
           return;
         }
         const { requestLine, headerLines } = parsed;
@@ -516,12 +523,11 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
             ?.slice('proxy-authorization:'.length)
             .trim() ?? '';
         if (options.verifyToken(tokenFromAuth(auth)) === null) {
-          macheTerminal(state);
-          socket.write(
+          lehneAb(
+            socket,
             'HTTP/1.1 407 Proxy Authentication Required\r\n' +
               'Proxy-Authenticate: Basic realm="macvibes"\r\nConnection: close\r\n\r\n',
           );
-          socket.end();
           return;
         }
 
@@ -553,9 +559,7 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
           try {
             url = new URL(target);
           } catch {
-            macheTerminal(state);
-            socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
-            socket.end();
+            lehneAb(socket, BAD_REQUEST);
             return;
           }
           const port = url.port ? Number(url.port) : url.protocol === 'https:' ? 443 : 80;
@@ -563,25 +567,20 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
             // Chunked-Bodies sind über diesen Proxy exotisch und ohne
             // Content-Length nicht sicher zu framen (Request-Grenze!) —
             // sauber ablehnen statt falsch behandeln.
-            macheTerminal(state);
-            socket.write(
+            lehneAb(
+              socket,
               'HTTP/1.1 411 Length Required\r\nConnection: close\r\n' +
                 'x-macvibes-reason: transfer-encoding wird nicht unterstuetzt, content-length setzen\r\n\r\n',
             );
-            socket.end();
             return;
           }
           const bodySoll = contentLengthAus(headerLines);
           if (bodySoll === null) {
-            macheTerminal(state);
-            socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
-            socket.end();
+            lehneAb(socket, BAD_REQUEST);
             return;
           }
           if (bodySoll > grenze) {
-            macheTerminal(state);
-            socket.write('HTTP/1.1 413 Content Too Large\r\nConnection: close\r\n\r\n');
-            socket.end();
+            lehneAb(socket, 'HTTP/1.1 413 Content Too Large\r\nConnection: close\r\n\r\n');
             return;
           }
           if (rest.length > bodySoll) {
@@ -590,8 +589,7 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
             console.warn(
               'EgressProxy: Bytes über den absolute-form-Request hinaus — Verbindung getrennt.',
             );
-            macheTerminal(state);
-            socket.end();
+            lehneAb(socket);
             return;
           }
           // Proxy-Header UND vorhandene Connection-Header strippen; wir
@@ -616,9 +614,7 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
           });
           return;
         }
-        macheTerminal(state);
-        socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
-        socket.end();
+        lehneAb(socket, BAD_REQUEST);
       },
       drain(socket) {
         // Der Client nimmt wieder auf: Antwort-Rest weiterschreiben, danach

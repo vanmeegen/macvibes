@@ -1,4 +1,5 @@
 import { makeAutoObservable, runInAction } from 'mobx';
+import { toErrorMessage } from '../api/errors';
 import { gqlRequest } from '../api/graphqlClient';
 import type { ChatMessage } from '../api/types';
 
@@ -7,15 +8,13 @@ export interface ChatEventPayload {
   turnActive: boolean;
 }
 
+/** Felder einer Chat-Nachricht — Verlaufs-Query und Subscription fragen dieselben ab. */
+const MESSAGE_FIELDS = 'id projectId turnId role content createdAt';
+
 const CHAT_STATE_QUERY = /* GraphQL */ `
   query ChatState($projectId: ID!) {
     chatMessages(projectId: $projectId) {
-      id
-      projectId
-      turnId
-      role
-      content
-      createdAt
+      ${MESSAGE_FIELDS}
     }
     turnActive(projectId: $projectId)
   }
@@ -44,20 +43,11 @@ const CHAT_EVENTS_SUBSCRIPTION = (projectId: string): string => /* GraphQL */ `
     chatEvents(projectId: ${JSON.stringify(projectId)}) {
       turnActive
       message {
-        id
-        projectId
-        turnId
-        role
-        content
-        createdAt
+        ${MESSAGE_FIELDS}
       }
     }
   }
 `;
-
-function toErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 /**
  * Presentation Model der Chat-Page: Verlauf, Streaming-Events (SSE via
@@ -173,9 +163,15 @@ export class ChatStore {
         this.messages.splice(optimistic, 1);
       }
     }
-    const index = this.messages.findIndex((m) => m.id === payload.message.id);
-    if (index >= 0) {
-      this.messages[index] = payload.message;
+    // Von hinten suchen: die streamende Zeile ist praktisch immer die letzte.
+    // Bestehende Zeilen werden IN PLACE fortgeschrieben — so rendert nur die
+    // betroffene Bubble neu, nicht die ganze Liste.
+    let existing: ChatMessage | undefined;
+    for (let i = this.messages.length - 1; i >= 0 && existing === undefined; i--) {
+      if (this.messages[i]?.id === payload.message.id) existing = this.messages[i];
+    }
+    if (existing !== undefined) {
+      Object.assign(existing, payload.message);
     } else {
       this.messages.push(payload.message);
     }

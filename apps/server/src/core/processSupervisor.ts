@@ -81,7 +81,11 @@ export class ProcessSupervisor {
   start(): void {
     if (this.status !== 'stopped') return;
     this.stopped = false;
-    // Fehler hier dürfen nie als unhandled rejection den Server killen.
+    this.kick();
+  }
+
+  /** Startet einen Zyklus; Fehler dürfen nie als unhandled rejection den Server killen. */
+  private kick(): void {
     this.runCycle().catch((error) => {
       console.error('Prozess-Supervisor-Zyklus fehlgeschlagen:', error);
       this.setStatus('failed');
@@ -202,11 +206,7 @@ export class ProcessSupervisor {
     if (this.stopped || gen !== this.monitorGen) return;
     await Bun.sleep(this.opts.backoffMs);
     if (this.stopped || gen !== this.monitorGen) return;
-    // Fehler hier dürfen nie als unhandled rejection den Server killen.
-    this.runCycle().catch((error) => {
-      console.error('Prozess-Supervisor-Zyklus fehlgeschlagen:', error);
-      this.setStatus('failed');
-    });
+    this.kick();
   }
 
   /** Crash-Loop-Schutz: max. Neustarts im gleitenden Fenster. */

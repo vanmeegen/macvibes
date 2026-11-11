@@ -5,6 +5,7 @@ import {
   type ProcessSupervisorDeps,
   type SupervisedProcess,
 } from '../processSupervisor';
+import { waitFor } from '../../services/__tests__/testUtils';
 
 /** Steuerbarer Fake-Prozess: exited lässt sich von außen auflösen (= Crash). */
 function fakeProcess(): SupervisedProcess & { crash: (code?: number) => void; killed: boolean } {
@@ -22,15 +23,6 @@ function fakeProcess(): SupervisedProcess & { crash: (code?: number) => void; ki
     crash: (code = 1) => resolveExit(code),
   };
   return box;
-}
-
-async function waitFor(cond: () => boolean, timeoutMs = 2000): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    if (cond()) return;
-    await Bun.sleep(5);
-  }
-  throw new Error('waitFor: Bedingung nicht erfüllt');
 }
 
 interface Harness {
