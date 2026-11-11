@@ -129,6 +129,171 @@ const MessageBubble = observer(function MessageBubble({
 });
 
 /**
+ * Nachrichtenliste samt „Agent arbeitet"-Bubble und Auto-Scroll. Eigener
+ * Observer: Streaming-Deltas und neue Nachrichten rendern nur diese Liste neu,
+ * nicht die ganze Seite (Kopfzeile, Eingabe, Preview).
+ */
+const ChatMessageList = observer(function ChatMessageList({
+  chatStore,
+  sandboxStatus,
+}: {
+  chatStore: ChatStore;
+  sandboxStatus: string;
+}): JSX.Element {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  // Immer ans Ende scrollen, wenn neue Events eintreffen.
+  const messageCount = chatStore.messages.length;
+  const lastContentLength = chatStore.messages[messageCount - 1]?.content.length ?? 0;
+  useEffect(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+  }, [messageCount, lastContentLength]);
+
+  return (
+    <Box
+      ref={scrollRef}
+      sx={{ flexGrow: 1, overflowY: 'auto', p: 2, display: 'flex', flexDirection: 'column' }}
+    >
+      <Stack spacing={1.5}>
+        {chatStore.messages.length === 0 && (
+          <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center' }}>
+            Noch keine Nachrichten — beschreibe dem Agenten, was er bauen soll.
+          </Typography>
+        )}
+        {chatStore.messages.map((message) => (
+          <MessageBubble key={message.id} message={message} />
+        ))}
+        {chatStore.turnActive &&
+          !['assistant', 'thinking'].includes(
+            chatStore.messages[chatStore.messages.length - 1]?.role ?? '',
+          ) && (
+            <Box
+              sx={{ display: 'flex', justifyContent: 'flex-start' }}
+              data-testselector="chat-working"
+            >
+              <Paper variant="outlined" sx={{ px: 2, py: 1 }}>
+                <Stack direction="row" spacing={1.5} alignItems="center">
+                  <CircularProgress size={14} />
+                  <Typography variant="body2" color="text.secondary">
+                    {agentWorkingLabel(sandboxStatus)}
+                  </Typography>
+                </Stack>
+              </Paper>
+            </Box>
+          )}
+      </Stack>
+    </Box>
+  );
+});
+
+/**
+ * Eingabezeile mit Diktat, Stop und Senden. Eigener Observer: ein Tastendruck
+ * (Entwurf) rendert nur die Eingabe neu, nicht die Nachrichtenliste.
+ */
+const ChatComposer = observer(function ChatComposer({
+  chatStore,
+  speechStore,
+}: {
+  chatStore: ChatStore;
+  speechStore: SpeechStore;
+}): JSX.Element {
+  return (
+    <>
+      <Stack direction="row" spacing={1} alignItems="center">
+        <TextField
+          placeholder="Nachricht an den Agenten …"
+          size="small"
+          fullWidth
+          multiline
+          maxRows={6}
+          value={chatStore.draft}
+          onChange={(e) => chatStore.setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              void chatStore.send();
+            }
+          }}
+          inputProps={{ 'data-testselector': 'chat-input' }}
+        />
+        {/* Diktat: lokale Erkennung im Browser (Chrome On-Device). */}
+        <Tooltip title={speechStore.tooltip}>
+          {/* span: Tooltips brauchen bei disabled-Buttons einen Wrapper */}
+          <span>
+            <IconButton
+              aria-label={speechStore.status === 'recording' ? 'Aufnahme stoppen' : 'Diktieren'}
+              color={speechStore.status === 'recording' ? 'error' : 'default'}
+              disabled={!speechStore.canRecord}
+              onClick={() => void speechStore.toggle()}
+              data-testselector="chat-mic"
+              data-status={speechStore.status}
+              sx={
+                speechStore.status === 'recording'
+                  ? {
+                      '@keyframes micPulse': {
+                        '0%': { opacity: 1 },
+                        '50%': { opacity: 0.4 },
+                        '100%': { opacity: 1 },
+                      },
+                      animation: 'micPulse 1.2s ease-in-out infinite',
+                    }
+                  : {}
+              }
+            >
+              {speechStore.status === 'installing' ? <CircularProgress size={20} /> : <MicIcon />}
+            </IconButton>
+          </span>
+        </Tooltip>
+        {speechStore.canRecord && (
+          <Tooltip title="Diktiersprache umschalten">
+            <Chip
+              size="small"
+              label={speechStore.lang === 'de-DE' ? 'DE' : 'EN'}
+              onClick={() => speechStore.setLang(speechStore.lang === 'de-DE' ? 'en-US' : 'de-DE')}
+              data-testselector="chat-mic-lang"
+            />
+          </Tooltip>
+        )}
+        {chatStore.turnActive && (
+          <IconButton
+            aria-label="Turn abbrechen"
+            color="error"
+            onClick={() => void chatStore.stop()}
+            data-testselector="chat-stop"
+          >
+            <StopIcon />
+          </IconButton>
+        )}
+        <IconButton
+          aria-label="Senden"
+          color="primary"
+          disabled={chatStore.draft.trim().length === 0}
+          onClick={() => void chatStore.send()}
+          data-testselector="chat-send"
+        >
+          <SendIcon />
+        </IconButton>
+      </Stack>
+      {speechStore.status === 'recording' && speechStore.interimText.length > 0 && (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ fontStyle: 'italic' }}
+          data-testselector="chat-mic-interim"
+        >
+          🎙 {speechStore.interimText}
+        </Typography>
+      )}
+      {speechStore.error !== null && (
+        <Typography variant="caption" color="error" data-testselector="chat-mic-error">
+          {speechStore.error}
+        </Typography>
+      )}
+    </>
+  );
+});
+
+/**
  * Projektansicht: Chat mit dem Agenten (links) und Preview (rechts).
  * Nur der Owner darf schreiben; andere lesen live mit (R6/R10).
  */
@@ -139,7 +304,6 @@ export const ChatPage = observer(function ChatPage({
 }: ChatPageProps): JSX.Element {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const scrollRef = useRef<HTMLDivElement | null>(null);
 
   // Grundvoraussetzungen fürs Diktat prüfen — bewusst nur synchrone Checks;
   // die echte available()-Probe passiert erst beim Klick (Chromium-Crash-Bug
@@ -200,13 +364,6 @@ export const ChatPage = observer(function ChatPage({
       httpsGatewayPort: projectsStore.previewGatewayHttpsPort,
     },
   );
-
-  // Immer ans Ende scrollen, wenn neue Events eintreffen.
-  const messageCount = chatStore.messages.length;
-  const lastContentLength = chatStore.messages[messageCount - 1]?.content.length ?? 0;
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [messageCount, lastContentLength]);
 
   return (
     <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -337,39 +494,10 @@ export const ChatPage = observer(function ChatPage({
           }}
           data-testselector="chat-column"
         >
-          <Box
-            ref={scrollRef}
-            sx={{ flexGrow: 1, overflowY: 'auto', p: 2, display: 'flex', flexDirection: 'column' }}
-          >
-            <Stack spacing={1.5}>
-              {chatStore.messages.length === 0 && (
-                <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center' }}>
-                  Noch keine Nachrichten — beschreibe dem Agenten, was er bauen soll.
-                </Typography>
-              )}
-              {chatStore.messages.map((message) => (
-                <MessageBubble key={message.id} message={message} />
-              ))}
-              {chatStore.turnActive &&
-                !['assistant', 'thinking'].includes(
-                  chatStore.messages[chatStore.messages.length - 1]?.role ?? '',
-                ) && (
-                  <Box
-                    sx={{ display: 'flex', justifyContent: 'flex-start' }}
-                    data-testselector="chat-working"
-                  >
-                    <Paper variant="outlined" sx={{ px: 2, py: 1 }}>
-                      <Stack direction="row" spacing={1.5} alignItems="center">
-                        <CircularProgress size={14} />
-                        <Typography variant="body2" color="text.secondary">
-                          {agentWorkingLabel(project?.sandboxStatus ?? 'running')}
-                        </Typography>
-                      </Stack>
-                    </Paper>
-                  </Box>
-                )}
-            </Stack>
-          </Box>
+          <ChatMessageList
+            chatStore={chatStore}
+            sandboxStatus={project?.sandboxStatus ?? 'running'}
+          />
 
           {chatStore.turnActive && (
             <Box data-testselector="chat-turn-indicator">
@@ -388,106 +516,7 @@ export const ChatPage = observer(function ChatPage({
                 Nur-Lese-Modus — Projekt von {project.owner.username}
               </Alert>
             ) : (
-              <>
-                <Stack direction="row" spacing={1} alignItems="center">
-                  <TextField
-                    placeholder="Nachricht an den Agenten …"
-                    size="small"
-                    fullWidth
-                    multiline
-                    maxRows={6}
-                    value={chatStore.draft}
-                    onChange={(e) => chatStore.setDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        void chatStore.send();
-                      }
-                    }}
-                    inputProps={{ 'data-testselector': 'chat-input' }}
-                  />
-                  {/* Diktat: lokale Erkennung im Browser (Chrome On-Device). */}
-                  <Tooltip title={speechStore.tooltip}>
-                    {/* span: Tooltips brauchen bei disabled-Buttons einen Wrapper */}
-                    <span>
-                      <IconButton
-                        aria-label={
-                          speechStore.status === 'recording' ? 'Aufnahme stoppen' : 'Diktieren'
-                        }
-                        color={speechStore.status === 'recording' ? 'error' : 'default'}
-                        disabled={!speechStore.canRecord}
-                        onClick={() => void speechStore.toggle()}
-                        data-testselector="chat-mic"
-                        data-status={speechStore.status}
-                        sx={
-                          speechStore.status === 'recording'
-                            ? {
-                                '@keyframes micPulse': {
-                                  '0%': { opacity: 1 },
-                                  '50%': { opacity: 0.4 },
-                                  '100%': { opacity: 1 },
-                                },
-                                animation: 'micPulse 1.2s ease-in-out infinite',
-                              }
-                            : {}
-                        }
-                      >
-                        {speechStore.status === 'installing' ? (
-                          <CircularProgress size={20} />
-                        ) : (
-                          <MicIcon />
-                        )}
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                  {speechStore.canRecord && (
-                    <Tooltip title="Diktiersprache umschalten">
-                      <Chip
-                        size="small"
-                        label={speechStore.lang === 'de-DE' ? 'DE' : 'EN'}
-                        onClick={() =>
-                          speechStore.setLang(speechStore.lang === 'de-DE' ? 'en-US' : 'de-DE')
-                        }
-                        data-testselector="chat-mic-lang"
-                      />
-                    </Tooltip>
-                  )}
-                  {chatStore.turnActive && (
-                    <IconButton
-                      aria-label="Turn abbrechen"
-                      color="error"
-                      onClick={() => void chatStore.stop()}
-                      data-testselector="chat-stop"
-                    >
-                      <StopIcon />
-                    </IconButton>
-                  )}
-                  <IconButton
-                    aria-label="Senden"
-                    color="primary"
-                    disabled={chatStore.draft.trim().length === 0}
-                    onClick={() => void chatStore.send()}
-                    data-testselector="chat-send"
-                  >
-                    <SendIcon />
-                  </IconButton>
-                </Stack>
-                {speechStore.status === 'recording' && speechStore.interimText.length > 0 && (
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    sx={{ fontStyle: 'italic' }}
-                    data-testselector="chat-mic-interim"
-                  >
-                    🎙 {speechStore.interimText}
-                  </Typography>
-                )}
-                {speechStore.error !== null && (
-                  <Typography variant="caption" color="error" data-testselector="chat-mic-error">
-                    {speechStore.error}
-                  </Typography>
-                )}
-              </>
+              <ChatComposer chatStore={chatStore} speechStore={speechStore} />
             )}
           </Box>
         </Paper>

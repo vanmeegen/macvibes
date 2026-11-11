@@ -95,6 +95,30 @@ const SET_PROJECT_MODEL_MUTATION = /* GraphQL */ `
   }
 `;
 
+function sameJson(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * Übernimmt `incoming`, behält aber inhaltsgleiche Einträge als DIESELBEN
+ * Objekte — und die Liste selbst, wenn sich gar nichts geändert hat. So
+ * rendert nach einem Poll-Tick nur neu, was sich wirklich geändert hat.
+ */
+function mergeById<T extends { id: string }>(current: T[], incoming: T[]): T[] {
+  const byId = new Map(current.map((item) => [item.id, item]));
+  let changed = current.length !== incoming.length;
+  const merged = incoming.map((item, index) => {
+    const existing = byId.get(item.id);
+    if (existing === undefined || !sameJson(existing, item)) {
+      changed = true;
+      return item;
+    }
+    if (current[index] !== existing) changed = true;
+    return existing;
+  });
+  return changed ? merged : current;
+}
+
 function readFilterFromStorage(): ProjectFilter {
   try {
     const stored = window.localStorage.getItem(PROJECT_FILTER_STORAGE_KEY);
@@ -354,26 +378,40 @@ export class ProjectsStore {
       agentModels: AgentModelInfo[];
     }>(PROJECTS_AND_TEMPLATES_QUERY);
     runInAction(() => {
-      this.projects = data.projects;
-      this.templates = data.templates;
+      // Das Polling liefert meist inhaltsgleiche Antworten. Würden sie blind
+      // zugewiesen, entstünden bei jedem Tick neue Objekte — und jede Karte
+      // bzw. die ganze Chat-Seite renderte neu, obwohl sich nichts geändert hat.
+      this.projects = mergeById(this.projects, data.projects);
+      if (!sameJson(this.templates, data.templates)) this.templates = data.templates;
+      if (!sameJson(this.agentModels, data.agentModels)) this.agentModels = data.agentModels;
       this.previewGatewayPort = data.previewGatewayPort;
       this.previewGatewayHttpsPort = data.previewGatewayHttpsPort;
-      this.agentModels = data.agentModels;
     });
   }
 
+  /**
+   * Hält den Status per Polling aktuell — aber nur im sichtbaren Tab: ein
+   * versteckter Tab fragt nicht ab und holt den Stand nach, sobald er wieder
+   * sichtbar wird.
+   */
   startPolling(intervalMs = 2000): void {
     if (this.pollTimer !== null) return;
     this.pollTimer = setInterval(() => {
-      void this.refresh();
+      if (!document.hidden) void this.refresh();
     }, intervalMs);
+    document.addEventListener('visibilitychange', this.refreshWhenVisible);
   }
 
   stopPolling(): void {
     if (this.pollTimer !== null) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
+      document.removeEventListener('visibilitychange', this.refreshWhenVisible);
     }
+  }
+
+  private refreshWhenVisible(): void {
+    if (!document.hidden) void this.refresh();
   }
 
   /**

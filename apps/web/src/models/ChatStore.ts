@@ -163,9 +163,15 @@ export class ChatStore {
         this.messages.splice(optimistic, 1);
       }
     }
-    const index = this.messages.findIndex((m) => m.id === payload.message.id);
-    if (index >= 0) {
-      this.messages[index] = payload.message;
+    // Von hinten suchen: die streamende Zeile ist praktisch immer die letzte.
+    // Bestehende Zeilen werden IN PLACE fortgeschrieben — so rendert nur die
+    // betroffene Bubble neu, nicht die ganze Liste.
+    let existing: ChatMessage | undefined;
+    for (let i = this.messages.length - 1; i >= 0 && existing === undefined; i--) {
+      if (this.messages[i]?.id === payload.message.id) existing = this.messages[i];
+    }
+    if (existing !== undefined) {
+      Object.assign(existing, payload.message);
     } else {
       this.messages.push(payload.message);
     }

@@ -63,6 +63,19 @@ describe('ChatStore', () => {
       expect(store.turnActive).toBe(true);
     });
 
+    it('schreibt Streaming-Deltas in die bestehende Zeile (kein Austausch des Objekts)', () => {
+      // Nur die betroffene Bubble soll neu rendern — wird das Objekt ersetzt,
+      // baut die Liste bei jedem Delta alle Elemente neu auf.
+      const store = new ChatStore();
+      store.projectId = 'p1';
+      store.applyEvent({ message: message('m0', 'user', 'Hallo'), turnActive: true });
+      store.applyEvent({ message: message('m1', 'assistant', 'Ec'), turnActive: true });
+      const zeile = store.messages[1];
+      store.applyEvent({ message: message('m1', 'assistant', 'Echo'), turnActive: true });
+      expect(store.messages[1]).toBe(zeile);
+      expect(zeile?.content).toBe('Echo');
+    });
+
     it('ersetzt bestehende Nachrichten anhand der ID (Streaming-Deltas)', () => {
       const store = new ChatStore();
       store.projectId = 'p1';
