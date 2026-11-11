@@ -1,9 +1,9 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { desc, eq, lt } from 'drizzle-orm';
 import { passwordSchema, usernameSchema } from '@macvibes/shared';
 import type { Db } from '../db/client';
 import { sessions, users, type UserRow } from '../db/schema';
-import { DomainError } from '../core/errors';
+import { DomainError, parseOrThrow } from '../core/errors';
 
 const LOGIN_FAILED_MESSAGE = 'Benutzername oder Passwort ist falsch';
 const NOT_APPROVED_MESSAGE =
@@ -41,9 +41,7 @@ function bootstrapTokenGueltig(eingereicht: string, erwartet: string): boolean {
 }
 
 function newToken(): string {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  return randomBytes(32).toString('hex');
 }
 
 export interface RegisterInput {
@@ -105,14 +103,8 @@ export async function register(
   config: AuthConfig,
   input: RegisterInput,
 ): Promise<RegisterResult> {
-  const usernameResult = usernameSchema.safeParse(input.username);
-  if (!usernameResult.success) {
-    throw new DomainError(usernameResult.error.issues[0]?.message ?? 'Ungültiger Benutzername');
-  }
-  const passwordResult = passwordSchema.safeParse(input.password);
-  if (!passwordResult.success) {
-    throw new DomainError(passwordResult.error.issues[0]?.message ?? 'Ungültiges Passwort');
-  }
+  const username = parseOrThrow(usernameSchema, input.username, 'Ungültiger Benutzername');
+  const password = parseOrThrow(passwordSchema, input.password, 'Ungültiges Passwort');
 
   // Bootstrap-Schutz VOR jedem Insert: Ist MACVIBES_ADMIN_BOOTSTRAP_TOKEN
   // gesetzt, ist der Bootstrap-Name RESERVIERT — eine Registrierung mit diesem
@@ -125,7 +117,7 @@ export async function register(
   if (
     config.adminUsername !== undefined &&
     config.adminBootstrapToken != null &&
-    usernameResult.data === config.adminUsername
+    username === config.adminUsername
   ) {
     const eingereicht = input.bootstrapToken ?? '';
     if (eingereicht === '' || !bootstrapTokenGueltig(eingereicht, config.adminBootstrapToken)) {
@@ -133,11 +125,7 @@ export async function register(
     }
   }
 
-  const existing = await db
-    .select()
-    .from(users)
-    .where(eq(users.username, usernameResult.data))
-    .limit(1);
+  const existing = await db.select().from(users).where(eq(users.username, username)).limit(1);
   if (existing.length > 0) {
     throw new DomainError('Benutzername ist bereits vergeben');
   }
@@ -151,7 +139,7 @@ export async function register(
   // trägt (MACVIBES_ADMIN_USERNAME); ohne Konfiguration bleibt der erste
   // Nutzer aus Bequemlichkeit Admin, aber nur wenn wirklich noch keiner da
   // ist — geprüft in derselben Transaktion wie der Insert.
-  const passwordHash = await Bun.password.hash(passwordResult.data);
+  const passwordHash = await Bun.password.hash(password);
   const bootstrapName = config.adminUsername ?? null;
   // bun:sqlite ist synchron — Prüfung und Insert laufen ohne await dazwischen,
   // also atomar gegenüber parallelen Registrierungen.
@@ -163,12 +151,12 @@ export async function register(
     // ein Wettlauf um Admin-Rechte, den jeder im Netz gewinnen konnte. Der
     // Betreiber muss den Admin jetzt benennen (MACVIBES_ADMIN_USERNAME).
     const istErsterAdmin =
-      admins.length === 0 && bootstrapName !== null && usernameResult.data === bootstrapName;
+      admins.length === 0 && bootstrapName !== null && username === bootstrapName;
     return tx
       .insert(users)
       .values({
         id: crypto.randomUUID(),
-        username: usernameResult.data,
+        username,
         passwordHash,
         role: istErsterAdmin ? 'admin' : 'user',
         approved: istErsterAdmin,

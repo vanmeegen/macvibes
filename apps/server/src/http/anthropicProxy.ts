@@ -74,7 +74,6 @@ export function prepareRequestBody(bodyText: string): AufbereiteterBody {
 
 export interface AnthropicProxyConfig {
   upstreamUrl: string;
-  /** Shared Secret VM → Proxy (pro Serverstart zufällig). */
   /** Prüft das VM-Token und liefert die Identität (F12); null = ungültig. */
   verifyToken: (token: string | null) => { sandbox: string } | null;
   /** Abo-Token (claude setup-token) — bevorzugt. */
@@ -208,7 +207,6 @@ function withKeepAlive(
 
 export type AnthropicProxyHandler = (request: Request, upstreamPath: string) => Promise<Response>;
 
-/** Modellname aus dem (JSON-)Request-Body — null bei GET/kein JSON/kein model. */
 /** Eine Route ist nutzbar, wenn sie irgendeine Auth mitbringen kann. */
 function routeUsable(route: ModelRoute): boolean {
   return route.oauthToken != null || route.apiKey != null;

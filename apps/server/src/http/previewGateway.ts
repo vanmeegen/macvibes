@@ -196,29 +196,18 @@ interface WsProxyData {
   pending: (string | Buffer)[];
 }
 
-const NOT_READY_HTML =
-  '<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;color:#888;' +
-  'background:#0d0d0d;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">' +
-  'Preview nicht bereit …</body>';
-
-function notReady(): Response {
-  return new Response(NOT_READY_HTML, {
-    status: 503,
-    headers: { 'content-type': 'text/html; charset=utf-8' },
-  });
+/** Schlichte Hinweisseite fürs iframe (Preview noch nicht da / nicht angemeldet). */
+function hinweisSeite(status: number, text: string): Response {
+  return new Response(
+    '<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;color:#888;' +
+      'background:#0d0d0d;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">' +
+      `${text}</body>`,
+    { status, headers: { 'content-type': 'text/html; charset=utf-8' } },
+  );
 }
 
-const UNAUTHORIZED_HTML =
-  '<!doctype html><meta charset="utf-8"><body style="font-family:sans-serif;color:#888;' +
-  'background:#0d0d0d;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">' +
-  'Bitte zuerst in macvibes anmelden.</body>';
-
-function unauthorized(): Response {
-  return new Response(UNAUTHORIZED_HTML, {
-    status: 401,
-    headers: { 'content-type': 'text/html; charset=utf-8' },
-  });
-}
+const notReady = (): Response => hinweisSeite(503, 'Preview nicht bereit …');
+const unauthorized = (): Response => hinweisSeite(401, 'Bitte zuerst in macvibes anmelden.');
 
 /**
  * Kurzlebiger Positiv-Cache für Session-Prüfungen. Eine Preview-Seite löst

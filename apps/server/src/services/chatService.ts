@@ -54,6 +54,11 @@ interface QueuedTurn {
 const WEITER_HINWEIS =
   'Der Zwischenstand bleibt erhalten — mit „weiter" setzt der Agent an dieser Stelle fort.';
 
+/** System-Zeile nach einem Abbruch — mit Weiter-Hinweis, wenn schon Arbeit sichtbar war. */
+function abbruchText(sawArbeit: boolean): string {
+  return 'Turn abgebrochen' + (sawArbeit ? ` — ${WEITER_HINWEIS}` : '');
+}
+
 interface ProjectChatState {
   queue: QueuedTurn[];
   pumpRunning: boolean;
@@ -367,11 +372,7 @@ export class ChatService {
     if (input.interrupt === true) {
       this.abortActiveTurn(state, turnId);
     }
-    // Kein floating void (F18): ohne Rejection-Handler beendet ein Fehler in
-    // der Pump den ganzen Serverprozess.
-    this.pump(input.projectId).catch((error: unknown) => {
-      console.error(`Chat-Pump für ${input.projectId} abgebrochen:`, error);
-    });
+    this.startPump(input.projectId);
   }
 
   /**
@@ -435,11 +436,7 @@ export class ChatService {
     if (lastRow === undefined || lastRow.role !== 'user') return false;
     const state = this.state(projectId);
     state.queue.push({ turnId: lastRow.turnId, prompt: lastRow.content, workspaceDir });
-    // Kein floating void (F18): ohne Rejection-Handler beendet ein Fehler in
-    // der Pump den ganzen Serverprozess.
-    this.pump(projectId).catch((error: unknown) => {
-      console.error(`Chat-Pump für ${projectId} abgebrochen:`, error);
-    });
+    this.startPump(projectId);
     return true;
   }
 
@@ -594,6 +591,28 @@ export class ChatService {
     for (const subscriber of state.subscribers) {
       subscriber({ message, turnActive });
     }
+  }
+
+  /**
+   * Startet die Pump ohne floating void (F18): ohne Rejection-Handler beendet
+   * ein Fehler in der Pump den ganzen Serverprozess.
+   */
+  private startPump(projectId: string): void {
+    this.pump(projectId).catch((error: unknown) => {
+      console.error(`Chat-Pump für ${projectId} abgebrochen:`, error);
+    });
+  }
+
+  /**
+   * Sichert die Agent-Session samt Modell am Projekt (R9). Das Modell gehört
+   * dazu: ein späterer Modellwechsel darf diese Session NICHT fortsetzen
+   * (--resume + anderes --model hängt).
+   */
+  private async saveSession(projectId: string, sessionId: string, model: string): Promise<void> {
+    await this.db
+      .update(projects)
+      .set({ claudeSessionId: sessionId, claudeSessionModel: model })
+      .where(eq(projects.id, projectId));
   }
 
   private async insertMessage(
@@ -1012,10 +1031,7 @@ export class ChatService {
           // Session-ID früh sichern — überlebt auch einen abgebrochenen Turn (R9).
           // Modell mitschreiben: ein späterer Modellwechsel darf diese Session
           // NICHT fortsetzen (--resume + anderes --model hängt).
-          await this.db
-            .update(projects)
-            .set({ claudeSessionId: event.sessionId, claudeSessionModel: model })
-            .where(eq(projects.id, projectId));
+          await this.saveSession(projectId, event.sessionId, model);
           break;
         case 'api-retry':
           // Sichtbar machen (R6) — aber nur einmal pro Turn, kein Retry-Spam.
@@ -1035,16 +1051,13 @@ export class ChatService {
           // Nutzerabbruch folgt kein Retry, also ist dieser Versuch der letzte
           // — die Rückmeldung MUSS dann sichtbar sein.
           if (benutzerAbbruch || sawMeaningful || isLastAttempt) {
-            await insert('system', 'Turn abgebrochen' + (sawArbeit ? ` — ${WEITER_HINWEIS}` : ''));
+            await insert('system', abbruchText(sawArbeit));
           }
           break;
         case 'turn-completed':
           completed = true;
           if (event.sessionId !== null) {
-            await this.db
-              .update(projects)
-              .set({ claudeSessionId: event.sessionId, claudeSessionModel: model })
-              .where(eq(projects.id, projectId));
+            await this.saveSession(projectId, event.sessionId, model);
           }
           break;
       }
@@ -1070,7 +1083,7 @@ export class ChatService {
             // nächsten Öffnen erneut aus) und mangels lastRow würde
             // turnActive:false nie publiziert („Agent arbeitet" für immer).
             // Gleiches Vokabular wie der turn-aborted-Pfad, EIN Stop-Bild im UI.
-            await insert('system', 'Turn abgebrochen' + (sawArbeit ? ` — ${WEITER_HINWEIS}` : ''));
+            await insert('system', abbruchText(sawArbeit));
           } else if (sawMeaningful || isLastAttempt) {
             const usedMs = sawAnyEvent ? timeouts.idleMs : firstEventBudget;
             const secs = Math.round(usedMs / 1000);

@@ -15,3 +15,22 @@ export class DomainError extends Error {
     this.name = 'DomainError';
   }
 }
+
+/** Strukturelle Sicht auf ein Zod-Schema — core bleibt frei von der zod-Abhängigkeit. */
+interface SafeParser<T> {
+  safeParse(
+    value: unknown,
+  ): { success: true; data: T } | { success: false; error: { issues: { message: string }[] } };
+}
+
+/**
+ * Validiert `value` gegen ein Schema und liefert den geparsten Wert; bei
+ * Verstoß fliegt ein DomainError mit der ersten Schema-Meldung (sonst `fallback`).
+ */
+export function parseOrThrow<T>(schema: SafeParser<T>, value: unknown, fallback: string): T {
+  const result = schema.safeParse(value);
+  if (!result.success) {
+    throw new DomainError(result.error.issues[0]?.message ?? fallback);
+  }
+  return result.data;
+}

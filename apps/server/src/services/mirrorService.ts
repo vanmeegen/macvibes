@@ -1,4 +1,4 @@
-import { runGit } from '../core/gitService';
+import { listBranches, runGit } from '../core/gitService';
 
 export type MirrorResult = 'pushed' | 'no-changes' | 'skipped' | 'error';
 
@@ -27,8 +27,7 @@ export async function mirrorToGitHub(
   }
   try {
     // Nur pushen, wenn es lokale Refs gibt (frisches Repo hat keine).
-    const refs = await runGit(['for-each-ref', 'refs/heads'], config.bareRepoPath);
-    if (refs.trim().length === 0) {
+    if ((await listBranches(config.bareRepoPath)).length === 0) {
       return 'no-changes';
     }
     // --mirror hält GitHub exakt deckungsgleich (auch gelöschte Branches).

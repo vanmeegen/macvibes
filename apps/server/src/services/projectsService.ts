@@ -10,7 +10,7 @@ import {
 import { DEFAULT_AGENT_MODEL, allAgentModels, isKnownAgentModel } from '../agent/agentModel';
 import type { Db } from '../db/client';
 import { projects, users, type ProjectRow, type UserRow } from '../db/schema';
-import { DomainError } from '../core/errors';
+import { DomainError, parseOrThrow } from '../core/errors';
 import {
   createProjectBranch,
   deleteBranch,
@@ -57,6 +57,13 @@ export async function requireProject(db: Db, id: string): Promise<ProjectWithOwn
     throw new DomainError('Projekt nicht gefunden');
   }
   return project;
+}
+
+/** Owner ODER Admin — sonst DomainError („… kann ein Projekt <verb>"). */
+function assertOwnerOrAdmin(project: ProjectWithOwner, currentUser: UserRow, verb: string): void {
+  if (project.ownerId !== currentUser.id && currentUser.role !== 'admin') {
+    throw new DomainError(`Nur der Eigentümer oder ein Admin kann ein Projekt ${verb}`);
+  }
 }
 
 /**
@@ -204,11 +211,7 @@ async function resolveNewProjectName(
   owner: UserRow,
   rawName: string,
 ): Promise<{ name: string; branchName: string }> {
-  const nameResult = projectNameSchema.safeParse(rawName);
-  if (!nameResult.success) {
-    throw new DomainError(nameResult.error.issues[0]?.message ?? 'Ungültiger Projektname');
-  }
-  const name = nameResult.data;
+  const name = parseOrThrow(projectNameSchema, rawName, 'Ungültiger Projektname');
 
   const duplicate = await db
     .select({ id: projects.id, name: projects.name })
@@ -266,16 +269,10 @@ export async function renameProject(
   id: string,
   newName: string,
 ): Promise<ProjectWithOwner> {
-  const nameResult = projectNameSchema.safeParse(newName);
-  if (!nameResult.success) {
-    throw new DomainError(nameResult.error.issues[0]?.message ?? 'Ungültiger Projektname');
-  }
-  const name = nameResult.data;
+  const name = parseOrThrow(projectNameSchema, newName, 'Ungültiger Projektname');
 
   const project = await requireProject(db, id);
-  if (project.ownerId !== currentUser.id && currentUser.role !== 'admin') {
-    throw new DomainError('Nur der Eigentümer oder ein Admin kann ein Projekt umbenennen');
-  }
+  assertOwnerOrAdmin(project, currentUser, 'umbenennen');
 
   // Duplikate im Namensraum des EIGENTÜMERS prüfen — auch wenn ein Admin
   // ein fremdes Projekt umbenennt.
@@ -304,9 +301,7 @@ export async function assertCanDeleteProject(
   id: string,
 ): Promise<void> {
   const project = await requireProject(db, id);
-  if (project.ownerId !== currentUser.id && currentUser.role !== 'admin') {
-    throw new DomainError('Nur der Eigentümer oder ein Admin kann ein Projekt löschen');
-  }
+  assertOwnerOrAdmin(project, currentUser, 'löschen');
 }
 
 export async function deleteProject(
