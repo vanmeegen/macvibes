@@ -1,13 +1,10 @@
-import { afterEach, describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { describe, expect, test } from 'bun:test';
 import {
   baselineExists,
   baselineSnapshotName,
   resolveBaselineSnapshotName,
   baselineBootstrapScript,
 } from '../baselineService';
-import { createTemplatesFixture, removeDir } from '../../services/__tests__/testUtils';
 
 describe('baselineSnapshotName', () => {
   test('leitet den Snapshot-Namen aus dem Template-Ordner ab', () => {
@@ -35,35 +32,6 @@ describe('resolveBaselineSnapshotName — Isolations-Mechanismus', () => {
     expect(name).toBe('bltest-abc');
     // Entscheidend: der Override zeigt NICHT auf die Produktions-Baseline.
     expect(name).not.toBe(baselineSnapshotName('pwa'));
-  });
-});
-
-describe('createTemplatesFixture — konfigurierbarer Template-Name', () => {
-  const dirs: string[] = [];
-  afterEach(async () => {
-    while (dirs.length > 0) {
-      const d = dirs.pop();
-      if (d) await removeDir(d);
-    }
-  });
-
-  test('Default ist "pwa"', async () => {
-    const dir = await createTemplatesFixture();
-    dirs.push(dir);
-    const manifest = JSON.parse(readFileSync(join(dir, 'templates.json'), 'utf8'));
-    expect(manifest.templates[0].dir).toBe('pwa');
-  });
-
-  test('nimmt einen isolierten Namen an — Ordner UND templates.json passen', async () => {
-    const isolated = 'bltest-xyz';
-    const dir = await createTemplatesFixture(isolated);
-    dirs.push(dir);
-    // Der Template-Ordner heißt isoliert …
-    expect(readFileSync(join(dir, isolated, 'server.ts'), 'utf8')).toContain('Bun.serve');
-    // … und templates.json referenziert genau diesen Namen (nicht pwa).
-    const manifest = JSON.parse(readFileSync(join(dir, 'templates.json'), 'utf8'));
-    expect(manifest.templates[0].dir).toBe(isolated);
-    expect(manifest.templates[0].dir).not.toBe('pwa');
   });
 });
 

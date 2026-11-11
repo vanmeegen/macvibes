@@ -85,13 +85,15 @@ describe('AgentGateway', () => {
     expect(h.gateway.isConnected('sb-1')).toBe(false);
   });
 
-  test('fehlender sandbox-Parameter wird abgewiesen', async () => {
+  test('ohne sandbox-Parameter gilt die Identität aus dem Token', async () => {
+    // Seit F4 bestimmt allein das Token die Sandbox; der Parameter darf ihr
+    // nur nicht WIDERSPRECHEN (s. „fremde Sandbox mit eigenem Token"). Fehlt
+    // er ganz, wird die Verbindung der Sandbox des Tokens zugeordnet.
     const h = makeHarness();
-    await expect(
-      openSocket(
-        `ws://localhost:${h.server.port}${AGENT_GATEWAY_PATH}?token=${TOKEN}&sandbox=sb-2`,
-      ),
-    ).rejects.toThrow();
+    await openSocket(`ws://localhost:${h.server.port}${AGENT_GATEWAY_PATH}?token=${TOKEN}`);
+    await h.gateway.waitForConnection('sb-1', 2000);
+    expect(h.gateway.isConnected('sb-1')).toBe(true);
+    expect(h.gateway.isConnected('sb-2')).toBe(false);
   });
 
   test('Nachrichten des Daemons erreichen Abonnenten der Sandbox — valide geparst', async () => {
@@ -362,9 +364,14 @@ describe('Sandbox-Identität kommt aus dem Token (F4)', () => {
   });
 
   test('ein widerrufenes Token wird abgewiesen', async () => {
-    const eigene = createVmTokenRegistry();
-    const token = eigene.mint('sb-x');
-    eigene.revoke('sb-x');
-    expect(eigene.lookup(token)).toBeNull();
+    const h = makeHarness();
+    const token = tokens.mint('sb-widerruf');
+    // Gegenprobe: solange das Token gilt, kommt die Verbindung zustande.
+    const ws = await openSocket(h.url('sb-widerruf', token));
+    ws.close();
+    await waitForClose(ws);
+
+    tokens.revoke('sb-widerruf');
+    await expect(openSocket(h.url('sb-widerruf', token))).rejects.toThrow();
   });
 });

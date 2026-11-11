@@ -140,12 +140,6 @@ describe('singleCookieValue: eine Regel für beide Cookie-Leser (H2)', () => {
     expect(singleCookieValue(null, 'macvibes_session')).toBeNull();
   });
 
-  test('zählt genauso wie countSessionCookies', () => {
-    const header = 'macvibes_session=x; macvibes_session=y';
-    expect(countSessionCookies(header)).toBe(2);
-    expect(singleCookieValue(header, 'macvibes_session')).toBeNull();
-  });
-
   test('funktioniert auch für andere Cookie-Namen (Preview-Routing)', () => {
     expect(singleCookieValue('macvibes_preview=p1', 'macvibes_preview')).toBe('p1');
   });

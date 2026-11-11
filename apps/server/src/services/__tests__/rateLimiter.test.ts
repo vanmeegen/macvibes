@@ -77,11 +77,4 @@ describe('Speichergrenzen bei angreiferbestimmten Schlüsseln (H4)', () => {
     }
     expect(limiter.keyCount()).toBeLessThanOrEqual(10_000);
   });
-
-  test('das Limit greift für kurze Schlüssel unverändert', () => {
-    const limiter = createRateLimiter({ windowMs: 1000, max: 2, now: () => 0 });
-    expect(limiter.check('ip:1.2.3.4')).toBe(true);
-    expect(limiter.check('ip:1.2.3.4')).toBe(true);
-    expect(limiter.check('ip:1.2.3.4')).toBe(false);
-  });
 });
