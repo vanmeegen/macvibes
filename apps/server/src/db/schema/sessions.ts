@@ -2,7 +2,7 @@ import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { users } from './users';
 
 export const sessions = sqliteTable('sessions', {
-  /** Der Session-Token selbst (kryptografisch zufällig). */
+  /** SHA-256 des Session-Tokens (authService.sessionKey) — nie der Token selbst. */
   id: text('id').primaryKey(),
   userId: text('user_id')
     .notNull()

@@ -47,10 +47,6 @@ export const FIXED_SHUTDOWN_STEP_TIMEOUTS_MS = {
   'Preview-Gateway': 10_000,
 } as const;
 
-/** Name eines registrierten Abschaltschritts. */
-export type ShutdownStepName =
-  keyof typeof FIXED_SHUTDOWN_STEP_TIMEOUTS_MS | 'Sandboxes (inkl. Auto-Commit)';
-
 /** Fixkosten des stopAll selbst (Signal-/Prozessabbau, VM-Stopps parallel). */
 const SANDBOX_SHUTDOWN_BASE_MS = 5_000;
 /** Auto-Commit inkl. `git push`, seriell PRO VM auf demselben Host. */

@@ -13,11 +13,6 @@ import { getProject, getProjectOwned } from './projectsService';
  */
 export const MAX_MESSAGE_CHARS = 200_000;
 
-/**
- * Wie viele Zeilen die Kontext-Wiederherstellung höchstens aus der DB holt.
- * Sie behält davon 30 (nur user/assistant, ohne den laufenden Turn) — vorher
- * wurde dafür die KOMPLETTE Historie des Projekts geladen.
- */
 export interface ChatEventPayload {
   message: ChatMessageRow;
   /** Läuft für dieses Projekt gerade (oder gleich, Queue) ein Agent-Turn? */
@@ -280,7 +275,7 @@ export class ChatService {
     // und belegte damit deren Ein-Turn-Daemon.
     if (projectRow === undefined || projectRow.ownerId !== user.id) return;
     if (projectRow.claudeSessionId != null) return;
-    const model = projectRow?.agentModel ?? DEFAULT_AGENT_MODEL;
+    const model = projectRow.agentModel;
     // Langsame lokale Modelle NICHT vorwärmen: der minutenlange Warmup belegt
     // den Ein-Turn-Daemon und der erste echte Prompt würde abgewiesen.
     if (isSlowAgentModel(model)) return;
@@ -799,7 +794,6 @@ export class ChatService {
     if (convo.length === 0) return prompt;
     const MAX_CHARS = 8_000;
     let verlauf = convo
-      .slice(-30)
       .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
       .join('\n\n');
     if (verlauf.length > MAX_CHARS) verlauf = `…\n\n${verlauf.slice(-MAX_CHARS)}`;

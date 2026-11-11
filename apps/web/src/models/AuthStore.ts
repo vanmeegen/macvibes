@@ -8,7 +8,6 @@ const USER_FIELDS = /* GraphQL */ `
   username
   role
   approved
-  createdAt
 `;
 
 const ME_QUERY = /* GraphQL */ `

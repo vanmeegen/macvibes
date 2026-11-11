@@ -98,7 +98,7 @@ export const MSB_HOST_ALIAS = 'host.microsandbox.internal';
  * `bun add` nachinstallierten Delta-Pakete über VM-Neustarts hinweg —
  * der Boot-Delta-Install bedient sich daraus (offline-fähig).
  */
-export const BUN_CACHE_GUEST_DIR = '/bun-cache';
+const BUN_CACHE_GUEST_DIR = '/bun-cache';
 
 /**
  * Echter Sandbox-Provider auf microsandbox-MicroVMs (libkrun).

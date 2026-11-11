@@ -57,7 +57,7 @@ export function spawnShellCommand(
  * weg) werden gemeldet, nicht geworfen — kill ist best effort, die Aufrufer
  * warten ohnehin auf `exited`.
  */
-export function killTree(pid: number): void {
+function killTree(pid: number): void {
   treeKill(pid, 'SIGTERM', (error) => {
     if (error) console.warn(`Prozessbaum ${pid} konnte nicht beendet werden:`, error.message);
   });

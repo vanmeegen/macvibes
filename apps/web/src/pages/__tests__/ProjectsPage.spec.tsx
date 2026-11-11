@@ -19,28 +19,22 @@ const projects: Project[] = [
   {
     id: 'p1',
     name: 'Mein Vibe-Projekt',
-    branchName: 'vibe/mein-vibe-projekt',
     templateDir: 'react-starter',
-    owner: { id: 'u1', username: 'alice', role: 'admin', approved: true, createdAt: 't0' },
+    owner: { id: 'u1', username: 'alice', role: 'admin', approved: true },
     agentModel: 'claude-sonnet-5',
-    createdAt: '2026-07-01T10:00:00.000Z',
     lastActivityAt: '2026-07-02T12:00:00.000Z',
     sandboxStatus: 'stopped',
-    previewHostPort: null,
     previewStatus: 'stopped',
     turnActive: false,
   },
   {
     id: 'p2',
     name: 'Bobs Projekt',
-    branchName: 'vibe/bobs-projekt',
     templateDir: 'react-starter',
-    owner: { id: 'u2', username: 'bob', role: 'user', approved: true, createdAt: 't1' },
+    owner: { id: 'u2', username: 'bob', role: 'user', approved: true },
     agentModel: 'claude-sonnet-5',
-    createdAt: '2026-07-01T10:00:00.000Z',
     lastActivityAt: '2026-07-02T12:00:00.000Z',
     sandboxStatus: 'stopped',
-    previewHostPort: null,
     previewStatus: 'stopped',
     turnActive: false,
   },
@@ -51,8 +45,6 @@ const templates: Template[] = [
     name: 'React Starter',
     description: 'Vite + React Grundgerüst',
     dir: 'react-starter',
-    devCommand: 'bun run dev',
-    previewPort: 3100,
   },
 ];
 
@@ -76,7 +68,6 @@ describe('ProjectsPage', () => {
         username: 'alice',
         role,
         approved: true,
-        createdAt: 't0',
       };
       authStore.initialized = true;
     });
@@ -109,7 +100,6 @@ describe('ProjectsPage', () => {
         username: 'alice',
         role: 'admin',
         approved: true,
-        createdAt: 't0',
       };
       authStore.initialized = true;
     });
@@ -187,7 +177,6 @@ describe('ProjectsPage', () => {
         username: 'alice',
         role: 'user',
         approved: true,
-        createdAt: 't0',
       };
       authStore.initialized = true;
     });
@@ -282,7 +271,6 @@ describe('ProjectsPage', () => {
           username: 'alice',
           role: 'user',
           approved: true,
-          createdAt: 't0',
         };
         authStore.initialized = true;
       });

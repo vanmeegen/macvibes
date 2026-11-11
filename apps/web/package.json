@@ -16,7 +16,6 @@
     "e2e:install": "playwright install chromium"
   },
   "dependencies": {
-    "@macvibes/shared": "workspace:*",
     "@emotion/react": "^11.13.5",
     "@emotion/styled": "^11.13.5",
     "@fontsource/open-sans": "^5.2.7",

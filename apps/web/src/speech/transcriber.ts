@@ -94,7 +94,7 @@ export interface ChromeSpeechRecognitionCtor {
 }
 
 /** Chromium exponiert den Konstruktor teils nur mit webkit-Präfix. */
-export function speechRecognitionCtor(): ChromeSpeechRecognitionCtor | null {
+function speechRecognitionCtor(): ChromeSpeechRecognitionCtor | null {
   const w = globalThis as {
     SpeechRecognition?: ChromeSpeechRecognitionCtor;
     webkitSpeechRecognition?: ChromeSpeechRecognitionCtor;

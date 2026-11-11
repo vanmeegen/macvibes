@@ -16,7 +16,7 @@
  * `CLAUDE_CODE_OAUTH_TOKEN` analog. `MACVIBES_`-Präfixe sind
  * Server-Konfiguration und ebenfalls tabu (s. envVarName).
  */
-export const RESERVIERTE_ENV_NAMEN: ReadonlySet<string> = new Set([
+const RESERVIERTE_ENV_NAMEN: ReadonlySet<string> = new Set([
   'ANTHROPIC_API_KEY',
   'CLAUDE_CODE_OAUTH_TOKEN',
 ]);

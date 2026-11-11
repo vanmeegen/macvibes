@@ -6,11 +6,10 @@ import { PORT_DEFAULTS } from '../../../../scripts/lib/ports';
 import { createTempDir, removeDir } from '../services/__tests__/testUtils';
 
 const tempDirs: string[] = [];
-const savedEnv = { DB_PATH: Bun.env.DB_PATH, MACVIBES_TEST_MODE: Bun.env.MACVIBES_TEST_MODE };
+const savedEnv = { DB_PATH: Bun.env.DB_PATH };
 
 afterEach(async () => {
   Bun.env.DB_PATH = savedEnv.DB_PATH;
-  Bun.env.MACVIBES_TEST_MODE = savedEnv.MACVIBES_TEST_MODE;
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (dir) await removeDir(dir);
@@ -35,7 +34,6 @@ describe('resolveDbPath (F7)', () => {
 
   test('ohne Alt-DB liegt die neue DB im macvibes-Home, nicht im Repo', async () => {
     delete Bun.env.DB_PATH;
-    delete Bun.env.MACVIBES_TEST_MODE;
     const home = await createTempDir('macvibes-home-');
     tempDirs.push(home);
     // serverRoot ohne data/ → kein Bestandsschutz, es greift der Home-Ort.
@@ -48,7 +46,6 @@ describe('resolveDbPath (F7)', () => {
 
   test('das Ergebnis hängt NICHT am Arbeitsverzeichnis (aus zwei cwd gleich)', async () => {
     delete Bun.env.DB_PATH;
-    delete Bun.env.MACVIBES_TEST_MODE;
     const home = await createTempDir('macvibes-home-');
     tempDirs.push(home);
     const serverRoot = await createTempDir('macvibes-server-');
@@ -71,7 +68,6 @@ describe('resolveDbPath (F7)', () => {
 
   test('eine bestehende DB unter <serverRoot>/data wird weiter benutzt (Bestandsschutz, cwd-unabhängig)', async () => {
     delete Bun.env.DB_PATH;
-    delete Bun.env.MACVIBES_TEST_MODE;
     const serverRoot = await createTempDir('macvibes-server-');
     tempDirs.push(serverRoot);
     mkdirSync(join(serverRoot, 'data'), { recursive: true });

@@ -19,7 +19,7 @@ export interface CookieStoreLike {
   delete(name: string): Promise<void>;
 }
 
-export function cookieStoreOf(request: Request): CookieStoreLike {
+function cookieStoreOf(request: Request): CookieStoreLike {
   const store = (request as Request & { cookieStore?: CookieStoreLike }).cookieStore;
   if (!store) {
     throw new Error('CookieStore fehlt — useCookies-Plugin nicht aktiv?');

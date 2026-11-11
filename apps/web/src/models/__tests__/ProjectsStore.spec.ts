@@ -19,14 +19,11 @@ const mockGql = vi.mocked(gqlRequest);
 function makeProject(overrides: Partial<Project> & { id: string }): Project {
   return {
     name: `Projekt ${overrides.id}`,
-    branchName: `vibe/${overrides.id}`,
     templateDir: 'react-starter',
-    owner: { id: 'u1', username: 'alice', role: 'admin', approved: true, createdAt: 't0' },
+    owner: { id: 'u1', username: 'alice', role: 'admin', approved: true },
     agentModel: 'claude-sonnet-5',
-    createdAt: '2026-07-01T10:00:00.000Z',
     lastActivityAt: '2026-07-02T12:00:00.000Z',
     sandboxStatus: 'stopped',
-    previewHostPort: null,
     previewStatus: 'stopped',
     turnActive: false,
     ...overrides,
@@ -38,8 +35,6 @@ const templates: Template[] = [
     name: 'React Starter',
     description: 'Vite + React Grundgerüst',
     dir: 'react-starter',
-    devCommand: 'bun run dev',
-    previewPort: 3100,
   },
 ];
 
@@ -47,9 +42,7 @@ function makeAuthStore(username: string | null): AuthStore {
   const authStore = new AuthStore();
   runInAction(() => {
     authStore.currentUser =
-      username === null
-        ? null
-        : { id: 'u1', username, role: 'user', approved: true, createdAt: 't0' };
+      username === null ? null : { id: 'u1', username, role: 'user', approved: true };
     authStore.initialized = true;
   });
   return authStore;
@@ -122,11 +115,11 @@ describe('ProjectsStore', () => {
         store.projects = [
           makeProject({
             id: 'p1',
-            owner: { id: 'u1', username: 'alice', role: 'admin', approved: true, createdAt: 't0' },
+            owner: { id: 'u1', username: 'alice', role: 'admin', approved: true },
           }),
           makeProject({
             id: 'p2',
-            owner: { id: 'u2', username: 'bob', role: 'user', approved: true, createdAt: 't1' },
+            owner: { id: 'u2', username: 'bob', role: 'user', approved: true },
           }),
         ];
       });
@@ -141,11 +134,11 @@ describe('ProjectsStore', () => {
         store.projects = [
           makeProject({
             id: 'p1',
-            owner: { id: 'u1', username: 'alice', role: 'admin', approved: true, createdAt: 't0' },
+            owner: { id: 'u1', username: 'alice', role: 'admin', approved: true },
           }),
           makeProject({
             id: 'p2',
-            owner: { id: 'u2', username: 'bob', role: 'user', approved: true, createdAt: 't1' },
+            owner: { id: 'u2', username: 'bob', role: 'user', approved: true },
           }),
         ];
       });
@@ -253,7 +246,7 @@ describe('copyProject („Kopieren und Anpassen" — für JEDEN User)', () => {
         makeProject({
           id: 'p-bob',
           name: 'Bobs Dashboard',
-          owner: { id: 'u2', username: 'bob', role: 'user', approved: true, createdAt: 't1' },
+          owner: { id: 'u2', username: 'bob', role: 'user', approved: true },
         }),
       ];
     });
@@ -302,7 +295,7 @@ describe('copyProject („Kopieren und Anpassen" — für JEDEN User)', () => {
 describe('canManage — Kartenmenü für Eigentümer und Admins', () => {
   const foreignProject = makeProject({
     id: 'p-bob',
-    owner: { id: 'u2', username: 'bob', role: 'user', approved: true, createdAt: 't1' },
+    owner: { id: 'u2', username: 'bob', role: 'user', approved: true },
   });
 
   it('erlaubt normalen Usern nur eigene Projekte', () => {
@@ -453,8 +446,8 @@ describe('Modellwahl pro Projekt (Dropdown im Chat)', () => {
       templates,
       previewGatewayPort: 4173,
       agentModels: [
-        { id: 'claude-sonnet-5', label: 'Claude Sonnet 5', slow: false },
-        { id: 'qwen3.6-coder', label: 'Qwen 27B (lokal)', slow: true },
+        { id: 'claude-sonnet-5', label: 'Claude Sonnet 5' },
+        { id: 'qwen3.6-coder', label: 'Qwen 27B (lokal)' },
       ],
     });
     await store.load();
@@ -497,7 +490,7 @@ describe('Status-Polling: unveränderte Antworten lösen kein Neu-Rendern aus', 
     templates,
     previewGatewayPort: 4173,
     previewGatewayHttpsPort: null,
-    agentModels: [{ id: 'claude-sonnet-5', label: 'Sonnet 5', slow: false }],
+    agentModels: [{ id: 'claude-sonnet-5', label: 'Sonnet 5' }],
   });
 
   beforeEach(() => {

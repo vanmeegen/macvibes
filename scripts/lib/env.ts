@@ -31,7 +31,7 @@ export function envWertMitDateiFallback(
 }
 
 /** Die beiden .env-Orte, die auch der Server sieht (Reihenfolge = Vorrang). */
-export function standardEnvDateien(): string[] {
+function standardEnvDateien(): string[] {
   const home = process.env['MACVIBES_HOME'] ?? join(homedir(), 'macvibes');
   return [join('apps', 'server', '.env'), join(home, '.env')];
 }

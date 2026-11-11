@@ -12,7 +12,7 @@ import { logSafe } from '../logSafe';
 import { PROXY_TOKEN_HEADER } from '../core/vmContract';
 
 /** Abo-Token (claude setup-token) werden nur mit diesem Beta-Header akzeptiert. */
-export const OAUTH_BETA = 'oauth-2025-04-20';
+const OAUTH_BETA = 'oauth-2025-04-20';
 
 function withOAuthBeta(existing: string | null): string {
   const parts = (existing ?? '')
@@ -108,7 +108,7 @@ export interface AnthropicProxyConfig {
 }
 
 /** Default für `maxBodyBytes` (H5). */
-export const DEFAULT_MAX_BODY_BYTES = 32 * 1024 * 1024;
+const DEFAULT_MAX_BODY_BYTES = 32 * 1024 * 1024;
 
 /**
  * Body als Text lesen, aber höchstens `limit` Bytes (H5). Liefert null, wenn
@@ -235,7 +235,7 @@ export type PathVerdict = 'ok' | 'unbekannter-pfad' | 'falsche-methode';
  * `<pathname><search>`; die Query bleibt frei (z. B. `?beta=true`), der
  * Pfad selbst muss exakt passen — Groß-/Kleinschreibung und `..` inklusive.
  */
-export function checkUpstreamPath(upstreamPath: string, method: string): PathVerdict {
+function checkUpstreamPath(upstreamPath: string, method: string): PathVerdict {
   const queryStart = upstreamPath.indexOf('?');
   const pathname = queryStart === -1 ? upstreamPath : upstreamPath.slice(0, queryStart);
   const matched = ALLOWED_PATHS.filter((entry) => entry.pathname.test(pathname));

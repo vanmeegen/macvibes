@@ -17,7 +17,6 @@ export interface RateLimiterOptions {
 export interface RateLimiter {
   /** true = erlaubt (und gezählt), false = Limit erreicht. */
   check(key: string): boolean;
-  reset(): void;
   /** Anzahl geführter Schlüssel — für Tests/Diagnose. */
   keyCount(): number;
   /** Summe der Schlüssellängen in Zeichen — für Tests/Diagnose. */
@@ -87,9 +86,6 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimiter {
         }
       }
       return true;
-    },
-    reset() {
-      hits.clear();
     },
     keyCount() {
       return hits.size;

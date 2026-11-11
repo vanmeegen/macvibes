@@ -80,9 +80,7 @@ export function createTargetChecker(policy: EgressPolicy = defaultEgressPolicy()
  * die Nachlässigkeit hier sicherheitsrelevant: mit einem nackten \n ließe
  * sich eine zweite Request-Line einschmuggeln, die am Policy-Check vorbeiläuft.
  */
-export function parseProxyHead(
-  head: string,
-): { requestLine: string; headerLines: string[] } | null {
+function parseProxyHead(head: string): { requestLine: string; headerLines: string[] } | null {
   if (head.includes('\n') || head.includes('\r')) {
     // Nach dem Split an \r\n darf kein einzelnes \r oder \n mehr vorkommen.
     const lines = head.split('\r\n');
@@ -113,7 +111,7 @@ export function parseProxyHead(
  * GET); null bei ungültigem oder widersprüchlichem Wert — das ist Request-
  * Smuggling-Terrain und wird abgelehnt.
  */
-export function contentLengthAus(headerLines: string[]): number | null {
+function contentLengthAus(headerLines: string[]): number | null {
   const werte = headerLines
     .filter((line) => line.toLowerCase().startsWith('content-length:'))
     .map((line) => line.slice('content-length:'.length).trim());
