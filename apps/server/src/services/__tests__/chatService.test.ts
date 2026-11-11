@@ -12,22 +12,7 @@ import {
   type ChatEventPayload,
   type ChatServiceOptions,
 } from '../chatService';
-import { createTestDb, createUser } from './testUtils';
-
-async function waitFor(
-  condition: () => boolean | Promise<boolean>,
-  // 10 s statt 3 s: erfüllte Bedingungen kehren sofort zurück, die Frist
-  // greift nur im Fehlerfall — 3 s rissen auf langsameren Maschinen
-  // (Windows-Baseline) einen korrekten Interrupt-Test.
-  timeoutMs = 10_000,
-): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    if (await condition()) return;
-    await Bun.sleep(10);
-  }
-  throw new Error('waitFor: Bedingung nicht erfüllt');
-}
+import { createTestDb, createUser, waitFor } from './testUtils';
 
 async function createProjectRow(db: Db, owner: UserRow, id = 'projekt-1'): Promise<string> {
   await db.insert(projects).values({

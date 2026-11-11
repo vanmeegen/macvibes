@@ -1,14 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { PreviewStatusPoller } from '../previewStatusPoller';
 import type { PreviewStatus } from '../provider';
-
-async function until(cond: () => boolean, timeoutMs = 1000): Promise<void> {
-  const start = Date.now();
-  while (!cond()) {
-    if (Date.now() - start > timeoutMs) throw new Error('Bedingung nicht erreicht');
-    await Bun.sleep(5);
-  }
-}
+import { waitFor } from '../../services/__tests__/testUtils';
 
 describe('PreviewStatusPoller', () => {
   test('startet als starting und übernimmt den gepollten Status', async () => {
@@ -21,10 +14,10 @@ describe('PreviewStatusPoller', () => {
 
     poller.start();
     status = 'ready';
-    await until(() => poller.getStatus() === 'ready');
+    await waitFor(() => poller.getStatus() === 'ready');
 
     status = 'failed';
-    await until(() => poller.getStatus() === 'failed');
+    await waitFor(() => poller.getStatus() === 'failed');
     poller.stop();
   });
 
@@ -47,9 +40,9 @@ describe('PreviewStatusPoller', () => {
       intervalMs: 5,
     });
     poller.start();
-    await until(() => poller.getStatus() === 'ready');
+    await waitFor(() => poller.getStatus() === 'ready');
     fail = true;
-    await until(() => poller.getStatus() === 'restarting');
+    await waitFor(() => poller.getStatus() === 'restarting');
     poller.stop();
   });
 
@@ -63,7 +56,7 @@ describe('PreviewStatusPoller', () => {
       intervalMs: 5,
     });
     poller.start();
-    await until(() => poller.getStatus() === 'ready');
+    await waitFor(() => poller.getStatus() === 'ready');
     poller.stop();
     expect(poller.getStatus()).toBe('stopped');
     const after = calls;
@@ -81,7 +74,7 @@ describe('PreviewStatusPoller', () => {
     });
     poller.start();
     status = 'ready';
-    await until(() => changes.includes('ready'));
+    await waitFor(() => changes.includes('ready'));
     poller.stop();
     expect(changes).toContain('ready');
   });
