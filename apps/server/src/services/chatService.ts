@@ -128,6 +128,12 @@ export interface ChatServiceOptions {
    * Ein-Turn-Daemon und der erste echte Prompt wird abgewiesen.
    */
   prewarmEnabled?: boolean | undefined;
+  /**
+   * Zeitfenster in ms, in dem Text-/Denk-Deltas gebündelt werden: pro Fenster
+   * EIN DB-Update und EIN Event an die Abonnenten statt eines pro Delta
+   * (sonst quadratisch in der Antwortlänge). 0 = jedes Delta sofort.
+   */
+  agentDeltaFlushMs?: number | undefined;
 }
 
 export class ChatService {
@@ -144,6 +150,8 @@ export class ChatService {
   private readonly slowFirstEventTimeoutMs: number;
   private readonly slowColdStartTimeoutMs: number;
   private readonly prewarmEnabled: boolean;
+  /** Bündel-Zeitfenster für Streaming-Deltas (s. ChatServiceOptions.agentDeltaFlushMs). */
+  private readonly deltaFlushMs: number;
 
   constructor(
     private readonly db: Db,
@@ -173,6 +181,7 @@ export class ChatService {
       this.slowIdleTimeoutMs,
     );
     this.prewarmEnabled = options.prewarmEnabled ?? true;
+    this.deltaFlushMs = options.agentDeltaFlushMs ?? 50;
   }
 
   private state(projectId: string): ProjectChatState {
@@ -549,7 +558,16 @@ export class ChatService {
     let closed = false;
 
     const push = (payload: ChatEventPayload): void => {
-      buffer.push(payload);
+      // Neuester Stand gewinnt: liegt der letzte noch ungelesene Eintrag zur
+      // SELBEN Zeile vor (Streaming), wird er ersetzt statt ein weiterer
+      // Voll-Schnappschuss angehängt. Ein langsamer Abonnent hält so pro Zeile
+      // einen Stand statt einer wachsenden Reihe; Clients upserten per ID.
+      const letzter = buffer[buffer.length - 1];
+      if (letzter !== undefined && letzter.message.id === payload.message.id) {
+        buffer[buffer.length - 1] = payload;
+      } else {
+        buffer.push(payload);
+      }
       notify?.();
     };
     state.subscribers.add(push);
@@ -935,10 +953,44 @@ export class ChatService {
     // Terminal-Zeile einen Zwischenstand, den es nicht gibt.
     let sawArbeit = false;
 
+    // Gebündeltes Streaming: Deltas landen sofort im Speicher (assistantRow/
+    // thinkingRow/lastRow tragen immer den vollen Text), in die DB und an die
+    // Abonnenten gehen sie höchstens einmal pro Zeitfenster. Ohne Bündelung
+    // schrieb und sendete JEDES Delta die ganze Zeile neu — quadratisch in der
+    // Antwortlänge, auf dem Event-Loop, den sich Proxy und Gateways teilen.
+    const offeneDeltas = new Map<string, ChatMessageRow>();
+    let flushTimer: ReturnType<typeof setTimeout> | undefined;
+    // Schreibvorgänge strikt hintereinander: der Timer feuert neben der
+    // Event-Schleife, die Stände einer Zeile dürfen sich nie überholen.
+    let flushKette: Promise<void> = Promise.resolve();
+    const flushDeltas = (): Promise<void> => {
+      if (flushTimer !== undefined) {
+        clearTimeout(flushTimer);
+        flushTimer = undefined;
+      }
+      const lauf = flushKette.then(async () => {
+        const rows = [...offeneDeltas.values()];
+        offeneDeltas.clear();
+        for (const row of rows) {
+          await this.db
+            .update(chatMessages)
+            .set({ content: row.content })
+            .where(eq(chatMessages.id, row.id));
+          this.publish(projectId, row, true);
+        }
+      });
+      // Ein gescheiterter Lauf (Projekt gelöscht) darf die Kette nicht vergiften.
+      flushKette = lauf.catch(() => {});
+      return lauf;
+    };
+
+    // Jede NEUE Zeile schließt vorher die laufenden ab — Reihenfolge und Inhalt
+    // stimmen so auch dann, wenn das Zeitfenster noch nicht abgelaufen ist.
     const insert = async (
       role: ChatMessageRow['role'],
       content: string,
     ): Promise<ChatMessageRow> => {
+      await flushDeltas();
       lastRow = await this.insertMessage(projectId, turn.turnId, role, content);
       return lastRow;
     };
@@ -960,12 +1012,23 @@ export class ChatService {
         return insert(role, text);
       }
       const updated: ChatMessageRow = { ...current, content: current.content + text };
-      await this.db
-        .update(chatMessages)
-        .set({ content: updated.content })
-        .where(eq(chatMessages.id, updated.id));
-      this.publish(projectId, updated, true);
       lastRow = updated;
+      offeneDeltas.set(updated.id, updated);
+      if (this.deltaFlushMs <= 0) {
+        await flushDeltas();
+      } else {
+        // Ein Timer pro Fenster — er schreibt auch dann, wenn kein weiteres
+        // Event mehr kommt (der Agent denkt nach), der Text bleibt nie hängen.
+        flushTimer ??= setTimeout(() => {
+          flushTimer = undefined;
+          flushDeltas().catch((error: unknown) => {
+            console.error(
+              `Streaming-Stand für ${projectId} konnte nicht gespeichert werden:`,
+              error,
+            );
+          });
+        }, this.deltaFlushMs);
+      }
       return updated;
     };
 
@@ -1024,6 +1087,7 @@ export class ChatService {
           break;
         case 'block-stop':
           // Blockgrenze: die nächste Text-/Denk-Sequenz startet eine neue Bubble.
+          await flushDeltas();
           assistantRow = null;
           thinkingRow = null;
           break;
@@ -1118,6 +1182,17 @@ export class ChatService {
       }
     } finally {
       state.currentHandle = null;
+      // Rest schreiben, BEVOR das Turn-Ende signalisiert wird — sonst stünde in
+      // der DB ein älterer Stand als im letzten Event. Darf nicht werfen (F18,
+      // wie der Fehler-Insert oben: Projekt während des Turns gelöscht).
+      try {
+        await flushDeltas();
+      } catch (flushError) {
+        console.error(
+          `Streaming-Stand für ${projectId} konnte nicht gespeichert werden (Projekt gelöscht?):`,
+          flushError,
+        );
+      }
     }
 
     return { completed, sawMeaningful, lastRow, benutzerAbbruch };
