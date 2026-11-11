@@ -2,6 +2,7 @@ import { makeAutoObservable, runInAction } from 'mobx';
 import { toErrorMessage } from '../api/errors';
 import { gqlRequest } from '../api/graphqlClient';
 import type { AgentModelInfo, Project, Template } from '../api/types';
+import { NameDialogModel } from './NameDialogModel';
 import type { AuthStore } from './AuthStore';
 
 export type ProjectFilter = 'mine' | 'all';
@@ -188,18 +189,10 @@ export class ProjectsStore {
   loading = false;
   /** Projekt-ID, für die gerade der Lösch-Bestätigungsdialog offen ist. */
   pendingDeleteId: string | null = null;
-  /** Projekt-ID, für die gerade der Kopieren-Dialog offen ist. */
-  pendingCopyId: string | null = null;
-  /** Eingabewert im Kopieren-Dialog (vorgefüllt mit „<Name> Kopie"). */
-  copyName = '';
-  /** Fehler im Kopieren-Dialog — der Dialog bleibt offen, Name korrigierbar. */
-  copyError: string | null = null;
-  /** Projekt-ID, für die gerade der Umbenennen-Dialog offen ist. */
-  pendingRenameId: string | null = null;
-  /** Eingabewert im Umbenennen-Dialog (vorgefüllt mit dem aktuellen Namen). */
-  renameName = '';
-  /** Fehler im Umbenennen-Dialog — der Dialog bleibt offen, Name korrigierbar. */
-  renameError: string | null = null;
+  /** Kopieren-Dialog (Name vorgefüllt mit „<Name> Kopie"). */
+  readonly copyDialog = new NameDialogModel('ProjectsStore.confirmCopy');
+  /** Umbenennen-Dialog (Name vorgefüllt mit dem aktuellen Namen). */
+  readonly renameDialog = new NameDialogModel('ProjectsStore.confirmRename');
   /** Interval-Handle fürs Status-Polling — bewusst nicht observable. */
   pollTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -244,32 +237,17 @@ export class ProjectsStore {
     this.pendingDeleteId = id;
   }
 
-  get pendingCopyProject(): Project | null {
-    if (this.pendingCopyId === null) {
-      return null;
-    }
-    return this.projects.find((p) => p.id === this.pendingCopyId) ?? null;
+  private projectById(id: string | null): Project | null {
+    return id === null ? null : (this.projects.find((p) => p.id === id) ?? null);
   }
 
-  get canConfirmCopy(): boolean {
-    return this.copyName.trim().length > 0;
+  get pendingCopyProject(): Project | null {
+    return this.projectById(this.copyDialog.projectId);
   }
 
   requestCopy(id: string): void {
-    const project = this.projects.find((p) => p.id === id);
-    this.pendingCopyId = id;
-    this.copyName = project ? `${project.name} Kopie` : '';
-    this.copyError = null;
-  }
-
-  cancelCopy(): void {
-    this.pendingCopyId = null;
-    this.copyError = null;
-  }
-
-  setCopyName(name: string): void {
-    this.copyName = name;
-    this.copyError = null;
+    const project = this.projectById(id);
+    this.copyDialog.open(id, project ? `${project.name} Kopie` : '');
   }
 
   /**
@@ -277,58 +255,25 @@ export class ProjectsStore {
    * (für die Navigation in den Chat). Bei Server-Fehler (z. B. doppelter Name)
    * bleibt der Dialog offen.
    */
-  async confirmCopy(): Promise<string | null> {
-    const sourceId = this.pendingCopyId;
-    const name = this.copyName.trim();
-    if (sourceId === null || name.length === 0) {
-      return null;
-    }
-    try {
+  confirmCopy(): Promise<string | null> {
+    return this.copyDialog.confirm(async (sourceId, name) => {
       const data = await gqlRequest<{ copyProject: Project }>(COPY_PROJECT_MUTATION, {
         sourceId,
         name,
       });
       runInAction(() => {
         this.projects = [data.copyProject, ...this.projects];
-        this.pendingCopyId = null;
-        this.copyError = null;
       });
       return data.copyProject.id;
-    } catch (err) {
-      console.error('ProjectsStore.confirmCopy fehlgeschlagen', err);
-      runInAction(() => {
-        this.copyError = toErrorMessage(err);
-      });
-      return null;
-    }
+    });
   }
 
   get pendingRenameProject(): Project | null {
-    if (this.pendingRenameId === null) {
-      return null;
-    }
-    return this.projects.find((p) => p.id === this.pendingRenameId) ?? null;
-  }
-
-  get canConfirmRename(): boolean {
-    return this.renameName.trim().length > 0;
+    return this.projectById(this.renameDialog.projectId);
   }
 
   requestRename(id: string): void {
-    const project = this.projects.find((p) => p.id === id);
-    this.pendingRenameId = id;
-    this.renameName = project?.name ?? '';
-    this.renameError = null;
-  }
-
-  cancelRename(): void {
-    this.pendingRenameId = null;
-    this.renameError = null;
-  }
-
-  setRenameName(name: string): void {
-    this.renameName = name;
-    this.renameError = null;
+    this.renameDialog.open(id, this.projectById(id)?.name ?? '');
   }
 
   /**
@@ -336,12 +281,7 @@ export class ProjectsStore {
    * Name) bleibt der Dialog offen, damit der Name korrigiert werden kann.
    */
   async confirmRename(): Promise<boolean> {
-    const id = this.pendingRenameId;
-    const name = this.renameName.trim();
-    if (id === null || name.length === 0) {
-      return false;
-    }
-    try {
+    const renamed = await this.renameDialog.confirm(async (id, name) => {
       const data = await gqlRequest<{ renameProject: { id: string; name: string } }>(
         RENAME_PROJECT_MUTATION,
         { id, name },
@@ -351,17 +291,10 @@ export class ProjectsStore {
         if (project) {
           project.name = data.renameProject.name;
         }
-        this.pendingRenameId = null;
-        this.renameError = null;
       });
       return true;
-    } catch (err) {
-      console.error('ProjectsStore.confirmRename fehlgeschlagen', err);
-      runInAction(() => {
-        this.renameError = toErrorMessage(err);
-      });
-      return false;
-    }
+    });
+    return renamed ?? false;
   }
 
   cancelDelete(): void {

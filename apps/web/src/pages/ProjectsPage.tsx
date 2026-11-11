@@ -40,6 +40,7 @@ import { useNavigate } from 'react-router-dom';
 import type { Project } from '../api/types';
 import type { AuthStore } from '../models/AuthStore';
 import type { CreateProjectModel } from '../models/CreateProjectModel';
+import type { NameDialogModel } from '../models/NameDialogModel';
 import type { ProjectFilter, ProjectsStore } from '../models/ProjectsStore';
 import { formatTimestamp, projectStatusChip } from '../models/ProjectsStore';
 
@@ -258,6 +259,75 @@ const CreateProjectDialog = observer(function CreateProjectDialog({
   );
 });
 
+/**
+ * Dialog „Namen eingeben" zu einem Projekt — gemeinsame Darstellung für
+ * Kopieren und Umbenennen. `testPrefix` bildet die Testselektoren
+ * (`<prefix>-project-name`, `-project-error`, `-cancel`, `-confirm`).
+ */
+const NameDialog = observer(function NameDialog({
+  dialog,
+  open,
+  title,
+  hint,
+  fieldLabel,
+  confirmLabel,
+  testPrefix,
+  onConfirm,
+}: {
+  dialog: NameDialogModel;
+  open: boolean;
+  title: string;
+  hint?: string;
+  fieldLabel: string;
+  confirmLabel: string;
+  testPrefix: string;
+  onConfirm: () => void;
+}): JSX.Element {
+  return (
+    // disableRestoreFocus: sonst klaut MUIs Focus-Restore dem Namensfeld den
+    // Autofokus beim Öffnen des Dialogs.
+    <Dialog open={open} onClose={dialog.cancel} fullWidth maxWidth="sm" disableRestoreFocus>
+      <DialogTitle>{title}</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ mt: 1 }}>
+          {hint !== undefined && <DialogContentText>{hint}</DialogContentText>}
+          {dialog.error !== null && (
+            <Alert severity="error" data-testselector={`${testPrefix}-project-error`}>
+              {dialog.error}
+            </Alert>
+          )}
+          <TextField
+            label={fieldLabel}
+            value={dialog.name}
+            onChange={(e) => dialog.setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && dialog.canConfirm) {
+                e.preventDefault();
+                onConfirm();
+              }
+            }}
+            autoFocus
+            inputProps={{ 'data-testselector': `${testPrefix}-project-name` }}
+          />
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={dialog.cancel} color="inherit" data-testselector={`${testPrefix}-cancel`}>
+          Abbrechen
+        </Button>
+        <Button
+          variant="contained"
+          onClick={onConfirm}
+          disabled={!dialog.canConfirm}
+          data-testselector={`${testPrefix}-confirm`}
+        >
+          {confirmLabel}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+});
+
 const CopyProjectDialog = observer(function CopyProjectDialog({
   projectsStore,
   onCopied,
@@ -274,56 +344,16 @@ const CopyProjectDialog = observer(function CopyProjectDialog({
     }
   };
   return (
-    // disableRestoreFocus: sonst klaut MUIs Focus-Restore dem Namensfeld den
-    // Autofokus beim Öffnen des Dialogs.
-    <Dialog
+    <NameDialog
+      dialog={projectsStore.copyDialog}
       open={project !== null}
-      onClose={projectsStore.cancelCopy}
-      fullWidth
-      maxWidth="sm"
-      disableRestoreFocus
-    >
-      <DialogTitle>„{project?.name ?? ''}" kopieren und anpassen</DialogTitle>
-      <DialogContent>
-        <Stack spacing={2} sx={{ mt: 1 }}>
-          <DialogContentText>
-            Legt ein neues Projekt unter deinem Namen an — aufsetzend auf dem aktuellen
-            Entwicklungsstand des Originals (das Original bleibt unberührt).
-          </DialogContentText>
-          {projectsStore.copyError !== null && (
-            <Alert severity="error" data-testselector="copy-project-error">
-              {projectsStore.copyError}
-            </Alert>
-          )}
-          <TextField
-            label="Name des neuen Projekts"
-            value={projectsStore.copyName}
-            onChange={(e) => projectsStore.setCopyName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && projectsStore.canConfirmCopy) {
-                e.preventDefault();
-                void submit();
-              }
-            }}
-            autoFocus
-            inputProps={{ 'data-testselector': 'copy-project-name' }}
-          />
-        </Stack>
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={projectsStore.cancelCopy} color="inherit" data-testselector="copy-cancel">
-          Abbrechen
-        </Button>
-        <Button
-          variant="contained"
-          onClick={() => void submit()}
-          disabled={!projectsStore.canConfirmCopy}
-          data-testselector="copy-confirm"
-        >
-          Kopieren
-        </Button>
-      </DialogActions>
-    </Dialog>
+      title={`„${project?.name ?? ''}" kopieren und anpassen`}
+      hint="Legt ein neues Projekt unter deinem Namen an — aufsetzend auf dem aktuellen Entwicklungsstand des Originals (das Original bleibt unberührt)."
+      fieldLabel="Name des neuen Projekts"
+      confirmLabel="Kopieren"
+      testPrefix="copy"
+      onConfirm={() => void submit()}
+    />
   );
 });
 
@@ -332,58 +362,16 @@ const RenameProjectDialog = observer(function RenameProjectDialog({
 }: {
   projectsStore: ProjectsStore;
 }): JSX.Element {
-  const project = projectsStore.pendingRenameProject;
   return (
-    // disableRestoreFocus: sonst klaut MUIs Focus-Restore dem Namensfeld den
-    // Autofokus beim Öffnen des Dialogs.
-    <Dialog
-      open={project !== null}
-      onClose={projectsStore.cancelRename}
-      fullWidth
-      maxWidth="sm"
-      disableRestoreFocus
-    >
-      <DialogTitle>Projekt umbenennen</DialogTitle>
-      <DialogContent>
-        <Stack spacing={2} sx={{ mt: 1 }}>
-          {projectsStore.renameError !== null && (
-            <Alert severity="error" data-testselector="rename-project-error">
-              {projectsStore.renameError}
-            </Alert>
-          )}
-          <TextField
-            label="Projektname"
-            value={projectsStore.renameName}
-            onChange={(e) => projectsStore.setRenameName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && projectsStore.canConfirmRename) {
-                e.preventDefault();
-                void projectsStore.confirmRename();
-              }
-            }}
-            autoFocus
-            inputProps={{ 'data-testselector': 'rename-project-name' }}
-          />
-        </Stack>
-      </DialogContent>
-      <DialogActions>
-        <Button
-          onClick={projectsStore.cancelRename}
-          color="inherit"
-          data-testselector="rename-cancel"
-        >
-          Abbrechen
-        </Button>
-        <Button
-          variant="contained"
-          onClick={() => void projectsStore.confirmRename()}
-          disabled={!projectsStore.canConfirmRename}
-          data-testselector="rename-confirm"
-        >
-          Umbenennen
-        </Button>
-      </DialogActions>
-    </Dialog>
+    <NameDialog
+      dialog={projectsStore.renameDialog}
+      open={projectsStore.pendingRenameProject !== null}
+      title="Projekt umbenennen"
+      fieldLabel="Projektname"
+      confirmLabel="Umbenennen"
+      testPrefix="rename"
+      onConfirm={() => void projectsStore.confirmRename()}
+    />
   );
 });
 

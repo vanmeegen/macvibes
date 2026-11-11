@@ -26,6 +26,11 @@ export interface PreviewProtocolOptions {
   httpsGatewayPort: number | null;
 }
 
+/** Overlay statt iframe: Nutzertext, in Start-/Neustartphasen mit Fortschrittsbalken. */
+function overlay(message: string, spinner = false): PreviewView {
+  return { showIframe: false, url: null, spinner, message };
+}
+
 export function derivePreviewView(
   status: PreviewStatus | string,
   host: string,
@@ -36,54 +41,29 @@ export function derivePreviewView(
   if (status === 'ready' && gatewayPort !== null && projectId !== null) {
     // HTTPS-Seite: der Browser blockt ein http-iframe als Mixed Content — die
     // Preview muss über den HTTPS-Port des Gateways (Caddy) kommen.
-    if (protocol.pageProtocol === 'https:') {
-      if (protocol.httpsGatewayPort === null) {
-        return {
-          showIframe: false,
-          url: null,
-          spinner: false,
-          message:
-            'Preview über HTTPS braucht MACVIBES_PREVIEW_GATEWAY_HTTPS_PORT ' +
-            '(TLS-Terminierung, s. CLAUDE.md).',
-        };
-      }
-      return {
-        showIframe: true,
-        url: `https://${host}:${protocol.httpsGatewayPort}/p/${encodeURIComponent(projectId)}/`,
-        spinner: false,
-        message: '',
-      };
+    const https = protocol.pageProtocol === 'https:';
+    const port = https ? protocol.httpsGatewayPort : gatewayPort;
+    if (port === null) {
+      return overlay(
+        'Preview über HTTPS braucht MACVIBES_PREVIEW_GATEWAY_HTTPS_PORT ' +
+          '(TLS-Terminierung, s. CLAUDE.md).',
+      );
     }
     return {
       showIframe: true,
-      url: `http://${host}:${gatewayPort}/p/${encodeURIComponent(projectId)}/`,
+      url: `${https ? 'https' : 'http'}://${host}:${port}/p/${encodeURIComponent(projectId)}/`,
       spinner: false,
       message: '',
     };
   }
   switch (status) {
     case 'starting':
-      return { showIframe: false, url: null, spinner: true, message: 'Preview startet …' };
+      return overlay('Preview startet …', true);
     case 'restarting':
-      return {
-        showIframe: false,
-        url: null,
-        spinner: true,
-        message: 'Preview wird neu gestartet …',
-      };
+      return overlay('Preview wird neu gestartet …', true);
     case 'failed':
-      return {
-        showIframe: false,
-        url: null,
-        spinner: false,
-        message: 'Preview konnte nicht gestartet werden — bitte das Projekt neu öffnen.',
-      };
+      return overlay('Preview konnte nicht gestartet werden — bitte das Projekt neu öffnen.');
     default:
-      return {
-        showIframe: false,
-        url: null,
-        spinner: false,
-        message: 'Preview nicht verfügbar — Sandbox gestoppt.',
-      };
+      return overlay('Preview nicht verfügbar — Sandbox gestoppt.');
   }
 }

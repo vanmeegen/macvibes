@@ -8,15 +8,13 @@ export interface ChatEventPayload {
   turnActive: boolean;
 }
 
+/** Felder einer Chat-Nachricht — Verlaufs-Query und Subscription fragen dieselben ab. */
+const MESSAGE_FIELDS = 'id projectId turnId role content createdAt';
+
 const CHAT_STATE_QUERY = /* GraphQL */ `
   query ChatState($projectId: ID!) {
     chatMessages(projectId: $projectId) {
-      id
-      projectId
-      turnId
-      role
-      content
-      createdAt
+      ${MESSAGE_FIELDS}
     }
     turnActive(projectId: $projectId)
   }
@@ -45,12 +43,7 @@ const CHAT_EVENTS_SUBSCRIPTION = (projectId: string): string => /* GraphQL */ `
     chatEvents(projectId: ${JSON.stringify(projectId)}) {
       turnActive
       message {
-        id
-        projectId
-        turnId
-        role
-        content
-        createdAt
+        ${MESSAGE_FIELDS}
       }
     }
   }
