@@ -17,15 +17,11 @@ const templates: Template[] = [
     name: 'React Starter',
     description: 'Vite + React Grundgerüst',
     dir: 'react-starter',
-    devCommand: 'bun run dev',
-    previewPort: 3100,
   },
   {
     name: 'Bun API',
     description: 'Minimaler Bun-HTTP-Server',
     dir: 'bun-api',
-    devCommand: 'bun run dev',
-    previewPort: 3200,
   },
 ];
 
@@ -85,10 +81,8 @@ describe('CreateProjectModel', () => {
     const createdProject = {
       id: 'p1',
       name: 'Mein Projekt',
-      branchName: 'vibe/mein-projekt',
       templateDir: 'bun-api',
       owner: { id: 'u1', username: 'alice' },
-      createdAt: '2026-07-03T08:00:00.000Z',
       lastActivityAt: '2026-07-03T08:00:00.000Z',
       sandboxStatus: 'stopped',
     };
@@ -101,7 +95,8 @@ describe('CreateProjectModel', () => {
     model.setName('  Mein Projekt  ');
     model.setSelectedTemplateDir('bun-api');
 
-    await model.submit();
+    // Die ID des neuen Projekts kommt zurück — für den direkten Chat-Wechsel.
+    expect(await model.submit()).toBe('p1');
 
     expect(mockGql).toHaveBeenNthCalledWith(1, expect.stringContaining('createProject'), {
       name: 'Mein Projekt',
@@ -114,38 +109,6 @@ describe('CreateProjectModel', () => {
     expect(projectsStore.projects.map((p) => p.id)).toEqual(['p1']);
   });
 
-  it('submit liefert die ID des neuen Projekts (für den direkten Chat-Wechsel)', async () => {
-    const { model } = makeModel();
-    const created = {
-      id: 'p9',
-      name: 'Blitz',
-      branchName: 'alice/blitz',
-      templateDir: 'react-starter',
-      owner: { id: 'u1', username: 'alice' },
-      createdAt: '2026-07-05T08:00:00.000Z',
-      lastActivityAt: '2026-07-05T08:00:00.000Z',
-      sandboxStatus: 'stopped',
-    };
-    mockGql
-      .mockResolvedValueOnce({ createProject: created })
-      .mockResolvedValueOnce({ projects: [created], templates });
-
-    model.openDialog();
-    model.setName('Blitz');
-
-    expect(await model.submit()).toBe('p9');
-  });
-
-  it('submit liefert null, wenn das Anlegen scheitert (kein Chat-Wechsel)', async () => {
-    const { model } = makeModel();
-    mockGql.mockRejectedValueOnce(new Error('kaputt'));
-
-    model.openDialog();
-    model.setName('X');
-
-    expect(await model.submit()).toBeNull();
-  });
-
   it('zeigt die Server-Fehlermeldung und lässt den Dialog offen', async () => {
     const { model, projectsStore } = makeModel();
     mockGql.mockRejectedValueOnce(new Error('Projektname bereits vergeben'));
@@ -153,7 +116,8 @@ describe('CreateProjectModel', () => {
     model.openDialog();
     model.setName('Duplikat');
 
-    await model.submit();
+    // null = kein Chat-Wechsel.
+    expect(await model.submit()).toBeNull();
 
     expect(model.error).toBe('Projektname bereits vergeben');
     expect(model.open).toBe(true);
