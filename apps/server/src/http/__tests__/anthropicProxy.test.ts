@@ -1,11 +1,13 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { PROXY_TOKEN_HEADER } from '../../core/vmContract';
 import {
   createAnthropicProxy,
-  injectThinkingDisplay,
   prepareRequestBody,
-  PROXY_TOKEN_HEADER,
   type AnthropicProxyConfig,
 } from '../anthropicProxy';
+
+/** Nur die Thinking-Anpassung des aufbereiteten Bodys. */
+const injectThinkingDisplay = (bodyText: string): string => prepareRequestBody(bodyText).body;
 
 interface SeenRequest {
   path: string;

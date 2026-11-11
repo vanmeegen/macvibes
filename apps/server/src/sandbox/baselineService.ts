@@ -2,7 +2,6 @@ import {
   createSnapshot,
   execShell,
   removeSandbox,
-  removeSnapshot,
   SandboxRuntimeError,
   snapshotExists,
   startSandbox,
@@ -24,22 +23,9 @@ export function baselineSnapshotName(templateDir: string): string {
   return `macvibes-tpl-${templateDir}`;
 }
 
-/**
- * Existiert ein Snapshot mit diesem Namen?
- *
- * Liegt jetzt im msbClient: vorher wurde JEDER msb-Fehler als „existiert nicht"
- * gedeutet, sodass eine defekte msb-Installation als fehlende Baseline erschien
- * („bitte `bun run baselines` ausführen"). Nur ein echtes „nicht gefunden"
- * ergibt false, alles andere fliegt weiter.
- */
-export { snapshotExists };
-
 export async function baselineExists(templateDir: string): Promise<boolean> {
   return snapshotExists(baselineSnapshotName(templateDir));
 }
-
-/** Entfernt einen Snapshot (für Tests — Produktions-Baselines nicht anfassen). */
-export { removeSnapshot };
 
 export interface BuildBaselineOptions {
   templatesDir: string;

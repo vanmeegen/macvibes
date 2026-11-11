@@ -19,9 +19,9 @@ import {
 import { createProjectBranch, ensureBareRepo } from '../../core/gitService';
 import { GUEST_WORKDIR } from '../../core/vmContract';
 import { workspaceDirFor } from '../../core/workspaceService';
-import { baselineSnapshotName, buildTemplateBaseline, removeSnapshot } from '../baselineService';
-import { MSB_HOST_ALIAS, MicrosandboxSandboxProvider, msbAvailable } from '../microsandboxProvider';
-import { execShell } from '../msbClient';
+import { baselineSnapshotName, buildTemplateBaseline } from '../baselineService';
+import { MSB_HOST_ALIAS, MicrosandboxSandboxProvider } from '../microsandboxProvider';
+import { execShell, msbAvailable, removeSnapshot } from '../msbClient';
 import type { SandboxHandle } from '../provider';
 
 /**
@@ -133,7 +133,6 @@ beforeAll(async () => {
   const provider = new MicrosandboxSandboxProvider({
     macvibesHome: home,
     bareRepoPath: bare,
-    image: 'oven/bun:1.3.14',
     cpus: 2,
     memoryMib: 1024,
     agentDaemon: {

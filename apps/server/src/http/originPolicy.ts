@@ -50,7 +50,6 @@ export function allowedOrigins(input: OriginPolicyInput): string[] {
 }
 
 export interface CsrfInput {
-  method: string;
   origin: string | null;
   secFetchSite: string | null;
   allowed: string[];

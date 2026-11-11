@@ -601,7 +601,6 @@ export class ChatService {
     turnId: string,
     role: ChatMessageRow['role'],
     content: string,
-    turnActive?: boolean,
   ): Promise<ChatMessageRow> {
     // Zweiter Riegel gegen zu lange Inhalte: MAX_MESSAGE_CHARS griff nur im
     // Append-Pfad (appendDelta), nicht hier. Damit kam jede Nicht-Delta-Quelle
@@ -618,7 +617,7 @@ export class ChatService {
     if (!row) {
       throw new Error('Chat-Insert lieferte keine Zeile zurück');
     }
-    this.publish(projectId, row, turnActive ?? this.isTurnActive(projectId));
+    this.publish(projectId, row, this.isTurnActive(projectId));
     return row;
   }
 

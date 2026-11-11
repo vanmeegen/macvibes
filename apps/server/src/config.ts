@@ -243,27 +243,6 @@ export function parseEnvFile(content: string): Record<string, string> {
 }
 
 /**
- * Reine Vorrang-Auflösung der drei Konfig-Quellen (OHNE Prozess-Env-Mutation,
- * damit testbar). Später = höhere Priorität:
- *   (3) homeEnv  <  (2) repoEnv  <  (1) explicitEnv
- * Zur Laufzeit hat Bun explicitEnv und repoEnv (die cwd-`.env`) bereits in
- * `Bun.env` verschmolzen — die explizite Env gewinnt dort schon (empirisch
- * gegen Bun 1.3.14 verifiziert). `loadHomeEnvFile` füllt danach nur noch die in
- * `Bun.env` FEHLENDEN Home-Keys, wodurch genau diese Ordnung entsteht.
- */
-export function resolveEnvPrecedence(
-  explicitEnv: Record<string, string | undefined>,
-  repoEnv: Record<string, string>,
-  homeEnv: Record<string, string>,
-): Record<string, string> {
-  const merged: Record<string, string> = { ...homeEnv, ...repoEnv };
-  for (const [key, value] of Object.entries(explicitEnv)) {
-    if (value !== undefined) merged[key] = value;
-  }
-  return merged;
-}
-
-/**
  * Fall 3 der Konfig-Vorrangregel: `<macvibesHome>/.env` als upgrade-feste
  * Fallback-Datei laden. Bun lädt automatisch NUR die cwd-`.env` (Fall 2), dieser
  * Ort muss EXPLIZIT geladen werden. Bereits gesetzte Variablen (explizit ODER

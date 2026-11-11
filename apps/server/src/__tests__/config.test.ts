@@ -1,13 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import {
-  loadConfig,
-  loadHomeEnvFile,
-  parseEnvFile,
-  resolveDbPath,
-  resolveEnvPrecedence,
-} from '../config';
+import { loadConfig, loadHomeEnvFile, parseEnvFile, resolveDbPath } from '../config';
 import { PORT_DEFAULTS } from '../../../../scripts/lib/ports';
 import { createTempDir, removeDir } from '../services/__tests__/testUtils';
 
@@ -118,22 +112,6 @@ describe('Konfig-Vorrang: Env > Repo-.env > Home-.env', () => {
     expect(parsed['MACVIBES_SANDBOX']).toBe('process');
     expect(parsed['DOPPELT']).toBe('wert');
     expect(parsed['ROH']).toBe('a$HOME');
-  });
-
-  test('resolveEnvPrecedence: explizite Env schlägt Repo-.env schlägt Home-.env', () => {
-    const merged = resolveEnvPrecedence(
-      { K: 'aus-env' },
-      { K: 'aus-repo', R: 'aus-repo' },
-      { K: 'aus-home', R: 'aus-home', H: 'aus-home' },
-    );
-    expect(merged['K']).toBe('aus-env'); // Regel 1 gewinnt
-    expect(merged['R']).toBe('aus-repo'); // Regel 2 vor Regel 3
-    expect(merged['H']).toBe('aus-home'); // nur in Home → übernommen
-  });
-
-  test('resolveEnvPrecedence: undefined in der Env verdeckt keinen Fallback', () => {
-    const merged = resolveEnvPrecedence({ K: undefined }, {}, { K: 'aus-home' });
-    expect(merged['K']).toBe('aus-home');
   });
 
   test('loadHomeEnvFile füllt nur fehlende Keys (Regel 1&2 bleiben unangetastet)', async () => {
