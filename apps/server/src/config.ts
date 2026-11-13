@@ -217,7 +217,7 @@ function defaultMacvibesHome(): string {
  */
 export function resolveDbPath(macvibesHome?: string, serverRoot: string = SERVER_ROOT): string {
   if (Bun.env.DB_PATH) return Bun.env.DB_PATH;
-  const name = Bun.env.MACVIBES_TEST_MODE === '1' ? 'app-test.db' : 'app.db';
+  const name = 'app.db';
   const legacy = join(serverRoot, 'data', name);
   if (existsSync(legacy)) return legacy;
   const home = macvibesHome ?? defaultMacvibesHome();

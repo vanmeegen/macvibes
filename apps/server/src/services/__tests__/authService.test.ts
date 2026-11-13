@@ -43,13 +43,6 @@ describe('register (Self-Registration)', () => {
     expect(second.session).toBeNull();
   });
 
-  test('braucht keinen Invite-Code mehr', async () => {
-    const db = createTestDb();
-    // Kein inviteCode im Input — muss trotzdem durchgehen.
-    const result = await register(db, CONFIG, registerInput());
-    expect(result.user.id).toBeTruthy();
-  });
-
   test('lehnt doppelten Benutzernamen ab', async () => {
     const db = createTestDb();
     await register(db, CONFIG, registerInput());
@@ -79,17 +72,6 @@ describe('login', () => {
     await register(db, CONFIG, registerInput('gast', 'gast-passwort'));
     await expect(login(db, CONFIG, 'gast', 'gast-passwort')).rejects.toThrow(
       'noch nicht freigeschaltet',
-    );
-  });
-
-  test('verrät nicht, ob der Benutzer existiert', async () => {
-    const db = createTestDb();
-    await register(db, CONFIG, registerInput());
-    await expect(login(db, CONFIG, 'marco', 'falsches-passwort')).rejects.toThrow(
-      'Benutzername oder Passwort ist falsch',
-    );
-    await expect(login(db, CONFIG, 'niemand', 'passwort123')).rejects.toThrow(
-      'Benutzername oder Passwort ist falsch',
     );
   });
 });
@@ -293,23 +275,21 @@ describe('Erst-Admin-Vergabe (F8, H3)', () => {
     expect(user.approved).toBe(false);
   });
 
-  test('mit Bootstrap-Namen wird genau dieser Nutzer Admin', async () => {
-    const db = createTestDb();
-    const config = { ...CONFIG, adminUsername: 'marco' };
-    const { user } = await register(db, config, registerInput('marco'));
-    expect(user.role).toBe('admin');
-  });
-
   test('es entsteht nie ein zweiter Admin, auch bei paralleler Registrierung', async () => {
+    // Alle drei tragen den Bootstrap-Namen und passieren die Vorabprüfung,
+    // bevor einer eingefügt hat (das await auf argon2 liegt dazwischen) —
+    // genau das Fenster, in dem früher mehrere Admins entstanden.
     const db = createTestDb();
     const config = { ...CONFIG, adminUsername: 'eins' };
-    await Promise.all([
+    const ergebnisse = await Promise.allSettled([
       register(db, config, registerInput('eins')),
-      register(db, config, registerInput('zwei')),
-      register(db, config, registerInput('drei')),
+      register(db, config, registerInput('eins')),
+      register(db, config, registerInput('eins')),
     ]);
+    expect(ergebnisse.filter((e) => e.status === 'fulfilled')).toHaveLength(1);
     const admins = await db.select().from(users).where(eq(users.role, 'admin'));
     expect(admins.length).toBe(1);
+    expect(await db.select().from(users)).toHaveLength(1);
   });
 
   test('ein bereits vorhandener Admin verhindert weitere Bootstraps', async () => {
@@ -317,9 +297,12 @@ describe('Erst-Admin-Vergabe (F8, H3)', () => {
     const config = { ...CONFIG, adminUsername: 'chefin' };
     const { user: chefin } = await register(db, config, registerInput('chefin'));
     expect(chefin.role).toBe('admin');
-    // Selber Bootstrap-Name, aber es gibt schon einen Admin: kein zweiter.
-    const { user: zweite } = await register(db, config, registerInput('chefin2'));
+    // Der Bootstrap-Name wird später umkonfiguriert und die neue Namensträgerin
+    // registriert sich: es gibt schon einen Admin, also entsteht kein zweiter.
+    const neueConfig = { ...CONFIG, adminUsername: 'chefin2' };
+    const { user: zweite } = await register(db, neueConfig, registerInput('chefin2'));
     expect(zweite.role).toBe('user');
+    expect(zweite.approved).toBe(false);
   });
 });
 

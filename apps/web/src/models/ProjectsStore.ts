@@ -17,18 +17,15 @@ export const PROJECT_FILTER_STORAGE_KEY = 'macvibes.projectFilter';
 const PROJECT_FIELDS = /* GraphQL */ `
   id
   name
-  branchName
   templateDir
   owner {
     id
     username
   }
   agentModel
-  createdAt
   lastActivityAt
   sandboxStatus
   turnActive
-  previewHostPort
   previewStatus
 `;
 
@@ -42,14 +39,11 @@ const PROJECTS_AND_TEMPLATES_QUERY = /* GraphQL */ `
     agentModels {
       id
       label
-      slow
     }
     templates {
       name
       description
       dir
-      devCommand
-      previewPort
     }
   }
 `;
@@ -181,7 +175,7 @@ export function projectStatusChip(
 }
 
 /** Deutsche Anzeige des Sandbox-Status. */
-export function sandboxStatusLabel(status: string): string {
+function sandboxStatusLabel(status: string): string {
   switch (status) {
     case 'running':
       // „bereit" statt „läuft": klare Abgrenzung zum Turn-Status „arbeitet".

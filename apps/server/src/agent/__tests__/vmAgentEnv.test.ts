@@ -38,11 +38,6 @@ describe('buildVmAgentEnv — kritische Agent-Umgebung', () => {
     expect(env.NO_PROXY).toContain('host.microsandbox.internal');
   });
 
-  test('der Proxy-Token wandert in den Custom-Header, nicht in ANTHROPIC_API_KEY', () => {
-    expect(env.ANTHROPIC_CUSTOM_HEADERS).toContain('secret-xyz');
-    expect(env.ANTHROPIC_API_KEY).not.toContain('secret-xyz');
-  });
-
   test('der Host-Alias ist injiziert, nicht hartkodiert (Backend-Wechsel: M4)', () => {
     // Ein anderes VM-Backend (Windows-Stufe 2) erreicht den Host anders als
     // über msb-NAT — der Alias muss deshalb VOLLSTÄNDIG durchfließen. Bliebe

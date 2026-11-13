@@ -9,13 +9,12 @@ vi.mock('../../api/graphqlClient', () => ({
 
 const mockGql = vi.mocked(gqlRequest);
 
-const admin: User = { id: 'u1', username: 'marco', role: 'admin', approved: true, createdAt: 't0' };
+const admin: User = { id: 'u1', username: 'marco', role: 'admin', approved: true };
 const pending: User = {
   id: 'u2',
   username: 'gast',
   role: 'user',
   approved: false,
-  createdAt: 't1',
 };
 
 describe('AuthStore', () => {
@@ -109,11 +108,11 @@ describe('AuthStore', () => {
       });
     });
 
-    it('lässt den Bootstrap-Token weg, wenn keiner angegeben wurde', async () => {
+    it('lässt einen LEEREN Bootstrap-Token weg (leeres Formularfeld)', async () => {
       mockGql.mockResolvedValueOnce({ register: pending });
       const store = new AuthStore();
 
-      await store.register('gast', 'geheim');
+      await store.register('gast', 'geheim', '');
 
       expect(mockGql).toHaveBeenCalledWith(expect.stringContaining('register'), {
         username: 'gast',

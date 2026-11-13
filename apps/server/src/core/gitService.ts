@@ -112,7 +112,7 @@ export async function runGitInRepo(repo: ProjectRepo, args: string[]): Promise<s
  * Der einzige Aufruf-Vertrag, der F1 verhindert: die git-Metadaten dürfen
  * nicht im gast-beschreibbaren Arbeitsbaum liegen.
  */
-export function assertSafeRepo(repo: ProjectRepo): void {
+function assertSafeRepo(repo: ProjectRepo): void {
   if (!isAbsolute(repo.gitDir) || !isAbsolute(repo.workTree)) {
     throw new GitError(
       `gitDir und Arbeitsbaum müssen absolut sein (gitDir=${repo.gitDir}, workTree=${repo.workTree})`,

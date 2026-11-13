@@ -193,7 +193,7 @@ describe.skipIf(!vmTestsLauffaehig)('MicrosandboxSandboxProvider (R7/R9, echte M
   test('ohne Baseline-Snapshot scheitert der Start mit klarer Anweisung', async () => {
     const { home, bare } = await projectSetup('ohne-baseline');
     const provider = new MicrosandboxSandboxProvider(providerConfig(home, bare));
-    expect(
+    await expect(
       provider.start({
         projectId: 'ohne-baseline',
         branchName: 'marco/ohne-baseline',
@@ -361,13 +361,6 @@ describe.skipIf(!vmTestsLauffaehig)('In-VM-Supervision (R7, Crash-Recovery durch
     },
     { timeout: 120_000 },
   );
-});
-
-describe('msbAvailable', () => {
-  test('erkennt die installierte msb-CLI', async () => {
-    // Auf diesem Entwicklungsrechner ist msb installiert (B5-Voraussetzung).
-    expect(await msbAvailable()).toBe(true);
-  });
 });
 
 /**

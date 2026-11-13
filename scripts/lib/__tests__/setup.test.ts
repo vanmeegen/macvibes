@@ -628,10 +628,3 @@ describe('doctor — reine Auswertung injizierter Prüf-Ergebnisse', () => {
     expect(ports?.hinweis).toContain('5173');
   });
 });
-
-// Referenz nur, damit die Typ-Importe (ProviderChoice) auch bei ungenutztem
-// Alias nicht als tote Importe gelten — dokumentiert die öffentliche Form.
-const _typRef: ProviderChoice = { kind: 'ollama' };
-test('ProviderChoice-Typ ist importierbar', () => {
-  expect(_typRef.kind).toBe('ollama');
-});

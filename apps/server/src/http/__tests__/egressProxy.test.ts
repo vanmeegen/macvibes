@@ -2,7 +2,6 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { connect as netConnect } from 'node:net';
 import {
   startEgressProxy,
-  flushPending,
   macheTerminal,
   schreibeMitBackpressure,
   type EgressProxyHandle,
@@ -261,80 +260,6 @@ describe('EgressProxy — Bytes während der Zielprüfung', () => {
 
     expect(antwort).not.toContain('400 Bad Request');
     expect(antwort).toContain('gelesen:hallo-welt');
-  });
-});
-
-/**
- * flushPending isoliert (#10): Bun's Socket.write schreibt bei Backpressure
- * WENIGER als uebergeben. Der ungeschriebene Rest wurde vorher bedingungslos
- * verworfen -> truncierter Request, Upstream haengt bis Timeout.
- */
-describe('flushPending: Backpressure verwirft keine Bytes', () => {
-  function fakeState(pending: string) {
-    return {
-      buf: Buffer.alloc(0),
-      upstream: null,
-      established: false,
-      einzelRequest: false,
-      connecting: true,
-      pending: Buffer.from(pending),
-    };
-  }
-
-  test('schreibt alles, wenn der Socket alles annimmt', () => {
-    const state = fakeState('hallo-welt');
-    const geschrieben: Buffer[] = [];
-    const sock: WritableSocket = {
-      write: (d) => {
-        geschrieben.push(Buffer.from(d));
-        return d.length;
-      },
-    };
-    flushPending(state, sock);
-    expect(Buffer.concat(geschrieben).toString()).toBe('hallo-welt');
-    expect(state.pending.length).toBe(0);
-    expect(state.established).toBe(true);
-    expect(state.connecting).toBe(false);
-  });
-
-  test('behaelt den Rest, wenn der Socket nur einen Teil annimmt', () => {
-    const state = fakeState('0123456789');
-    let ersterAufruf = true;
-    const sock: WritableSocket = {
-      write: (d) => {
-        // Erster Aufruf: nur 4 Bytes. Danach alles.
-        if (ersterAufruf) {
-          ersterAufruf = false;
-          return 4;
-        }
-        return d.length;
-      },
-    };
-    flushPending(state, sock);
-    // Ohne Fix waere pending hier leer und established true -> 6 Bytes verloren.
-    // Mit Fix schreibt die while-Schleife im selben Aufruf den Rest (zweiter
-    // write nimmt alles), also ist am Ende alles raus.
-    expect(state.pending.length).toBe(0);
-    expect(state.established).toBe(true);
-  });
-
-  test('bricht ab und BEHAELT den Rest, wenn der Socket nichts mehr annimmt (Backpressure)', () => {
-    const state = fakeState('0123456789');
-    let rest = 10;
-    const sock: WritableSocket = {
-      write: (_d) => {
-        if (rest === 10) {
-          rest = 6;
-          return 4; // erste 4 Bytes
-        }
-        return 0; // Kernel-Puffer voll -> nichts mehr, drain macht spaeter weiter
-      },
-    };
-    flushPending(state, sock);
-    // Der ungeschriebene Rest bleibt erhalten (drain-Handler schreibt ihn),
-    // established bleibt false, solange pending nicht leer ist.
-    expect(state.pending.toString()).toBe('456789');
-    expect(state.established).toBe(false);
   });
 });
 
@@ -916,7 +841,6 @@ describe('macheTerminal — Abbruch räumt den Verbindungszustand vollständig (
       buf: Buffer.from(`CONNECT example.com:443 HTTP/1.1\r\nX-Fueller: ${'a'.repeat(40_000)}`),
       pending: Buffer.from('rest-fuer-upstream'),
       einzel: { kopf: Buffer.from('POST / HTTP/1.1'), bodySoll: 5, body: Buffer.from('hallo') },
-      connecting: true,
       clientZu: false,
     };
   }
@@ -938,7 +862,6 @@ describe('macheTerminal — Abbruch räumt den Verbindungszustand vollständig (
     // einzel === null — der gepufferte Erst-Request wird NIE mehr gesendet.
     expect(state.einzel).toBeNull();
     expect(state.clientZu).toBe(true);
-    expect(state.connecting).toBe(false);
   });
 });
 

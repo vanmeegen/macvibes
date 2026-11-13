@@ -17,9 +17,8 @@ function restrictAccess(path: string): void {
 
 export function createDb(path: string) {
   if (path !== ':memory:') {
-    // 0700: die DB enthält Session-Tokens im Klartext (direkt als Cookie
-    // verwendbar) und alle Passwort-Hashes — kein Lesezugriff für andere
-    // lokale Konten (F25).
+    // 0700: die DB enthält die Hashes der Session-Tokens und alle
+    // Passwort-Hashes — kein Lesezugriff für andere lokale Konten (F25).
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   }
   const sqlite = new Database(path, { create: true });

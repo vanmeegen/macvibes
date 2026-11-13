@@ -514,10 +514,34 @@ describe('Antwortpfad — die Live-Bugs von 2026-07-04 dürfen nie zurückkommen
   });
 
   test('Keepalive: nicht-SSE-Antworten (einzelnes JSON) bleiben unangetastet', async () => {
-    // Der geteilte Upstream liefert application/json → kein Keepalive, exakt der Body.
-    const proxy = makeProxy({ keepAliveMs: 40 });
-    const response = await proxy(vmRequest(), '/v1/messages');
-    expect(await response.json()).toEqual({ ok: true });
+    // JSON-Antwort mit einer Pause, die LÄNGER ist als keepAliveMs: gälte der
+    // Keepalive auch für Nicht-Streams, läge jetzt ein SSE-Kommentar mitten im
+    // JSON. Erwartet ist exakt der Body.
+    const langsamesJson = Bun.serve({
+      port: 0,
+      fetch: () => {
+        const stream = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            const encoder = new TextEncoder();
+            controller.enqueue(encoder.encode('{"ok":'));
+            await Bun.sleep(150); // > 3× keepAliveMs
+            controller.enqueue(encoder.encode('true}'));
+            controller.close();
+          },
+        });
+        return new Response(stream, { headers: { 'content-type': 'application/json' } });
+      },
+    });
+    try {
+      const proxy = makeProxy({
+        upstreamUrl: `http://localhost:${langsamesJson.port}`,
+        keepAliveMs: 40,
+      });
+      const response = await proxy(vmRequest(), '/v1/messages');
+      expect(await response.text()).toBe('{"ok":true}');
+    } finally {
+      langsamesJson.stop(true);
+    }
   });
 
   test('Fehler-Status und retry-after werden durchgereicht (SDK-Retry braucht sie)', async () => {

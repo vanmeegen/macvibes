@@ -41,7 +41,7 @@ export type AuswahlErgebnis =
   | { art: 'ungueltig'; meldung: string };
 
 /** Timeout pro Listen-Request — wie bei der Probe: nichts darf hängen. */
-export const MODELLLISTE_TIMEOUT_MS = 10_000;
+const MODELLLISTE_TIMEOUT_MS = 10_000;
 
 /**
  * Anzeigedeckel für Treffer: OpenRouter liefert hunderte Modelle — mehr als

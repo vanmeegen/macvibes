@@ -1,10 +1,9 @@
-# CI-Matrix (windows-portierung-plan.md, P2): Der Mac-Leg ist Pflicht und
-# schützt die Hauptplattform während der Windows-Portierung; der Windows-Leg
-# läuft als continue-on-error mit, bis Stufe 1 abgeschlossen ist (dann wird
-# er scharf geschaltet — Definition of Done).
+# CI-Matrix (windows-portierung-plan.md, P2): macOS und Windows sind beide
+# Pflicht.
 #
-# Auf den Runnern ist msb NICHT installiert — die msb-Integrationstests
-# überspringen sich selbst (skipIf), getestet wird der Prozess-Provider-Pfad.
+# Die Runner können keine MicroVMs starten — die VM-Integrationstests werden
+# per MACVIBES_DISABLE_VM_TESTS abgeschaltet (s. unten), getestet wird der
+# Prozess-Provider-Pfad.
 name: ci
 
 on:

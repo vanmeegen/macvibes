@@ -80,9 +80,7 @@ export function createTargetChecker(policy: EgressPolicy = defaultEgressPolicy()
  * die Nachlässigkeit hier sicherheitsrelevant: mit einem nackten \n ließe
  * sich eine zweite Request-Line einschmuggeln, die am Policy-Check vorbeiläuft.
  */
-export function parseProxyHead(
-  head: string,
-): { requestLine: string; headerLines: string[] } | null {
+function parseProxyHead(head: string): { requestLine: string; headerLines: string[] } | null {
   if (head.includes('\n') || head.includes('\r')) {
     // Nach dem Split an \r\n darf kein einzelnes \r oder \n mehr vorkommen.
     const lines = head.split('\r\n');
@@ -113,7 +111,7 @@ export function parseProxyHead(
  * GET); null bei ungültigem oder widersprüchlichem Wert — das ist Request-
  * Smuggling-Terrain und wird abgelehnt.
  */
-export function contentLengthAus(headerLines: string[]): number | null {
+function contentLengthAus(headerLines: string[]): number | null {
   const werte = headerLines
     .filter((line) => line.toLowerCase().startsWith('content-length:'))
     .map((line) => line.slice('content-length:'.length).trim());
@@ -165,31 +163,6 @@ export function schreibeMitBackpressure(sock: WritableSocket, puffer: Buffer): B
   return rest;
 }
 
-/** Der Teil des Verbindungszustands, den `flushPending` fortschreibt (Test-Naht). */
-export interface FlushZustand {
-  /** client→upstream: noch nicht (vollständig) geschriebene Bytes. */
-  pending: Buffer;
-  /** Upstream verbunden UND `pending` vollständig geflusht. */
-  established: boolean;
-  /** Zielprüfung (DNS + Policy) läuft — sie ist asynchron. */
-  connecting: boolean;
-}
-
-/**
- * Schreibt so viel von `pending` an den Upstream, wie der Socket annimmt, und
- * behält den ungeschriebenen Rest (s. schreibeMitBackpressure).
- *
- * `established` wird erst gesetzt, wenn `pending` LEER ist. Solange noch ein
- * Rest aussteht, müssen neue Bytes weiter über `pending` laufen — schriebe der
- * data-Handler sie schon direkt an den Upstream, überholten sie den Rest und
- * die Reihenfolge bräche.
- */
-export function flushPending(state: FlushZustand, up: WritableSocket): void {
-  state.pending = schreibeMitBackpressure(up, state.pending);
-  state.connecting = false;
-  if (state.pending.length === 0) state.established = true;
-}
-
 /**
  * Der EINE absolute-form-Request einer Verbindung. Es gibt bewusst keinen
  * zweiten: die Request-Grenze ist über Content-Length exakt bekannt, alles
@@ -223,7 +196,6 @@ export interface TerminalZustand {
   pending: Buffer;
   /** Nur Phase 'einzel': der eine atomare absolute-form-Request. */
   einzel: object | null;
-  connecting: boolean;
   clientZu: boolean;
 }
 
@@ -241,7 +213,7 @@ export interface TerminalZustand {
  *   Upstream-open-Callback im Fenster vor dem close des Client-Sockets, darf
  *   `open() → sendeEinzel()` den gepufferten Erst-Request (z. B. POST mit
  *   Seiteneffekten) NICHT mehr an den Origin senden — beide Guards greifen.
- * - `pending` leer + `connecting = false`: kein Flush schreibt mehr Restbytes.
+ * - `pending` leer: kein Flush schreibt mehr Restbytes.
  *
  * `antwortPending` (upstream→client) bleibt unberührt: eine schon empfangene
  * Antwort darf der Client-drain-Handler noch fertig ausliefern.
@@ -251,13 +223,14 @@ export function macheTerminal(state: TerminalZustand): void {
   state.buf = Buffer.alloc(0);
   state.pending = Buffer.alloc(0);
   state.einzel = null;
-  state.connecting = false;
   state.clientZu = true;
 }
 
-interface ConnState extends FlushZustand {
+interface ConnState {
   /** Sammelpuffer für den Request-Kopf (nur Phase 'kopf'). */
   buf: Buffer;
+  /** client→upstream: noch nicht (vollständig) geschriebene Bytes. */
+  pending: Buffer;
   upstream: Socket | null;
   phase: Phase;
   /** upstream→client: bei Backpressure noch nicht geschriebene Antwort-Bytes. */
@@ -332,7 +305,7 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
     if (einzel.body.length < einzel.bodySoll) return;
     einzel.gesendet = true;
     state.pending = Buffer.concat([einzel.kopf, einzel.body]);
-    flushPending(state, up);
+    state.pending = schreibeMitBackpressure(up, state.pending);
   };
 
   /**
@@ -396,7 +369,7 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
         drain(up) {
           // Kernel-Puffer hat wieder Platz — ausstehende pending-Bytes weiter
           // an den Upstream schreiben (Backpressure, s. flushPending).
-          if (state.pending.length > 0) flushPending(state, up);
+          if (state.pending.length > 0) state.pending = schreibeMitBackpressure(up, state.pending);
           if (state.pending.length === 0) {
             if (state.clientZu) up.end();
             else client.resume();
@@ -437,8 +410,6 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
           buf: Buffer.alloc(0),
           upstream: null,
           phase: 'kopf',
-          established: false,
-          connecting: false,
           pending: Buffer.alloc(0),
           antwortPending: Buffer.alloc(0),
           einzel: null,
@@ -466,7 +437,8 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
               state.pending.length === 0
                 ? Buffer.from(chunk)
                 : Buffer.concat([state.pending, chunk]);
-            if (state.upstream !== null) flushPending(state, state.upstream);
+            if (state.upstream !== null)
+              state.pending = schreibeMitBackpressure(state.upstream, state.pending);
             // Quelle anhalten, bis der Upstream offen ist bzw. aufgeholt hat
             // (open/drain flushen weiter und resumen dann).
             if (state.pending.length > 0) socket.pause();
@@ -538,14 +510,13 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
           const host = sep > 0 ? target.slice(0, sep) : target;
           const port = sep > 0 ? Number(target.slice(sep + 1)) : 443;
           state.phase = 'tunnel';
-          state.connecting = true;
           // Bytes nach dem Kopf gehören in den Tunnel — in Reihenfolge VOR
           // allem, was während der Zielprüfung nachkommt (data-Handler hängt
           // an pending an).
           state.pending = Buffer.from(rest);
           connectChecked(socket, host, port, (up) => {
             anClient(socket, Buffer.from('HTTP/1.1 200 Connection Established\r\n\r\n'));
-            flushPending(state, up);
+            state.pending = schreibeMitBackpressure(up, state.pending);
             // Falls der Client während der Prüfung pausiert wurde und schon
             // alles geflusht ist, wieder lesen; sonst resumed der drain-Handler.
             if (state.pending.length === 0) socket.resume();
@@ -608,7 +579,6 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
             body: Buffer.from(rest),
             gesendet: false,
           };
-          state.connecting = true;
           connectChecked(socket, url.hostname, port, () => {
             sendeEinzel(socket);
           });

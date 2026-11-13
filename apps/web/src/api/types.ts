@@ -7,31 +7,25 @@ export interface User {
   username: string;
   role: string;
   approved: boolean;
-  createdAt: string;
 }
 
 export interface Template {
   name: string;
   description: string;
   dir: string;
-  devCommand: string;
-  previewPort: number;
 }
 
 export interface Project {
   id: string;
   name: string;
-  branchName: string;
   templateDir: string;
   owner: User;
   /** Gewähltes Agenten-Modell (Dropdown im Chat, pro Projekt). */
   agentModel: string;
-  createdAt: string;
   lastActivityAt: string;
   sandboxStatus: string;
   /** Läuft gerade ein Agent-Turn in diesem Projekt? */
   turnActive: boolean;
-  previewHostPort: number | null;
   previewStatus: string;
 }
 
@@ -39,8 +33,6 @@ export interface Project {
 export interface AgentModelInfo {
   id: string;
   label: string;
-  /** Lokales (langsames) Modell — Hinweis im UI. */
-  slow: boolean;
 }
 
 export type ChatRole = 'user' | 'assistant' | 'thinking' | 'tool' | 'system' | 'error';

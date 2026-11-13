@@ -62,7 +62,3 @@ export async function preflight(): Promise<boolean> {
   }
   return true;
 }
-
-if (import.meta.main) {
-  process.exit((await preflight()) ? 0 : 1);
-}

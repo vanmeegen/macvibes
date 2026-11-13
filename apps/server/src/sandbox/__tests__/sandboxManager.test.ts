@@ -598,14 +598,6 @@ describe('VM-Idle-Auffangnetz (ADR 0003)', () => {
     await Bun.sleep(20);
     expect(manager.status('p1')).toBe('running');
   });
-
-  test('ohne touchSandbox verhält sich der Manager wie bisher', async () => {
-    const { provider, manager } = setup({ graceMs: 20 });
-    await manager.enter(ctx('p1'), 'u1');
-    manager.noteAgentActivity('p1');
-    expect(manager.status('p1')).toBe('running');
-    expect(provider.startCalls).toEqual(['p1']);
-  });
 });
 
 /**

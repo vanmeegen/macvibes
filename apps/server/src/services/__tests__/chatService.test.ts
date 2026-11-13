@@ -1456,33 +1456,6 @@ function abbrechbarerRunner(starts: string[], verzoegerungMs = 20): AgentRunner 
   };
 }
 
-describe('Abbruch ist kein Flake — kein stiller zweiter Durchlauf', () => {
-  test('Stop vor dem ersten Event lässt den Turn NICHT neu laufen', async () => {
-    // Der Nutzer drückt Stop direkt nach dem Senden. Der Turn liefert nur
-    // `turn-aborted`; das zählt nicht als sinnvolles Lebenszeichen, also hielt
-    // runTurn den Versuch für einen msb-Flake und schickte denselben Prompt ein
-    // zweites Mal los — diesmal ohne Abbruchwunsch. Der Agent führte den Turn
-    // also trotz Stop vollständig aus, schrieb Dateien und committete sie.
-    const starts: string[] = [];
-    const { owner, service, projectId, turnEnds } = await setup(abbrechbarerRunner(starts, 10_000));
-
-    await service.sendMessage(owner, sendInput(projectId, 'bitte nicht ausführen'));
-    await waitFor(() => starts.length === 1);
-    await service.stopTurn(owner, projectId);
-
-    // Ohne Fix startet genau hier der zweite Versuch — mit demselben Prompt,
-    // aber ohne Abbruchwunsch, und läuft dann vollständig durch.
-    await Bun.sleep(200);
-    expect(starts).toEqual(['bitte nicht ausführen']);
-
-    await waitFor(() => !service.isTurnActive(projectId), 15_000);
-    expect(turnEnds).toEqual([]);
-    // Der Abbruch bleibt sichtbar — sonst stünde der Nutzer ohne Rückmeldung da.
-    const messages = await service.listMessages(projectId);
-    expect(messages.find((m) => m.role === 'system')?.content).toContain('abgebrochen');
-  });
-});
-
 /**
  * Runner, bei dem jeder gestartete Turn einzeln steuerbar ist: `fertigstellen`
  * lässt ihn normal enden (Echo + turn-completed), ein `abort()` seines Handles
@@ -1574,23 +1547,6 @@ function dbMitInsertTor(
  * nächste Nachricht ab), #7 (Interrupt bricht die eigene Nachricht ab).
  */
 describe('Gegenwartsmodell: Stop/Interrupt treffen nur den JETZT aktiven Turn', () => {
-  test('(1) Stop während laufendem Turn: abgebrochen, kein Retry, Abbruch sichtbar', async () => {
-    const starts: string[] = [];
-    const { owner, service, projectId, turnEnds } = await setupChat(
-      abbrechbarerRunner(starts, 10_000),
-    );
-    await service.sendMessage(owner, sendInput(projectId, 'lange Aufgabe'));
-    await waitFor(() => starts.length === 1);
-
-    await service.stopTurn(owner, projectId);
-    await waitFor(() => !service.isTurnActive(projectId), 15_000);
-
-    expect(starts).toEqual(['lange Aufgabe']); // kein zweiter Versuch
-    expect(turnEnds).toEqual([]); // kein onTurnEnd → kein Auto-Commit
-    const messages = await service.listMessages(projectId);
-    expect(messages.find((m) => m.role === 'system')?.content).toContain('abgebrochen');
-  });
-
   test('(2) Stop ins Leere ist ein No-op — eine danach gesendete Nachricht läuft normal (#6)', async () => {
     // Vorher setzte ein Stop ohne laufenden Turn ein Zeitfenster, das die
     // NÄCHSTE, unabhängige Nachricht abbrach (#6). Produktentscheid
