@@ -52,8 +52,19 @@ export function spawnShellCommand(
   };
 }
 
-/** Höchstens so lange wartet kill() darauf, dass der Wrapper sein Kind gestartet hat. */
-const CHILD_SPAWN_GRACE_MS = 1_000;
+/**
+ * Höchstens so lange wartet kill() darauf, dass der Wrapper sein Kind gestartet
+ * hat. Großzügig, weil der Wrapper unter Last (voller Testlauf) deutlich über
+ * eine Sekunde bis zum Kind-Start braucht — und eine zu knappe Frist genau die
+ * Waise hinterlässt, die sie verhindern soll. Im Normalfall kostet die Frist
+ * nichts: sie endet, sobald das Kind da ist.
+ *
+ * Bewusst KEINE eigene Prozessgruppe (detached + Gruppen-Kill) — das wäre zwar
+ * race-frei, aber die Kinder überlebten dann jeden harten Abbruch des Servers
+ * (Playwright und Terminals beenden die Prozessgruppe des Servers; getestet:
+ * die E2E-Suite blieb an verwaisten Dev-Servern hängen).
+ */
+const CHILD_SPAWN_GRACE_MS = 10_000;
 
 /**
  * Beendet den Prozessbaum — aber erst, wenn der Wrapper (`bun exec`) sein Kind
