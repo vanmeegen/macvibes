@@ -42,7 +42,7 @@ import type { AuthStore } from '../models/AuthStore';
 import type { CreateProjectModel } from '../models/CreateProjectModel';
 import type { NameDialogModel } from '../models/NameDialogModel';
 import type { ProjectFilter, ProjectsStore } from '../models/ProjectsStore';
-import { formatTimestamp, projectStatusChip } from '../models/ProjectsStore';
+import { formatTimestamp, projectStatusChip } from '../models/projectPresentation';
 
 export interface ProjectsPageProps {
   authStore: AuthStore;

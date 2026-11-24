@@ -126,69 +126,6 @@ function readFilterFromStorage(): ProjectFilter {
   return 'mine';
 }
 
-/** Formatiert einen Server-Zeitstempel (ISO-String oder Epoch-Millis) deutsch. */
-export function formatTimestamp(value: string): string {
-  const millis = /^\d+$/.test(value) ? Number(value) : Date.parse(value);
-  if (Number.isNaN(millis)) {
-    return value;
-  }
-  return new Date(millis).toLocaleString('de-DE', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-/**
- * Text des „Agent arbeitet"-Indikators, abhängig vom Sandbox-Status: während
- * die MicroVM bootet, sieht der User WARUM noch nichts passiert (kein
- * gefühlter Hänger).
- */
-export function agentWorkingLabel(sandboxStatus: string): string {
-  switch (sandboxStatus) {
-    case 'starting':
-      return 'MicroVM startet — Workspace wird vorbereitet …';
-    case 'stopped':
-    case 'stopping':
-      return 'Sandbox wird gestartet …';
-    default:
-      return 'Agent arbeitet …';
-  }
-}
-
-/**
- * Status-Chip der Projektkarte: ein laufender Agent-Turn („arbeitet") hat
- * Vorrang vor dem Sandbox-Status — gerade langlaufende Turns (lokale Modelle,
- * Grace-Verlängerung) sind sonst von außen unsichtbar.
- */
-export function projectStatusChip(
-  sandboxStatus: string,
-  turnActive: boolean,
-): { label: string; color: 'success' | 'warning' | 'default' } {
-  if (turnActive) return { label: 'arbeitet', color: 'warning' };
-  return {
-    label: sandboxStatusLabel(sandboxStatus),
-    color: sandboxStatus === 'running' ? 'success' : 'default',
-  };
-}
-
-/** Deutsche Anzeige des Sandbox-Status. */
-function sandboxStatusLabel(status: string): string {
-  switch (status) {
-    case 'running':
-      // „bereit" statt „läuft": klare Abgrenzung zum Turn-Status „arbeitet".
-      return 'bereit';
-    case 'starting':
-      return 'startet';
-    case 'stopped':
-      return 'gestoppt';
-    default:
-      return status;
-  }
-}
-
 /**
  * Store für Projekte und Templates inkl. Sichtbarkeitsfilter
  * ("Nur meine" / "Alle", persistiert in localStorage).

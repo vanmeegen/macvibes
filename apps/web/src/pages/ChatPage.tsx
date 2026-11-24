@@ -24,10 +24,11 @@ import Typography from '@mui/material/Typography';
 import { observer } from 'mobx-react-lite';
 import { useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import type { ChatMessage } from '../api/types';
+import type { ChatMessage, SandboxStatus } from '../api/types';
 import type { ChatStore } from '../models/ChatStore';
-import { derivePreviewView } from '../models/PreviewModel';
-import { agentWorkingLabel, projectStatusChip, type ProjectsStore } from '../models/ProjectsStore';
+import { derivePreviewView } from '../models/previewView';
+import { agentWorkingLabel, projectStatusChip } from '../models/projectPresentation';
+import type { ProjectsStore } from '../models/ProjectsStore';
 import type { SpeechStore } from '../models/SpeechStore';
 
 export interface ChatPageProps {
@@ -138,7 +139,7 @@ const ChatMessageList = observer(function ChatMessageList({
   sandboxStatus,
 }: {
   chatStore: ChatStore;
-  sandboxStatus: string;
+  sandboxStatus: SandboxStatus;
 }): JSX.Element {
   const scrollRef = useRef<HTMLDivElement | null>(null);
 

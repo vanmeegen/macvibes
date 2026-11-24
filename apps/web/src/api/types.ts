@@ -2,10 +2,19 @@
  * Typen des GraphQL-API-Vertrags (Server unter /graphql).
  */
 
+/** Nutzerrolle (Server: db/schema/users). */
+export type UserRole = 'user' | 'admin';
+
+/** Lebenszyklus der Sandbox (Server: sandbox/provider). */
+export type SandboxStatus = 'starting' | 'running' | 'stopping' | 'stopped';
+
+/** Zustand des Dev-Servers in der Sandbox (Server: preview/status). */
+export type PreviewStatus = 'starting' | 'ready' | 'restarting' | 'failed' | 'stopped';
+
 export interface User {
   id: string;
   username: string;
-  role: string;
+  role: UserRole;
   approved: boolean;
 }
 
@@ -23,10 +32,10 @@ export interface Project {
   /** Gewähltes Agenten-Modell (Dropdown im Chat, pro Projekt). */
   agentModel: string;
   lastActivityAt: string;
-  sandboxStatus: string;
+  sandboxStatus: SandboxStatus;
   /** Läuft gerade ein Agent-Turn in diesem Projekt? */
   turnActive: boolean;
-  previewStatus: string;
+  previewStatus: PreviewStatus;
 }
 
 /** Wählbares Agenten-Modell (Katalog vom Server). */
@@ -35,7 +44,7 @@ export interface AgentModelInfo {
   label: string;
 }
 
-export type ChatRole = 'user' | 'assistant' | 'thinking' | 'tool' | 'system' | 'error';
+type ChatRole = 'user' | 'assistant' | 'thinking' | 'tool' | 'system' | 'error';
 
 export interface ChatMessage {
   id: string;

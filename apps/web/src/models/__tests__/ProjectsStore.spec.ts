@@ -3,12 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { gqlRequest } from '../../api/graphqlClient';
 import type { Project, Template } from '../../api/types';
 import { AuthStore } from '../AuthStore';
-import {
-  agentWorkingLabel,
-  PROJECT_FILTER_STORAGE_KEY,
-  ProjectsStore,
-  projectStatusChip,
-} from '../ProjectsStore';
+import { PROJECT_FILTER_STORAGE_KEY, ProjectsStore } from '../ProjectsStore';
 
 vi.mock('../../api/graphqlClient', () => ({
   gqlRequest: vi.fn(),
@@ -47,33 +42,6 @@ function makeAuthStore(username: string | null): AuthStore {
   });
   return authStore;
 }
-
-describe('agentWorkingLabel — sichtbares Boot-Feedback statt gefühltem Hänger', () => {
-  it('zeigt beim VM-Boot klar an, dass die MicroVM startet', () => {
-    expect(agentWorkingLabel('starting')).toBe('MicroVM startet — Workspace wird vorbereitet …');
-  });
-
-  it('zeigt bei gestoppter/stoppender Sandbox, dass sie gleich gestartet wird', () => {
-    expect(agentWorkingLabel('stopped')).toBe('Sandbox wird gestartet …');
-    expect(agentWorkingLabel('stopping')).toBe('Sandbox wird gestartet …');
-  });
-
-  it('zeigt bei laufender Sandbox den normalen Agenten-Status', () => {
-    expect(agentWorkingLabel('running')).toBe('Agent arbeitet …');
-  });
-});
-
-describe('projectStatusChip — „arbeitet" hat Vorrang vor dem Sandbox-Status', () => {
-  it('zeigt „arbeitet", wenn ein Agent-Turn läuft (Sandbox läuft dann ohnehin)', () => {
-    expect(projectStatusChip('running', true)).toEqual({ label: 'arbeitet', color: 'warning' });
-  });
-
-  it('zeigt sonst den Sandbox-Status wie bisher', () => {
-    expect(projectStatusChip('running', false)).toEqual({ label: 'bereit', color: 'success' });
-    expect(projectStatusChip('starting', false)).toEqual({ label: 'startet', color: 'default' });
-    expect(projectStatusChip('stopped', false)).toEqual({ label: 'gestoppt', color: 'default' });
-  });
-});
 
 describe('ProjectsStore', () => {
   beforeEach(() => {

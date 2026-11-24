@@ -1,5 +1,6 @@
+import type { PreviewStatus } from '../../api/types';
 import { describe, expect, it } from 'vitest';
-import { derivePreviewView } from '../PreviewModel';
+import { derivePreviewView } from '../previewView';
 
 describe('derivePreviewView', () => {
   it('zeigt das iframe bei ready über den Gateway-Port mit /p/<projectId>/', () => {
@@ -72,6 +73,8 @@ describe('derivePreviewView', () => {
     expect(derivePreviewView('stopped', 'localhost', 4173, 'proj-1').message).toContain(
       'nicht verfügbar',
     );
-    expect(derivePreviewView('irgendwas', 'localhost', 4173, 'proj-1').showIframe).toBe(false);
+    expect(
+      derivePreviewView('irgendwas' as PreviewStatus, 'localhost', 4173, 'proj-1').showIframe,
+    ).toBe(false);
   });
 });
