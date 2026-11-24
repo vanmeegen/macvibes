@@ -1,9 +1,8 @@
 /**
  * Beendet alles, was `bun run dev` startet: Web (Vite), Server, Egress-Proxy
  * und alle laufenden macvibes-MicroVMs. Idempotent — mehrfaches Ausführen ist
- * ok. Bun-TS-Fassung von scripts/shutdown.sh (P6): Port-Prüfung per
- * TCP-Connect, PID-Suche gekapselt in lib/prozesse — die frühere harte
- * lsof-Abhängigkeit entfällt.
+ * ok. Plattformneutrales Bun-TS (P6): Port-Prüfung per TCP-Connect,
+ * PID-Suche gekapselt in lib/prozesse.
  */
 import { DEFAULT_MAX_SANDBOXES, shutdownGraceSeconds } from '@macvibes/shared';
 import { envWertMitDateiFallback } from './lib/env';

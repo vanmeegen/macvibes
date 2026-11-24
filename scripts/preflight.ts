@@ -4,8 +4,7 @@
  * statt dass sich zwei Instanzen gegenseitig die Ports wegnehmen (EADDRINUSE,
  * gegenseitige SIGTERMs, hängende Sandbox-Starts).
  *
- * Bun-TS-Fassung von scripts/preflight.sh (plattformneutral, P6);
- * Port-Prüfung per TCP-Connect statt lsof.
+ * Plattformneutrales Bun-TS (P6): Port-Prüfung per TCP-Connect statt lsof.
  */
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';

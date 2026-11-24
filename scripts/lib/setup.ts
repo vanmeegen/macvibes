@@ -25,7 +25,7 @@ export interface ModelRoute {
  * NICHT aus (der Credential-Proxy routet pro Request nach dem `model` im Body).
  *   - claude-oauth     : Abo-Token (claude setup-token), bevorzugt
  *   - claude-apikey    : klassischer Anthropic-API-Key
- *   - ollama           : lokales Modell (oMLX, Qwen 3.8) — braucht keine Env,
+ *   - lokal            : lokales Modell (oMLX, Qwen 3.8) — braucht keine Env,
  *                        der Credential-Proxy routet direkt an oMLX
  *   - custom-anthropic : eigener Anbieter, dessen Endpunkt die Format-PROBE
  *                        (lib/providerProbe) als Anthropic-/v1/messages-
@@ -48,7 +48,7 @@ export interface ModelRoute {
 export type ProviderChoice =
   | { kind: 'claude-oauth'; token: string }
   | { kind: 'claude-apikey'; apiKey: string }
-  | { kind: 'ollama' }
+  | { kind: 'lokal' }
   | {
       kind: 'custom-anthropic';
       /** Anzeigename des Anbieters (nur für Kommentare/Meldungen). */
@@ -110,8 +110,7 @@ export interface SetupAnswers {
 /**
  * Eine Anbieter-Wahl auf ihre Env-Vars abbilden.
  *
- * `ollama` (historischer Name der Wahl „lokales Modell") liefert bewusst eine
- * LEERE Map: config.ts zeigt per Default auf oMLX (http://localhost:8000) und
+ * `lokal` (das lokale Modell) liefert bewusst eine LEERE Map: config.ts zeigt per Default auf oMLX (http://localhost:8000) und
  * startet `omlx serve`, falls der brew-Service nicht ohnehin läuft. Es braucht
  * also KEINE Env, um das lokale Modell zu aktivieren; nur ein abweichender
  * Endpunkt/Command würde MACVIBES_LOCAL_* setzen.
@@ -122,7 +121,7 @@ export function providerEnv(choice: ProviderChoice): Record<string, string> {
       return { CLAUDE_CODE_OAUTH_TOKEN: choice.token };
     case 'claude-apikey':
       return { ANTHROPIC_API_KEY: choice.apiKey };
-    case 'ollama':
+    case 'lokal':
       return {};
     case 'custom-anthropic': {
       // Direkte Routen: der Proxy matcht das `model` im Body per
@@ -331,7 +330,7 @@ export function buildEnvContent(answers: SetupAnswers): string {
   }
 
   // Lokales Modell: oMLX ist der Default-Upstream (config.ts), keine Env nötig.
-  if (answers.providers.some((p) => p.kind === 'ollama')) {
+  if (answers.providers.some((p) => p.kind === 'lokal')) {
     lines.push('');
     lines.push('# Lokales Modell (Qwen 3.8 auf oMLX, http://localhost:8000) — Default-Upstream,');
     lines.push(
@@ -378,10 +377,27 @@ export function envZielPfad(opts: {
     : join(opts.macvibesHome, '.env');
 }
 
+/** Was der Nutzer an der Frage „Was hinzufügen?" gewählt hat. */
+export type AnbieterWahl = 'lokal' | 'anbieter' | 'fertig' | 'unbekannt';
+
+/**
+ * Eingabe an der Frage „Was hinzufügen? [lokal | anbieter]" auswerten. Leer =
+ * fertig. `ollama` bleibt als Alias für `lokal` akzeptiert: so hieß die Wahl,
+ * als das lokale Modell noch über Ollama lief — wer das Setup von früher
+ * kennt, soll nicht an einer „Unbekannte Wahl" hängen bleiben.
+ */
+export function parseAnbieterWahl(eingabe: string): AnbieterWahl {
+  const wahl = eingabe.trim().toLowerCase();
+  if (wahl === '') return 'fertig';
+  if (wahl === 'lokal' || wahl === 'ollama') return 'lokal';
+  if (wahl === 'anbieter') return 'anbieter';
+  return 'unbekannt';
+}
+
 /**
  * Aussperr-Absicherung des Sandbox-Backends: msb vorhanden → voller VM-Modus
  * (microsandbox), sonst der klar benannte Prozess-Fallback statt eines toten
- * Zustands (installer-plan.md, Schritt 5).
+ * Zustands (docs/installer-plan.md, Schritt 5).
  */
 export function sandboxModeFor(msbAvailable: boolean): 'microsandbox' | 'process' {
   return msbAvailable ? 'microsandbox' : 'process';
@@ -423,7 +439,7 @@ export interface DoctorReport {
 }
 
 /**
- * Reine Auswertung der Doctor-Eingaben. Leitregel (installer-plan.md): nur
+ * Reine Auswertung der Doctor-Eingaben. Leitregel (docs/installer-plan.md): nur
  * echte Blocker sind `fail` (ohne bun/git geht gar nichts). Fehlendes msb/
  * Hypervisor ist `warn`, weil der Prozess-Fallback existiert — das Setup soll
  * niemanden aussperren.

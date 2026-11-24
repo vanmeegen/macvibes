@@ -15,6 +15,7 @@ import {
   envQuote,
   envZielPfad,
   mergeProviderEnv,
+  parseAnbieterWahl,
   providerEnv,
   sandboxModeFor,
   type DoctorInput,
@@ -86,10 +87,11 @@ describe('providerEnv — Anbieter-Wahl auf Env-Vars abbilden', () => {
     });
   });
 
-  test('ollama braucht keine Env — der mitgelieferte Router startet automatisch', () => {
-    // detectLocalRouterCommand() in config.ts liefert per Default das gebündelte
-    // run.ts → lokale Modelle sind ohne jede Env aktiv. Bewusst leere Map.
-    expect(providerEnv({ kind: 'ollama' })).toEqual({});
+  test('lokal braucht keine Env — oMLX ist der Default-Upstream', () => {
+    // config.ts zeigt per Default auf oMLX (http://localhost:8000) und startet
+    // `omlx serve`, falls es nicht schon läuft → das lokale Modell ist ohne
+    // jede Env aktiv. Bewusst leere Map.
+    expect(providerEnv({ kind: 'lokal' })).toEqual({});
   });
 
   test('custom-anthropic erzeugt eine MACVIBES_MODEL_ROUTES-Route (prefix = Modell-ID)', () => {
@@ -201,8 +203,8 @@ describe('mergeProviderEnv — kombinierbare Anbieter', () => {
     expect(routes.map((r) => r.prefix)).toEqual(['a-1', 'a-2', 'b-1']);
   });
 
-  test('nur lokal (Ollama), kein Claude: keine Claude-Keys in der Map', () => {
-    const merged = mergeProviderEnv([{ kind: 'ollama' }]);
+  test('nur lokal (oMLX), kein Claude: keine Claude-Keys in der Map', () => {
+    const merged = mergeProviderEnv([{ kind: 'lokal' }]);
     expect(merged['CLAUDE_CODE_OAUTH_TOKEN']).toBeUndefined();
     expect(merged['ANTHROPIC_API_KEY']).toBeUndefined();
     expect(merged['MACVIBES_MODEL_ROUTES']).toBeUndefined();
@@ -376,7 +378,7 @@ describe('buildEnvContent — .env-Inhalt aus den Antworten', () => {
       adminUsername: 'marco',
       adminBootstrapToken: 'boot-tok-0123abcd',
       sandboxMode: 'process',
-      providers: [{ kind: 'ollama' }],
+      providers: [{ kind: 'lokal' }],
     });
     expect(content).not.toContain('CLAUDE_CODE_OAUTH_TOKEN=');
     expect(content).not.toContain('ANTHROPIC_API_KEY=');
@@ -482,7 +484,7 @@ describe('buildEnvContent — sperrt Werte aus, die Buns Parser korrumpieren wü
         adminUsername: 'admin-01',
         adminBootstrapToken: 'tok-$HOME',
         sandboxMode: 'process',
-        providers: [{ kind: 'ollama' }],
+        providers: [{ kind: 'lokal' }],
       }),
     ).toThrow(/MACVIBES_ADMIN_BOOTSTRAP_TOKEN/);
   });
@@ -552,6 +554,30 @@ describe('envZielPfad — Dev-Checkout vs. installierte Fassung', () => {
     expect(
       envZielPfad({ istDevCheckout: false, repoRoot: '/libexec', macvibesHome: '/home/macvibes' }),
     ).toBe(join('/home/macvibes', '.env'));
+  });
+});
+
+describe('parseAnbieterWahl — Eingabe an „Was hinzufügen?"', () => {
+  test('lokal und anbieter werden erkannt, unabhängig von Groß-/Kleinschreibung und Rand-Leerraum', () => {
+    expect(parseAnbieterWahl('lokal')).toBe('lokal');
+    expect(parseAnbieterWahl('  Lokal ')).toBe('lokal');
+    expect(parseAnbieterWahl('anbieter')).toBe('anbieter');
+    expect(parseAnbieterWahl('ANBIETER')).toBe('anbieter');
+  });
+
+  test('ollama bleibt als Alias für das lokale Modell akzeptiert', () => {
+    expect(parseAnbieterWahl('ollama')).toBe('lokal');
+    expect(parseAnbieterWahl(' Ollama')).toBe('lokal');
+  });
+
+  test('leere Eingabe heißt fertig', () => {
+    expect(parseAnbieterWahl('')).toBe('fertig');
+    expect(parseAnbieterWahl('   ')).toBe('fertig');
+  });
+
+  test('alles andere ist unbekannt (kein stilles Raten)', () => {
+    expect(parseAnbieterWahl('openrouter')).toBe('unbekannt');
+    expect(parseAnbieterWahl('lokal anbieter')).toBe('unbekannt');
   });
 });
 

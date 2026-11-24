@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * `macvibes` — die EINE CLI-Klammer um die bestehenden Repo-Skripte
- * (installer-plan.md, Phase 0). Bewusst eine DÜNNE Schale: die Argument-
+ * (docs/installer-plan.md, Phase 0). Bewusst eine DÜNNE Schale: die Argument-
  * Auswertung ist rein und getestet (lib/cli), die Unterbefehle sind die
  * unveränderten Skripte — hier wird nichts neu implementiert.
  *

@@ -1,7 +1,7 @@
 /**
- * `bun run setup` — das geführte First-Run-Setup (installer-plan.md). Läuft im
- * heutigen Source-Betrieb (git clone → bun install → setup) und ist der
- * wiederverwendbare Kern des künftigen Installers.
+ * `bun run setup` — das geführte First-Run-Setup (docs/installer-plan.md).
+ * Läuft im heutigen Source-Betrieb (git clone → bun install → setup) und ist
+ * der wiederverwendbare Kern des künftigen Installers.
  *
  * Diese Datei ist die DÜNNE, interaktive Schale: sie sammelt echte Zustände und
  * Nutzereingaben und delegiert alle Logik an die reinen, getesteten Helfer in
@@ -9,7 +9,7 @@
  * confirm() würden hängen) — der ganze Ablauf steht deshalb hinter
  * `import.meta.main`.
  *
- * Ablauf exakt nach installer-plan.md „First-Run-Setup — Ablauf & Reihenfolge":
+ * Ablauf exakt nach docs/installer-plan.md „First-Run-Setup — Ablauf & Reihenfolge":
  *   Doctor → Anbieter-Wahl → Admin (Pflicht) → .env schreiben (chmod 600) →
  *   ~/macvibes-Baum → Baselines (msb) / Prozess-Fallback → Abschluss-Hinweis.
  */
@@ -44,6 +44,7 @@ import {
   doctor,
   envWertIstUnsicher,
   envZielPfad,
+  parseAnbieterWahl,
   sandboxModeFor,
   type AnbieterModell,
   type ProviderChoice,
@@ -433,12 +434,12 @@ async function anbieterWaehlen(): Promise<ProviderChoice[]> {
     )
   ) {
     for (;;) {
-      const wahl = (prompt('  Was hinzufügen? [ollama | anbieter] (leer = fertig): ') ?? '')
-        .trim()
-        .toLowerCase();
-      if (wahl === '') break;
-      if (wahl === 'ollama') {
-        providers.push({ kind: 'ollama' });
+      const wahl = parseAnbieterWahl(
+        prompt('  Was hinzufügen? [lokal | anbieter] (leer = fertig): ') ?? '',
+      );
+      if (wahl === 'fertig') break;
+      if (wahl === 'lokal') {
+        providers.push({ kind: 'lokal' });
         console.log(
           '  ✓ Lokales Modell (Qwen 3.8 auf oMLX, http://localhost:8000) — keine Env nötig; oMLX per `omlx start` laufen lassen.',
         );
@@ -446,7 +447,7 @@ async function anbieterWaehlen(): Promise<ProviderChoice[]> {
         const neu = await eigenenAnbieterErfassen(providers);
         if (neu !== null) providers.push(neu);
       } else {
-        console.log('  Unbekannte Wahl — bitte ollama oder anbieter.');
+        console.log('  Unbekannte Wahl — bitte lokal oder anbieter.');
       }
     }
   }
@@ -481,7 +482,7 @@ async function main(): Promise<void> {
     console.log(
       '\n⚠ Kein Anbieter gewählt — Fallback auf das lokale Modell (oMLX). Ohne laufendes oMLX mit Qwen 3.8 antwortet der Agent nicht.',
     );
-    providers.push({ kind: 'ollama' });
+    providers.push({ kind: 'lokal' });
   }
   if (!providers.some((p) => p.kind === 'claude-oauth' || p.kind === 'claude-apikey')) {
     console.log(
