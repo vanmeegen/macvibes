@@ -224,11 +224,9 @@ export function envWertIstUnsicher(value: string): boolean {
  * EINZIGE Wahl: Double-Quotes um das JSON würden die inneren `"` als `\"`
  * durchreichen und JSON.parse brechen.
  *
- * WARUM ABLEHNEN statt escapen: die frühere Annahme „Single-Quotes schalten jede
- * Expansion aus" ist gegen den echten Bun-Parser FALSCH (s. ENV_UNSICHER —
- * `$`-Expansion, Trailing-`\`-Zeilenfraß, `'`-Terminierung). Ein zuverlässiges
- * Escaping dieser Zeichen gibt es in Buns Single-Quote-Syntax NICHT (`\$`/`\\`
- * verhalten sich inkonsistent), also werden sie klar abgelehnt statt still ein
+ * WARUM ABLEHNEN statt escapen: die Zeichen aus ENV_UNSICHER (dort steht die
+ * Begründung je Zeichen) lassen sich in Buns Single-Quote-Syntax nicht
+ * zuverlässig escapen, also werden sie klar abgelehnt statt still ein
  * zerbrochenes/injiziertes .env zu erzeugen. Das ist unkritisch: der
  * Admin-Username (usernameSchema: nur [a-z0-9_-]) kann keines davon enthalten,
  * Secrets/URLs praktisch nie. Die interaktive Schale weist solche Eingaben schon
@@ -375,6 +373,42 @@ export function envZielPfad(opts: {
   return opts.istDevCheckout
     ? join(opts.repoRoot, 'apps', 'server', '.env')
     : join(opts.macvibesHome, '.env');
+}
+
+/**
+ * Anthropic-kompatiblen Anbieter (direkte Modell-Route) fertig bauen. Ein
+ * leerer Token wird WEGGELASSEN statt als '' eingetragen: der Endpunkt braucht
+ * dann keinen Key, und providerEnv schreibt keine apiKey in die Route.
+ */
+export function baueAnthropicAnbieter(daten: {
+  name: string;
+  modelle: AnbieterModell[];
+  url: string;
+  token: string;
+}): ProviderChoice {
+  const { name, modelle, url, token } = daten;
+  // exactOptionalPropertyTypes: `token` nur aufnehmen, wenn wirklich gesetzt.
+  return token === ''
+    ? { kind: 'custom-anthropic', name, modelle, url }
+    : { kind: 'custom-anthropic', name, modelle, url, token };
+}
+
+/**
+ * Eine getippte Auswahl („u", „ueberschreiben", …) einer Option zuordnen:
+ * `optionen` nennt je Option die akzeptierten Schreibweisen (kleingeschrieben).
+ * Rand-Leerraum und Groß-/Kleinschreibung der Eingabe zählen nicht. Kein
+ * Treffer → null; der Aufrufer entscheidet, was dann gilt (meist die
+ * nicht-destruktive Variante).
+ */
+export function waehleOption<K extends string>(
+  eingabe: string,
+  optionen: Record<K, readonly string[]>,
+): K | null {
+  const wahl = eingabe.trim().toLowerCase();
+  for (const option of Object.keys(optionen) as K[]) {
+    if (optionen[option].includes(wahl)) return option;
+  }
+  return null;
 }
 
 /** Was der Nutzer an der Frage „Was hinzufügen?" gewählt hat. */

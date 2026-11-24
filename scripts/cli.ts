@@ -5,7 +5,7 @@
  * Auswertung ist rein und getestet (lib/cli), die Unterbefehle sind die
  * unveränderten Skripte — hier wird nichts neu implementiert.
  *
- * WARUM Bun.spawn statt direktem Import: scripts/setup.ts steht hinter
+ * WARUM ein Subprozess statt direktem Import: scripts/setup.ts steht hinter
  * `import.meta.main` — importiert würde seine main() NIE laufen. dev.ts und
  * shutdown.ts laufen zwar auf Top-Level, rufen aber process.exit() und würden
  * damit DIESE CLI mitten im Dispatch beenden. Ein Subprozess mit stdio
@@ -25,20 +25,14 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hilfeText, parseCliArgs, type CliBefehlName } from './lib/cli';
 import { druckeDoctorReport, erhebeDoctorInput } from './lib/doctorState';
+import { starteImVordergrund } from './lib/prozesse';
 import { doctor } from './lib/doctor';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 
 /** Unterbefehl als Vordergrund-Subprozess, Exit-Code 1:1 durchreichen. */
 async function delegiere(argv: string[]): Promise<never> {
-  const proc = Bun.spawn(argv, {
-    cwd: repoRoot,
-    stdin: 'inherit',
-    stdout: 'inherit',
-    stderr: 'inherit',
-    env: process.env as Record<string, string>,
-  });
-  process.exit(await proc.exited);
+  process.exit(await starteImVordergrund(argv, repoRoot));
 }
 
 /**

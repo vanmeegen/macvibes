@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { wertAusEnvDatei } from '../env';
 import {
+  baueAnthropicAnbieter,
   buildEnvContent,
   envQuote,
   envZielPfad,
@@ -17,6 +18,7 @@ import {
   parseAnbieterWahl,
   providerEnv,
   sandboxModeFor,
+  waehleOption,
   type ProviderChoice,
   type SetupAnswers,
   LITELLM_BRIDGE_URL,
@@ -585,5 +587,61 @@ describe('sandboxModeFor — Aussperr-Absicherung des Sandbox-Backends', () => {
   });
   test('msb fehlt → process (klar benannter Fallback statt totem Zustand)', () => {
     expect(sandboxModeFor(false)).toBe('process');
+  });
+});
+
+describe('baueAnthropicAnbieter — direkte Route für Anthropic-kompatible Endpunkte', () => {
+  const modelle = [{ id: 'glm-4.7', label: 'GLM 4.7 (Acme)' }];
+
+  test('mit Token: der Token steht im Anbieter', () => {
+    expect(
+      baueAnthropicAnbieter({ name: 'Acme', modelle, url: 'https://acme.test', token: 'geheim' }),
+    ).toEqual({
+      kind: 'custom-anthropic',
+      name: 'Acme',
+      modelle,
+      url: 'https://acme.test',
+      token: 'geheim',
+    });
+  });
+
+  test('leerer Token wird weggelassen — die Route bekommt dann keinen apiKey', () => {
+    const anbieter = baueAnthropicAnbieter({
+      name: 'Acme',
+      modelle,
+      url: 'https://acme.test',
+      token: '',
+    });
+    expect(anbieter).toEqual({
+      kind: 'custom-anthropic',
+      name: 'Acme',
+      modelle,
+      url: 'https://acme.test',
+    });
+    expect('token' in anbieter).toBe(false);
+  });
+});
+
+describe('waehleOption — getippte Auswahl einer Option zuordnen', () => {
+  const optionen = {
+    ueberschreiben: ['u', 'ueberschreiben', 'überschreiben'],
+    abbrechen: ['a', 'abbrechen'],
+  } as const;
+
+  test('Kürzel und ausgeschriebene Formen treffen, mit Umlaut und ohne', () => {
+    expect(waehleOption('u', optionen)).toBe('ueberschreiben');
+    expect(waehleOption('überschreiben', optionen)).toBe('ueberschreiben');
+    expect(waehleOption('abbrechen', optionen)).toBe('abbrechen');
+  });
+
+  test('Rand-Leerraum und Großschreibung zählen nicht', () => {
+    expect(waehleOption('  A ', optionen)).toBe('abbrechen');
+    expect(waehleOption('Ueberschreiben', optionen)).toBe('ueberschreiben');
+  });
+
+  test('leer oder vertippt: null — der Aufrufer bleibt beim nicht-destruktiven Default', () => {
+    expect(waehleOption('', optionen)).toBeNull();
+    expect(waehleOption('uu', optionen)).toBeNull();
+    expect(waehleOption('b', optionen)).toBeNull();
   });
 });
