@@ -103,3 +103,20 @@ export function beende(pid: number, hart = false): void {
     // Prozess ist schon weg — genau das wollten wir.
   }
 }
+
+/**
+ * Kommando als Vordergrund-Subprozess starten und auf seinen Exit-Code warten.
+ * stdio 'inherit': Ein-/Ausgabe laufen direkt über das Terminal, und Ctrl+C
+ * erreicht als Konsolen-Signal die ganze Vordergrund-Gruppe (POSIX wie
+ * Windows) — der Aufrufer muss nur noch den Exit-Code durchreichen.
+ */
+export async function starteImVordergrund(argv: string[], cwd?: string): Promise<number> {
+  const proc = Bun.spawn(argv, {
+    ...(cwd === undefined ? {} : { cwd }),
+    stdin: 'inherit',
+    stdout: 'inherit',
+    stderr: 'inherit',
+    env: process.env as Record<string, string>,
+  });
+  return proc.exited;
+}

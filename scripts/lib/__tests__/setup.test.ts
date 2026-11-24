@@ -1,6 +1,6 @@
 /**
  * Reine Helfer des First-Run-Setups (`bun run setup`). Getestet wird NUR die
- * Logik (Env-Erzeugung, Anbieter-Mapping, Doctor-Auswertung, Sandbox-Wahl) —
+ * Logik (Env-Erzeugung, Anbieter-Mapping, Sandbox-Wahl) —
  * die interaktive Schale scripts/setup.ts wird hier bewusst NICHT aufgerufen
  * (sie würde an prompt()/confirm() hängen). Test-first nach CLAUDE.md.
  */
@@ -10,14 +10,15 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { wertAusEnvDatei } from '../env';
 import {
+  baueAnthropicAnbieter,
   buildEnvContent,
-  doctor,
   envQuote,
   envZielPfad,
   mergeProviderEnv,
+  parseAnbieterWahl,
   providerEnv,
   sandboxModeFor,
-  type DoctorInput,
+  waehleOption,
   type ProviderChoice,
   type SetupAnswers,
   LITELLM_BRIDGE_URL,
@@ -86,10 +87,11 @@ describe('providerEnv — Anbieter-Wahl auf Env-Vars abbilden', () => {
     });
   });
 
-  test('ollama braucht keine Env — der mitgelieferte Router startet automatisch', () => {
-    // detectLocalRouterCommand() in config.ts liefert per Default das gebündelte
-    // run.ts → lokale Modelle sind ohne jede Env aktiv. Bewusst leere Map.
-    expect(providerEnv({ kind: 'ollama' })).toEqual({});
+  test('lokal braucht keine Env — oMLX ist der Default-Upstream', () => {
+    // config.ts zeigt per Default auf oMLX (http://localhost:8000) und startet
+    // `omlx serve`, falls es nicht schon läuft → das lokale Modell ist ohne
+    // jede Env aktiv. Bewusst leere Map.
+    expect(providerEnv({ kind: 'lokal' })).toEqual({});
   });
 
   test('custom-anthropic erzeugt eine MACVIBES_MODEL_ROUTES-Route (prefix = Modell-ID)', () => {
@@ -201,8 +203,8 @@ describe('mergeProviderEnv — kombinierbare Anbieter', () => {
     expect(routes.map((r) => r.prefix)).toEqual(['a-1', 'a-2', 'b-1']);
   });
 
-  test('nur lokal (Ollama), kein Claude: keine Claude-Keys in der Map', () => {
-    const merged = mergeProviderEnv([{ kind: 'ollama' }]);
+  test('nur lokal (oMLX), kein Claude: keine Claude-Keys in der Map', () => {
+    const merged = mergeProviderEnv([{ kind: 'lokal' }]);
     expect(merged['CLAUDE_CODE_OAUTH_TOKEN']).toBeUndefined();
     expect(merged['ANTHROPIC_API_KEY']).toBeUndefined();
     expect(merged['MACVIBES_MODEL_ROUTES']).toBeUndefined();
@@ -376,7 +378,7 @@ describe('buildEnvContent — .env-Inhalt aus den Antworten', () => {
       adminUsername: 'marco',
       adminBootstrapToken: 'boot-tok-0123abcd',
       sandboxMode: 'process',
-      providers: [{ kind: 'ollama' }],
+      providers: [{ kind: 'lokal' }],
     });
     expect(content).not.toContain('CLAUDE_CODE_OAUTH_TOKEN=');
     expect(content).not.toContain('ANTHROPIC_API_KEY=');
@@ -482,7 +484,7 @@ describe('buildEnvContent — sperrt Werte aus, die Buns Parser korrumpieren wü
         adminUsername: 'admin-01',
         adminBootstrapToken: 'tok-$HOME',
         sandboxMode: 'process',
-        providers: [{ kind: 'ollama' }],
+        providers: [{ kind: 'lokal' }],
       }),
     ).toThrow(/MACVIBES_ADMIN_BOOTSTRAP_TOKEN/);
   });
@@ -555,6 +557,30 @@ describe('envZielPfad — Dev-Checkout vs. installierte Fassung', () => {
   });
 });
 
+describe('parseAnbieterWahl — Eingabe an „Was hinzufügen?"', () => {
+  test('lokal und anbieter werden erkannt, unabhängig von Groß-/Kleinschreibung und Rand-Leerraum', () => {
+    expect(parseAnbieterWahl('lokal')).toBe('lokal');
+    expect(parseAnbieterWahl('  Lokal ')).toBe('lokal');
+    expect(parseAnbieterWahl('anbieter')).toBe('anbieter');
+    expect(parseAnbieterWahl('ANBIETER')).toBe('anbieter');
+  });
+
+  test('ollama bleibt als Alias für das lokale Modell akzeptiert', () => {
+    expect(parseAnbieterWahl('ollama')).toBe('lokal');
+    expect(parseAnbieterWahl(' Ollama')).toBe('lokal');
+  });
+
+  test('leere Eingabe heißt fertig', () => {
+    expect(parseAnbieterWahl('')).toBe('fertig');
+    expect(parseAnbieterWahl('   ')).toBe('fertig');
+  });
+
+  test('alles andere ist unbekannt (kein stilles Raten)', () => {
+    expect(parseAnbieterWahl('openrouter')).toBe('unbekannt');
+    expect(parseAnbieterWahl('lokal anbieter')).toBe('unbekannt');
+  });
+});
+
 describe('sandboxModeFor — Aussperr-Absicherung des Sandbox-Backends', () => {
   test('msb vorhanden → microsandbox (voller VM-Modus)', () => {
     expect(sandboxModeFor(true)).toBe('microsandbox');
@@ -564,67 +590,58 @@ describe('sandboxModeFor — Aussperr-Absicherung des Sandbox-Backends', () => {
   });
 });
 
-describe('doctor — reine Auswertung injizierter Prüf-Ergebnisse', () => {
-  const gesund: DoctorInput = {
-    bunVersion: '1.3.14',
-    bunPin: '1.3.14',
-    gitAvailable: true,
-    msbAvailable: true,
-    hypervisorAvailable: true,
-    belegtePorts: [],
-  };
+describe('baueAnthropicAnbieter — direkte Route für Anthropic-kompatible Endpunkte', () => {
+  const modelle = [{ id: 'glm-4.7', label: 'GLM 4.7 (Acme)' }];
 
-  test('alles ok → keine Fehler, keine Warnungen', () => {
-    const report = doctor(gesund);
-    expect(report.hatFehler).toBe(false);
-    expect(report.hatWarnung).toBe(false);
-    expect(report.checks.every((c) => c.status === 'ok')).toBe(true);
+  test('mit Token: der Token steht im Anbieter', () => {
+    expect(
+      baueAnthropicAnbieter({ name: 'Acme', modelle, url: 'https://acme.test', token: 'geheim' }),
+    ).toEqual({
+      kind: 'custom-anthropic',
+      name: 'Acme',
+      modelle,
+      url: 'https://acme.test',
+      token: 'geheim',
+    });
   });
 
-  test('fehlendes bun ist ein harter Fehler mit Handlungshinweis', () => {
-    const report = doctor({ ...gesund, bunVersion: null });
-    const bun = report.checks.find((c) => c.id === 'bun');
-    expect(bun?.status).toBe('fail');
-    expect(bun?.hinweis.length).toBeGreaterThan(0);
-    expect(report.hatFehler).toBe(true);
+  test('leerer Token wird weggelassen — die Route bekommt dann keinen apiKey', () => {
+    const anbieter = baueAnthropicAnbieter({
+      name: 'Acme',
+      modelle,
+      url: 'https://acme.test',
+      token: '',
+    });
+    expect(anbieter).toEqual({
+      kind: 'custom-anthropic',
+      name: 'Acme',
+      modelle,
+      url: 'https://acme.test',
+    });
+    expect('token' in anbieter).toBe(false);
+  });
+});
+
+describe('waehleOption — getippte Auswahl einer Option zuordnen', () => {
+  const optionen = {
+    ueberschreiben: ['u', 'ueberschreiben', 'überschreiben'],
+    abbrechen: ['a', 'abbrechen'],
+  } as const;
+
+  test('Kürzel und ausgeschriebene Formen treffen, mit Umlaut und ohne', () => {
+    expect(waehleOption('u', optionen)).toBe('ueberschreiben');
+    expect(waehleOption('überschreiben', optionen)).toBe('ueberschreiben');
+    expect(waehleOption('abbrechen', optionen)).toBe('abbrechen');
   });
 
-  test('abweichende bun-Version warnt (Pin 1.3.14), blockiert aber nicht', () => {
-    const report = doctor({ ...gesund, bunVersion: '1.4.0' });
-    const bun = report.checks.find((c) => c.id === 'bun');
-    expect(bun?.status).toBe('warn');
-    expect(report.hatFehler).toBe(false);
-    expect(report.hatWarnung).toBe(true);
+  test('Rand-Leerraum und Großschreibung zählen nicht', () => {
+    expect(waehleOption('  A ', optionen)).toBe('abbrechen');
+    expect(waehleOption('Ueberschreiben', optionen)).toBe('ueberschreiben');
   });
 
-  test('fehlendes git ist ein harter Fehler', () => {
-    const report = doctor({ ...gesund, gitAvailable: false });
-    expect(report.checks.find((c) => c.id === 'git')?.status).toBe('fail');
-    expect(report.hatFehler).toBe(true);
-  });
-
-  test('fehlendes msb ist nur eine Warnung (Prozess-Fallback existiert)', () => {
-    const report = doctor({ ...gesund, msbAvailable: false });
-    expect(report.checks.find((c) => c.id === 'msb')?.status).toBe('warn');
-    expect(report.hatFehler).toBe(false);
-  });
-
-  test('msb da, aber kein Hypervisor → Warnung (VM kann nicht booten)', () => {
-    const report = doctor({ ...gesund, hypervisorAvailable: false });
-    expect(report.checks.find((c) => c.id === 'hypervisor')?.status).toBe('warn');
-    expect(report.hatFehler).toBe(false);
-  });
-
-  test('ohne msb ist die Hypervisor-Prüfung nicht anwendbar (ok/übersprungen)', () => {
-    const report = doctor({ ...gesund, msbAvailable: false, hypervisorAvailable: false });
-    expect(report.checks.find((c) => c.id === 'hypervisor')?.status).toBe('ok');
-  });
-
-  test('belegte Ports warnen mit den konkreten Portnummern', () => {
-    const report = doctor({ ...gesund, belegtePorts: [4000, 5173] });
-    const ports = report.checks.find((c) => c.id === 'ports');
-    expect(ports?.status).toBe('warn');
-    expect(ports?.hinweis).toContain('4000');
-    expect(ports?.hinweis).toContain('5173');
+  test('leer oder vertippt: null — der Aufrufer bleibt beim nicht-destruktiven Default', () => {
+    expect(waehleOption('', optionen)).toBeNull();
+    expect(waehleOption('uu', optionen)).toBeNull();
+    expect(waehleOption('b', optionen)).toBeNull();
   });
 });

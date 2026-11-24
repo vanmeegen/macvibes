@@ -23,7 +23,7 @@
  * Diagnose, keinem Fehlerdetail und keinem Log auf.
  */
 
-export type ProbeFormat = 'anthropic' | 'openai';
+type ProbeFormat = 'anthropic' | 'openai';
 
 /** Ein Probe-Kandidat: welches Format, welche konkrete URL. */
 export interface ProbeSpec {

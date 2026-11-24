@@ -1,13 +1,12 @@
 /**
  * Beendet alles, was `bun run dev` startet: Web (Vite), Server, Egress-Proxy
  * und alle laufenden macvibes-MicroVMs. Idempotent — mehrfaches Ausführen ist
- * ok. Bun-TS-Fassung von scripts/shutdown.sh (P6): Port-Prüfung per
- * TCP-Connect, PID-Suche gekapselt in lib/prozesse — die frühere harte
- * lsof-Abhängigkeit entfällt.
+ * ok. Plattformneutrales Bun-TS (P6): Port-Prüfung per TCP-Connect,
+ * PID-Suche gekapselt in lib/prozesse.
  */
 import { DEFAULT_MAX_SANDBOXES, shutdownGraceSeconds } from '@macvibes/shared';
 import { envWertMitDateiFallback } from './lib/env';
-import { portKonfiguration } from './lib/ports';
+import { allePorts, portKonfiguration } from './lib/ports';
 import { istPortBelegt, pidsAufPort, pidsMitKommandozeile, beende } from './lib/prozesse';
 
 // Ports respektieren die Env-Overrides (mit denselben Defaults wie der
@@ -78,7 +77,7 @@ async function beendePort(port: number): Promise<void> {
   for (const pid of await pidsAufPort(port)) beende(pid, true);
 }
 
-for (const port of [WEB_PORT, SERVER_PORT, EGRESS_PORT, GATEWAY_PORT]) {
+for (const port of allePorts()) {
   await beendePort(port);
 }
 
@@ -138,7 +137,7 @@ if (Bun.which('msb') !== null) {
 // der nächste `bun run dev` schon am Preflight gescheitert — dann lieber hier
 // ein klarer Fehler als später eine verwirrende Meldung.
 const rest: number[] = [];
-for (const port of [WEB_PORT, SERVER_PORT, EGRESS_PORT, GATEWAY_PORT]) {
+for (const port of allePorts()) {
   if (await istPortBelegt(port)) rest.push(port);
 }
 if (rest.length > 0) {
