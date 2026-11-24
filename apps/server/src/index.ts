@@ -32,7 +32,7 @@ import { ensureAdmin, purgeExpiredSessions, resolveSession } from './services/au
 import { ChatService } from './services/chatService';
 import { ensureBareRepo } from './core/gitService';
 import { startMirrorScheduler } from './services/mirrorService';
-import { startLocalRouter } from './services/localRouterService';
+import { MODEL_SERVER_UNAVAILABLE, startModelServer } from './services/modelServerService';
 import { ShutdownSequence } from './shutdownSequence';
 import { FIXED_SHUTDOWN_STEP_TIMEOUTS_MS, sandboxShutdownBudgetMs } from '@macvibes/shared';
 import { projectRepoFor } from './core/workspaceService';
@@ -109,7 +109,7 @@ const anthropicProxy = createAnthropicProxy({
   oauthToken: config.anthropic.oauthToken,
   apiKey: config.anthropic.apiKey,
   keepAliveMs: config.anthropic.keepAliveMs,
-  // Modell-Routing: claude-* → Anthropic, alles andere → lokaler Router (Shim);
+  // Modell-Routing: claude-* → Anthropic, alles andere → lokaler Modell-Server;
   // Zusatz-Routen (MACVIBES_MODEL_ROUTES) matchen davor.
   localUpstreamUrl: config.localModels.upstreamUrl,
   localApiKey: config.localModels.apiKey,
@@ -118,7 +118,7 @@ const anthropicProxy = createAnthropicProxy({
 if (config.anthropic.oauthToken === null && config.anthropic.apiKey === null) {
   console.warn(
     'Achtung: keine Claude-Credentials (CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY) — ' +
-      'Claude-Modelle laufen dann über den lokalen Router (Fallback), nur lokale Modelle sind verlässlich.',
+      'Claude-Modelle laufen dann über den lokalen Modell-Server (Fallback), nur lokale Modelle sind verlässlich.',
   );
 }
 
@@ -126,7 +126,7 @@ if (config.anthropic.oauthToken === null && config.anthropic.apiKey === null) {
 // registriert, während der Server hochfährt, und laufen beim Signal rückwärts
 // ab (zuletzt Gestartetes zuerst gestoppt). Die Registrierung steht bewusst so
 // früh, dass auch ein Ctrl-C MITTEN im Hochlauf noch geordnet abräumt — der
-// erste Router-Start kann Minuten dauern (venv + LiteLLM).
+// erste Start eines Modell-Servers kann Minuten dauern (venv + LiteLLM).
 const shutdownSequence = new ShutdownSequence();
 // Handler-Referenzen behalten: beim Hot-Reload trägt die nächste Ausführung
 // genau dieses Paar wieder aus (process.off), damit immer nur EINE — die
@@ -145,25 +145,29 @@ hot.addCleanup('Signal-Handler', () => {
   }
 });
 
-// Lokalen Modell-Router (Anthropic-Shim) MITSTARTEN — im Hintergrund, damit der
-// Server sofort hochkommt; qwen-Turns vor Router-Readiness scheitern mit klarer
-// 502 des Proxys. Ein extern laufender Shim wird erkannt und nie angefasst.
-// Im Fake-Agent-Modus (Tests/E2E) gibt es keine Modell-Requests → kein Autostart.
-// Beim Hot-Reload wird ein selbst gestarteter Router ÜBERNOMMEN statt neu
-// gestartet: der Prozess soll Reloads überleben (Kaltstart dauert Minuten),
-// und ohne Übergabe stufte die neue Ausführung ihn als „extern" ein — ihr
-// Shutdown-Schritt wäre ein No-op und `bun run shutdown` liesse den Shim als
-// Waise zurück. Der ProcessSupervisor der Startausführung überwacht ihn weiter.
+// Lokalen Modell-Server (oMLX) MITSTARTEN — im Hintergrund, damit der Server
+// sofort hochkommt; Turns lokaler Modelle vor dessen Readiness scheitern mit
+// klarer 502 des Proxys. Ein extern laufender Server wird erkannt und nie
+// angefasst. Im Fake-Agent-Modus (Tests/E2E) gibt es keine Modell-Requests →
+// kein Autostart. Beim Hot-Reload wird ein selbst gestarteter Server
+// ÜBERNOMMEN statt neu gestartet: der Prozess soll Reloads überleben
+// (Kaltstart dauert Minuten), und ohne Übergabe stufte die neue Ausführung
+// ihn als „extern" ein — ihr Shutdown-Schritt wäre ein No-op und
+// `bun run shutdown` ließe ihn als Waise zurück. Der ProcessSupervisor der
+// Startausführung überwacht ihn weiter.
 const localRouterReady =
   hot.inherited.localRouter ??
   (config.agent.backend === 'claude'
-    ? startLocalRouter({
+    ? startModelServer({
+        label: 'Lokaler Modell-Server (oMLX)',
         upstreamUrl: config.localModels.upstreamUrl,
-        command: config.localModels.routerCommand,
+        command: config.localModels.serverCommand,
+        commandEnvVar: 'MACVIBES_LOCAL_ROUTER_CMD',
+        impact: 'lokale Modelle sind nicht verfügbar, Claude-Modelle funktionieren normal',
         probePath: config.localModels.probePath,
         logFile: join(config.macvibesHome, 'local-router.log'),
       })
-    : Promise.resolve({ state: 'unavailable' as const, stop: async () => {} }));
+    : Promise.resolve(MODEL_SERVER_UNAVAILABLE));
 hot.handOver.localRouter = localRouterReady;
 // Optionale LiteLLM-Bridge (OpenAI-kompatible Cloud-Anbieter): dieselbe
 // Überwachung, eigener Port/Log. Nur wenn konfiguriert (litellm.yaml vorhanden
@@ -171,16 +175,18 @@ hot.handOver.localRouter = localRouterReady;
 const litellmReady =
   hot.inherited.litellm ??
   (config.agent.backend === 'claude' && config.litellm.autostart
-    ? startLocalRouter({
+    ? startModelServer({
+        label: 'LiteLLM-Bridge',
         upstreamUrl: config.litellm.url,
         command: config.litellm.command,
+        commandEnvVar: 'MACVIBES_LITELLM_CMD',
+        impact: 'Modelle OpenAI-kompatibler Anbieter sind nicht verfügbar',
         probePath: '/health/liveliness',
         logFile: join(config.macvibesHome, 'litellm.log'),
-        log: (message) => console.log(`LiteLLM-Bridge: ${message}`),
       })
-    : Promise.resolve({ state: 'unavailable' as const, stop: async () => {} }));
+    : Promise.resolve(MODEL_SERVER_UNAVAILABLE));
 hot.handOver.litellm = litellmReady;
-// Selbst gestarteten Shim beim Beenden mitnehmen (SIGTERM = bun run shutdown).
+// Selbst gestartete Modell-Server beim Beenden mitnehmen (SIGTERM = bun run shutdown).
 // Als Schritt, NICHT als eigener Handler: ein zweiter Handler mit eigenem
 // process.exit(0) hat vorher den Auto-Commit der Sandboxes abgeschnitten.
 // Fristen pro Schritt aus EINER Quelle (@macvibes/shared), damit sie mit der

@@ -49,7 +49,7 @@ const DEFAULTS = {
  *
  * Verwender: der ProcessSandboxProvider für den Preview-Dev-Server (R7,
  * template-agnostisch — einzige Schnittstelle ist `spawn`/`probe`) und der
- * localRouterService für die Modell-Server (oMLX, optionale LiteLLM-Bridge). Der Supervisor kennt keinen
+ * modelServerService für die Modell-Server (oMLX, optionale LiteLLM-Bridge). Der Supervisor kennt keinen
  * davon — er ist bewusst prozess-agnostisch (Basisschicht).
  */
 export class ProcessSupervisor {

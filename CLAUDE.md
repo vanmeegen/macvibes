@@ -30,7 +30,7 @@ Bun-Workspaces-Monorepo:
     `previewStatusPush`, ADR 0001); `previewStatusPoller` ergänzt host-seitig
     die HTTP-Probe. (Der frühere `previewSupervisor`
     ist der generische `core/processSupervisor` und läuft nur noch im
-    `ProcessSandboxProvider` und im `localRouterService`.)
+    `ProcessSandboxProvider` und im `modelServerService`.)
 
   Die Schichtung (core/preview/db als Basis, darüber sandbox+agent, dann
   services, schema, http) erzwingt ein **Architektur-Gate** im Lint
