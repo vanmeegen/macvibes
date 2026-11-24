@@ -8,7 +8,7 @@ erscheinen per HMR **sofort in der Live-Preview**.
 - **`apps/web/`** — Frontend: React 18 + MobX + Vite.
   - **`apps/web/src/App.tsx` — Wurzel-Komponente, HIER die UI aufbauen.** Nur was von
     hier gerendert wird, ist in der Preview sichtbar.
-  - `apps/web/src/components/` (Komponenten), `apps/web/src/models/` (MobX-Stores:
+  - `apps/web/src/components/` (Komponenten — Ordner bei Bedarf anlegen), `apps/web/src/models/` (MobX-Stores:
     `makeAutoObservable`, **keine Vererbung**; Komponenten in `observer(...)` wickeln),
     `apps/web/src/styles.css`.
   - `apps/web/index.html` — Shell, lädt `src/main.tsx`. Fast nie ändern.
