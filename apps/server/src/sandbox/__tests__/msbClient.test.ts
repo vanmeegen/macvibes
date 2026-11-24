@@ -17,7 +17,7 @@ const available = await msbAvailable();
 // nur, wo `bun run baselines` gelaufen ist (Entwickler-Mac). Ohne sie werden
 // die Laufzeit-Tests ÜBERSPRUNGEN statt irreführend rot — z. B. auf einem
 // frischen Windows-Rechner, wo der Baseline-Bau bis zum msb#1218-Fix-Release
-// ohnehin blockiert ist (windows-portierung.md).
+// ohnehin blockiert ist (docs/windows-portierung.md).
 const msbtestSnapshotDa = available && (await snapshotExists('macvibes-tpl-msbtest-v2'));
 const pwaSnapshotDa = available && (await snapshotExists('macvibes-tpl-pwa'));
 

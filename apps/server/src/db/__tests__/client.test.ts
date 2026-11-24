@@ -24,7 +24,7 @@ afterEach(async () => {
 describe('createDb — Dateirechte (F25)', () => {
   // Auf Dateisystemen ohne POSIX-Modes (NTFS) ist die Mode-Zusicherung
   // prinzipbedingt nicht prüfbar — dokumentierte Abschwächung, siehe
-  // windows-portierung-plan.md (P5).
+  // docs/windows-portierung-plan.md (P5).
   test.skipIf(!supportsPosixModes(tmpdir()))(
     'legt DB mit 0600 und Verzeichnis mit 0700 an',
     async () => {

@@ -239,7 +239,7 @@ try {
 }
 const useMicrosandbox = backends.sandbox === 'microsandbox';
 
-// Agent-Transport in die VM: persistenter SDK-Daemon (architektur.md, A+C).
+// Agent-Transport in die VM: persistenter SDK-Daemon (docs/archiv/architektur.md, A+C).
 // Gateway für die eingehenden Daemon-Verbindungen + gebündelter Daemon,
 // den der Provider read-only in jede VM mountet.
 const agentGateway = new AgentGateway({ tokens: vmTokens });
@@ -380,7 +380,7 @@ function selectAgentRunner() {
   }
   if (backends.agent === 'daemon') {
     // Persistenter SDK-Daemon in der VM, Kommandos über das WS-Gateway —
-    // kein msb exec im Agent-Pfad (architektur.md, chatproblems.md).
+    // kein msb exec im Agent-Pfad (docs/archiv/architektur.md, docs/archiv/chatproblems.md).
     console.log('Agent-Backend: claude-Daemon in VM (WS-Gateway, Supervisor: tini+monit)');
     return new DaemonAgentRunner({
       gateway: agentGateway,

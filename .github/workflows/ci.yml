@@ -1,4 +1,4 @@
-# CI-Matrix (windows-portierung-plan.md, P2): macOS und Windows sind beide
+# CI-Matrix (docs/windows-portierung-plan.md, P2): macOS und Windows sind beide
 # Pflicht.
 #
 # Die Runner können keine MicroVMs starten — die VM-Integrationstests werden

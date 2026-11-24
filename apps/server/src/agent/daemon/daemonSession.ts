@@ -94,7 +94,7 @@ interface LiveQuery {
  * Kern des Agent-Daemons: hält EINE langlebige SDK-Query (Streaming-Input)
  * über beliebig viele Turns, mappt SDK-Messages auf AgentEvents (getaggt mit
  * der turnId) und bricht Turns per `interrupt()` sauber ab — kein Kill, keine
- * korrupte Session (chatproblems.md #13).
+ * korrupte Session (docs/archiv/chatproblems.md #13).
  */
 export class DaemonSession {
   private live: LiveQuery | null = null;

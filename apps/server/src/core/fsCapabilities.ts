@@ -2,7 +2,7 @@ import { chmodSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
- * Feature-Detection statt Plattform-Weiche (windows-portierung-plan.md, P5):
+ * Feature-Detection statt Plattform-Weiche (docs/windows-portierung-plan.md, P5):
  * Kann das Dateisystem unter `dir` POSIX-Modes wirklich durchsetzen? Geprüft
  * durch Probieren (Datei anlegen, chmod 0600, stat) — NTFS meldet
  * unabhängig vom chmod 0o666 und liefert damit `false`. Dann sind

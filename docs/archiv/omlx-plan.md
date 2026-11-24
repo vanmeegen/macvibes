@@ -15,13 +15,13 @@
 
 ## Warum der Wechsel
 
-|                                     | heute (LiteLLM-Shim → Ollama 0.30.8 gepinnt)                               | oMLX 0.6.4                                                                          |
-| ----------------------------------- | -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| Anthropic-`/v1/messages`            | via LiteLLM-Übersetzer (Python-venv, eigener Prozess, `drop_params`)       | **nativ**, inkl. Streaming, Tool-Use, adaptive thinking                             |
-| Prompt-Cache bei 20–40k-Token-Turns | nur mit dem 0.30.8-Pin (0.32+ re-prefillt komplett, s. `ollama-update.md`) | Block-Prefix-Cache RAM+SSD, Copy-on-Write, überlebt Neustarts                       |
-| Decode-Tempo Qwen 27B (M5 Pro)      | ~15 tok/s (GGUF, MTP nur teilweise)                                        | Lightning MTP (depth-k, verlustfrei) — siehe Messung unten                          |
-| Modell                              | Qwen3.6-27B (Tool-Calls brauchten gepatchtes Chat-Template)                | **Qwen3.8-27B** (Aug 2026): deutlich robustere Tool-Calls, Thinking darf an bleiben |
-| Betrieb                             | `~/macvibes/bin/ollama` manuell, kein Autostart, CLI/Server-Versionsfalle  | `brew services` / Menüleisten-App, Admin-UI `:8000/admin`                           |
+|                                     | heute (LiteLLM-Shim → Ollama 0.30.8 gepinnt)                                                              | oMLX 0.6.4                                                                          |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Anthropic-`/v1/messages`            | via LiteLLM-Übersetzer (Python-venv, eigener Prozess, `drop_params`)                                      | **nativ**, inkl. Streaming, Tool-Use, adaptive thinking                             |
+| Prompt-Cache bei 20–40k-Token-Turns | nur mit dem 0.30.8-Pin (0.32+ re-prefillt komplett, s. `ollama-update.md` (gelöscht, siehe Git-Historie)) | Block-Prefix-Cache RAM+SSD, Copy-on-Write, überlebt Neustarts                       |
+| Decode-Tempo Qwen 27B (M5 Pro)      | ~15 tok/s (GGUF, MTP nur teilweise)                                                                       | Lightning MTP (depth-k, verlustfrei) — siehe Messung unten                          |
+| Modell                              | Qwen3.6-27B (Tool-Calls brauchten gepatchtes Chat-Template)                                               | **Qwen3.8-27B** (Aug 2026): deutlich robustere Tool-Calls, Thinking darf an bleiben |
+| Betrieb                             | `~/macvibes/bin/ollama` manuell, kein Autostart, CLI/Server-Versionsfalle                                 | `brew services` / Menüleisten-App, Admin-UI `:8000/admin`                           |
 
 Die Claude-Code-Integration von oMLX (`omlx launch claude`) setzt genau die
 Env, die auch unser Daemon braucht — das ist der Beleg, dass der SDK-Pfad
@@ -76,12 +76,12 @@ Nur falls der lokale Eintrag später öfter genutzt wird. Wenn, dann strikt an
 `slow: true` gebunden, damit der Claude-Pfad unverändert bleibt. Kandidaten
 (alles Variablen, die oMLX' eigene Claude-Code-Integration ebenfalls setzt):
 
-| Variable                                                             | Wert               | Warum                                                                                                                                                                 |
-| -------------------------------------------------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CLAUDE_CODE_ATTRIBUTION_HEADER`                                     | `0`                | Claude Code stellt einen pro Request variierenden Attribution-Block an den Prompt-Anfang → zerstört den Prefix-Cache (in `ollama-update.md` schon als offen notiert). |
-| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | `131072`           | Für Nicht-`claude-*`-IDs kennt Claude Code das Kontextfenster nicht; ohne diese Werte feuert Auto-Compact zu früh/spät.                                               |
-| `API_TIMEOUT_MS`                                                     | `3000000`          | Kaltstart (Modell-Load 10–20 s) + langer Prefill dürfen den SDK-HTTP-Timeout nicht reißen; unsere Turn-Timeouts (SLOW-Werte) bleiben die eigentliche Grenze.          |
-| `CLAUDE_CODE_SUBAGENT_MODEL`                                         | `<lokales Modell>` | Sonst gehen Subagent-Aufrufe an `claude-haiku-*` → Anthropic-API (kostet Cloud, mischt Modelle). Optional, falls lokal 100 % gewollt.                                 |
+| Variable                                                             | Wert               | Warum                                                                                                                                                                                                |
+| -------------------------------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CLAUDE_CODE_ATTRIBUTION_HEADER`                                     | `0`                | Claude Code stellt einen pro Request variierenden Attribution-Block an den Prompt-Anfang → zerstört den Prefix-Cache (in `ollama-update.md` (gelöscht, siehe Git-Historie) schon als offen notiert). |
+| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | `131072`           | Für Nicht-`claude-*`-IDs kennt Claude Code das Kontextfenster nicht; ohne diese Werte feuert Auto-Compact zu früh/spät.                                                                              |
+| `API_TIMEOUT_MS`                                                     | `3000000`          | Kaltstart (Modell-Load 10–20 s) + langer Prefill dürfen den SDK-HTTP-Timeout nicht reißen; unsere Turn-Timeouts (SLOW-Werte) bleiben die eigentliche Grenze.                                         |
+| `CLAUDE_CODE_SUBAGENT_MODEL`                                         | `<lokales Modell>` | Sonst gehen Subagent-Aufrufe an `claude-haiku-*` → Anthropic-API (kostet Cloud, mischt Modelle). Optional, falls lokal 100 % gewollt.                                                                |
 
 Optional in `daemon/main.ts` per Modellklasse: `disallowedTools` für Tools,
 die lokal nur Prompt-Tokens kosten (`WebSearch`, `WebFetch`, `NotebookEdit`,
@@ -116,7 +116,7 @@ Gemessen am 2026-09-11 auf dem M5 Pro 48 GB, oMLX 0.6.4, `Qwen3.8-27B-oQ4e-mtp`:
 
 <!-- MESSUNG:END -->
 
-Reihenfolge wie in `ollama-update.md` beschrieben: Cache-Smoke-Test (zweimal
+Reihenfolge wie in `ollama-update.md` (gelöscht, siehe Git-Historie) beschrieben: Cache-Smoke-Test (zweimal
 derselbe >20k-Prompt, zweiter Request muss den Cache treffen) → 4-Turn-Serie
 über macvibes/microsandbox mit Tool-Calls, `bun run typecheck` grün, keine 502
 im Server-Log.

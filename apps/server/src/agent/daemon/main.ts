@@ -12,7 +12,7 @@ import type { DaemonToHostMessage } from './protocol';
  * hält die Claude-Session über das Agent SDK am Leben und spricht mit dem
  * Host über eine ausgehende WebSocket-Verbindung (host.microsandbox.internal,
  * derselbe Weg wie der Credential-Proxy). Ersetzt das fragile
- * claude-CLI-über-`msb exec`-Muster (chatproblems.md).
+ * claude-CLI-über-`msb exec`-Muster (docs/archiv/chatproblems.md).
  *
  * Env:
  * - MACVIBES_AGENT_GATEWAY_URL  ws://host.microsandbox.internal:<port>/agent?sandbox=…&token=…

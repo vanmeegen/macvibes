@@ -106,7 +106,7 @@ const BUN_CACHE_GUEST_DIR = '/bun-cache';
  * PID 1 der VM ist ein In-VM-Supervisor (tini + monit, siehe vmServices.ts),
  * der Dev-Server UND Agent-Daemon startet, überwacht und bei Crash neu
  * startet — kein host-seitiger Watchdog, kein msb exec im Agent-Pfad. Der
- * Daemon wählt sich ausgehend ins Host-Gateway ein (architektur.md, A+C).
+ * Daemon wählt sich ausgehend ins Host-Gateway ein (docs/archiv/architektur.md, A+C).
  *
  * Voraussetzung ist der Baseline-Snapshot des Templates (`bun run baselines`):
  * er enthält node_modules, das Agent SDK und tini/monit. Ohne Baseline kann

@@ -19,7 +19,7 @@ export interface TurnHandle {
    *   wartet der Aufrufer bis in seinen Watchdog-Timeout.
    * - Die Claude-Sitzung bleibt INTAKT: abgebrochen wird der Turn, nicht der
    *   Agent. Ein Prozess-Kill hinterliesse eine korrupte Sitzung, die jeder
-   *   folgende `--resume` wieder aufgreift (chatproblems.md #13) — deshalb ist
+   *   folgende `--resume` wieder aufgreift (docs/archiv/chatproblems.md #13) — deshalb ist
    *   der Produktivpfad ein SDK-`interrupt()`.
    * - Mehrfachaufruf und Aufruf nach Turn-Ende sind folgenlos.
    *

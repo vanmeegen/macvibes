@@ -24,7 +24,7 @@ const available = await msbAvailable();
 // 2. msb#1218 (Fix upstream gemerged, in 0.6.8 noch nicht released): `cp`
 //    auf ro-gemountete Dateien scheitert unter Windows (close → EACCES) —
 //    der Baseline-Bau in der Builder-VM, den beforeAll braucht, ist dort
-//    blockiert (windows-portierung.md, Stufe 0).
+//    blockiert (docs/windows-portierung.md, Stufe 0).
 // 3. MACVIBES_DISABLE_VM_TESTS=1 (ci.yml): GitHub-Runner haben KEINE nested
 //    virtualization — msbAvailable() ist dort trotzdem true (das SDK liegt
 //    in node_modules), der VM-Start scheitert erst mit VmSetup(VmCreate).

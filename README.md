@@ -1,16 +1,16 @@
 # macvibes
 
-Lokale Vibe-Coding-Plattform für den Mac: startet Claude-Code-Sessions in
-isolierten Micro-Sandbox-Containern — leichtgewichtig, komplett lokal,
-alles TypeScript auf Bun.
+Lokale Vibe-Coding-Plattform für den Mac: Claude-Code-Sessions laufen
+isoliert in microsandbox-MicroVMs, mit Chat-Interface und Live-Preview —
+leichtgewichtig, komplett lokal, alles TypeScript auf Bun.
 
 ## Vision
 
-- Pro Vibe-Coding-Session wird ein eigener Sandbox-Container hochgefahren,
-  in dem Claude Code autonom und gefahrlos arbeiten kann.
-- Eine schlanke Web-Oberfläche verwaltet Sessions: anlegen, beobachten,
-  fortsetzen, beenden.
-- Session-Metadaten und Historie liegen in einer eingebetteten Datenbank
+- Pro Projekt läuft eine eigene MicroVM, in der Claude Code autonom und
+  gefahrlos arbeiten kann.
+- Eine schlanke Web-Oberfläche verwaltet Projekte: anlegen, chatten, die
+  Preview live beobachten, kopieren, löschen.
+- Projekt-Metadaten und Chat-Historie liegen in einer eingebetteten Datenbank
   (SQLite) — kein externer Dienst nötig.
 
 ## Tech-Stack
@@ -28,15 +28,20 @@ alles TypeScript auf Bun.
 | Qualität  | ESLint 9 (flat config), Prettier, Husky + lint-staged         |
 | Sandbox   | microsandbox (self-hosted MicroVMs)                           |
 
-## Struktur (geplant)
+## Struktur
 
 ```
 apps/
-  web/      React + MobX Frontend (Session-Verwaltung)
-  server/   Bun.serve + GraphQL, Session- & Container-Orchestrierung
+  web/      React + MobX Frontend (Projekte, Chat, Preview)
+  server/   Bun.serve + GraphQL, Sandbox- & Agent-Orchestrierung
 packages/
-  shared/   Typen, Zod-Validierung, Domain-Logik
+  shared/   Zod-Validierung, Domain-Konstanten
+templates/  Projekt-Vorlagen (pwa, fullstack) — nicht Teil der Workspaces
+scripts/    dev, setup, doctor, shutdown (Bun-TS)
+docs/       ADRs, Diagramme, Windows-Portierung, Archiv
 ```
+
+Die Architektur im Detail steht in [`CLAUDE.md`](CLAUDE.md).
 
 ## Konventionen
 
@@ -71,9 +76,10 @@ doctor`, je `--help`): heute als `bun scripts/cli.ts <befehl>` bzw. nach
 `bun link` (später Homebrew) als `macvibes <befehl>`. `bun run doctor` prüft
 die Umgebung (bun, git, msb, Hypervisor, freie Ports), ohne etwas zu ändern.
 
-Registrieren, dann von einem Admin freischalten lassen (der erste Nutzer der
-Instanz wird automatisch Admin; ist `MACVIBES_ADMIN_USERNAME` gesetzt, gilt das
-nur für diesen Namen). Danach Projekt aus einem Template anlegen, in den Chat
+Registrieren, dann von einem Admin freischalten lassen. Admin wird **nur** der
+in `MACVIBES_ADMIN_USERNAME` benannte Nutzer — ohne diesen Eintrag wird niemand
+automatisch Admin; `MACVIBES_ADMIN_BOOTSTRAP_TOKEN` schützt den Namen auf einer
+frischen Instanz (`bun run setup` setzt beides). Danach Projekt aus einem Template anlegen, in den Chat
 schreiben — Claude Code baut in einer eigenen MicroVM, die Preview läuft
 daneben, jeder Turn wird automatisch committet.
 

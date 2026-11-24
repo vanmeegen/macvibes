@@ -5,9 +5,9 @@ Bun-vs-Node toolchain findings and the SPA "Bun-native" experiment. All numbers
 were produced on the same machine with `benchmarks/bench.mjs` running an identical
 Todo app (add / toggle / delete / filter + `localStorage`) per stack.
 
-- Harness + methodology: [`../README.md`](../README.md)
-- Scoring / verdicts: [`stack-comparison.md`](stack-comparison.md)
-- Reproducible setups (node / bun / bun-native): [`../../stackcomparison/`](../../stackcomparison/)
+> Übernommen aus dem Benchmark-Repo, in dem die Messungen entstanden sind. Die
+> dortigen Verweise (Harness, Scoring, `stackcomparison/`-Setups) existieren in
+> diesem Repo nicht.
 
 ---
 
@@ -67,7 +67,7 @@ the branded PWA.
 
 Same client-only Todo SPA, three toolchains — answering "can Bun replace Vite
 **and** Vitest?". Reproducible in
-[`../../stackcomparison/vite-react-spa/`](../../stackcomparison/vite-react-spa/).
+`stackcomparison/vite-react-spa/` (im Benchmark-Repo).
 
 | Aspect               | `node/`             | `bun/`              | `bun-native/`                     |
 | -------------------- | ------------------- | ------------------- | --------------------------------- |

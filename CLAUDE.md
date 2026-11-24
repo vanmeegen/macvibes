@@ -25,8 +25,10 @@ Bun-Workspaces-Monorepo:
     `MicrosandboxSandboxProvider` (echte MicroVMs). `baselineService` friert
     Template-Snapshots ein, `portService` mappt Preview-Ports.
     `vmServices` erzeugt die In-VM-Supervisor-Konfiguration (tini + monit),
-    `monitStatus` (in `preview/`) und `previewStatusPoller` lesen den
-    Preview-Status aus der monit-HTTP-API. (Der frühere `previewSupervisor`
+    der Agent-Daemon liest monit **in der VM** und pusht den Preview-Status
+    über seinen WebSocket (`agent/daemon/previewStatusReporter`,
+    `previewStatusPush`, ADR 0001); `previewStatusPoller` ergänzt host-seitig
+    die HTTP-Probe. (Der frühere `previewSupervisor`
     ist der generische `core/processSupervisor` und läuft nur noch im
     `ProcessSandboxProvider` und im `localRouterService`.)
 
@@ -42,10 +44,12 @@ Bun-Workspaces-Monorepo:
   Watchdog, kein `msb exec` im Agent-Pfad. monit macht die geduldige
   **Startphase** (Port-Health-Check erst nach `30 cycles`), **Crash-Recovery**
   (Neustart) und **Crash-Loop-Schutz** (`5 restarts within 40 cycles →
-unmonitor` ≙ `failed`). Der Host **liest** den Status nur: über die
-  monit-HTTP-API (auf `127.0.0.1` gemappt) plus eine HTTP-Probe auf den
-  Preview-Port — `ready` gilt erst, wenn der Dev-Server wirklich HTTP
-  beantwortet (monit sieht nur den Prozess). Der einzige Vertrag zum Template
+unmonitor` ≙ `failed`). Der Host **liest** den Status nur: der
+  Agent-Daemon fragt monit lokal in der VM ab und pusht `preview-status` über
+  seine WebSocket-Verbindung (ADR 0001 — kein monit-Port-Mapping mehr), dazu
+  kommt eine HTTP-Probe des Hosts auf den Preview-Port — `ready` gilt erst,
+  wenn der Dev-Server wirklich HTTP beantwortet (monit sieht nur den Prozess);
+  bleiben die Pushes aus, entscheidet allein die Probe. Der einzige Vertrag zum Template
   ist `devCommand` + `previewPort` + PORT-Env aus `templates.json` — kein
   template-spezifischer Code in der Plattform. Der Preview-Status
   (`starting`/`ready`/`restarting`/`failed`/`stopped`) fließt über GraphQL
@@ -160,7 +164,7 @@ Brew-Service (Autostart beim Login); das Storage ist in der Caddyfile auf
 `~/macvibes/caddy-storage` gepinnt — sonst erzeugen verschiedene Startarten
 VERSCHIEDENE Roots mit gleichem CN (Live-Befund 2026-07-17). Geräte müssen
 der lokalen CA einmalig vertrauen: Mac `caddy trust`; iPad das Root-Zertifikat
-(`~/Library/Application Support/Caddy/pki/authorities/local/root.crt`)
+(`~/macvibes/caddy-storage/pki/authorities/local/root.crt`)
 installieren + unter Zertifikatsvertrauen aktivieren.
 
 ## Windows (Stufe 1 portiert, Stand 2026-08-05)
@@ -169,7 +173,7 @@ installieren + unter Zertifikatsvertrauen aktivieren.
 Prozess-Provider laufen nativ unter Windows 11; die CI-Matrix in
 `.github/workflows/ci.yml` (macOS + Windows + E2E) ist seit `27935bf`
 **Pflicht** (kein `continue-on-error` mehr).
-Leitprinzip aus `windows-portierung-plan.md`: **plattformneutrale
+Leitprinzip aus `docs/windows-portierung-plan.md`: **plattformneutrale
 Mechanismen statt `process.platform`-Weichen** (`bun exec` + `tree-kill` in
 `core/exec.ts`, Feature-Detection in `core/fsCapabilities.ts`) — bitte
 beibehalten. Wichtig:
@@ -181,7 +185,7 @@ beibehalten. Wichtig:
   VM-Integrationstests überspringen sich dort deshalb.
 - Defender legt beim ersten Preview-Port **stille Block-Regeln** für die
   `msb.exe` aus `node_modules` an — Allow-Regel per elevated `netsh` setzen
-  (Details in `windows-portierung.md`, Stufe 0).
+  (Details in `docs/windows-portierung.md`, Stufe 0).
 - git-Härtung nutzt BEWUSST `/dev/null`/`/bin/false` auch unter Windows
   (MSYS-Git übersetzt sie; `os.devNull` wird von git abgelehnt — siehe
   Kommentar in `core/gitService.ts`).

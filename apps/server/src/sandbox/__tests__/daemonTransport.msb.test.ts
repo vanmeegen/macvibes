@@ -26,7 +26,7 @@ import type { SandboxHandle } from '../provider';
 
 /**
  * Integrationstest gegen ECHTES microsandbox für den Daemon-Transport
- * (Spike A+C, architektur.md; chatproblems.md-Empfehlung #3: die CI darf auf
+ * (Spike A+C, docs/archiv/architektur.md; docs/archiv/chatproblems.md-Empfehlung #3: die CI darf auf
  * dem kritischen Pfad nicht blind bleiben). Bewusst gated — er baut eine
  * Baseline inkl. apt-Installation und dauert mehrere Minuten:
  *
@@ -250,7 +250,7 @@ describe.skipIf(!enabled)(
         // Daemon beenden — per shutdown-Kommando über die stehende Verbindung.
         // Von außen geht es nicht: msb-exec-Sessions leben in eigenen
         // PID-Namespaces und können den PID-1-Baum nicht killen (Live-Befund;
-        // deckt sich mit chatproblems.md „PID-Files nutzlos").
+        // deckt sich mit docs/archiv/chatproblems.md „PID-Files nutzlos").
         expect(gateway.send(SANDBOX_NAME, { kind: 'shutdown' })).toBe(true);
 
         // monit startet neu (2s-Zyklus) — der Restart ist oft SCHNELLER als die
@@ -337,7 +337,7 @@ describe.skipIf(!enabled)(
             ?.sessionId ?? null;
         expect(session1).not.toBeNull();
 
-        // Turn 2: unterbrechen — das war der Deadlock aus chatproblems.md #13.
+        // Turn 2: unterbrechen — das war der Deadlock aus docs/archiv/chatproblems.md #13.
         const handle2 = runner.startTurn({
           projectId: PROJECT_ID,
           prompt: 'Zähle langsam und ausführlich von 1 bis 100, jede Zahl einzeln erklärt.',

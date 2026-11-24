@@ -82,7 +82,7 @@ export async function buildTemplateBaseline(options: BuildBaselineOptions): Prom
   // Ein exec pro Schritt statt eines Mega-Befehls: kurze exec-Sessions sind
   // bei msb deutlich robuster, und ein Fehler ist dem Schritt zuordenbar.
   // Alle Schritte sind PFLICHT: ohne SDK/tini/monit bootet keine Projekt-VM
-  // (Daemon-Transport ist der einzige Agent-Pfad, architektur.md).
+  // (Daemon-Transport ist der einzige Agent-Pfad, docs/archiv/architektur.md).
   const steps: { beschreibung: string; script: string }[] = [
     {
       // Das gemountete Daemon-Bundle (/opt/macvibes/bin/main.js) löst das SDK

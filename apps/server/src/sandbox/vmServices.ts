@@ -1,6 +1,6 @@
 /**
  * Erzeugt die Service-Konfiguration für den In-VM-Supervisor (tini + monit,
- * Entscheidung siehe architektur.md). Statt des bisherigen
+ * Entscheidung siehe docs/archiv/architektur.md). Statt des bisherigen
  * `sleep infinity`-Halters läuft PID 1 als echter Supervisor, der Dev-Server
  * und Agent-Daemon startet, überwacht und neu startet — Health-Check,
  * Crash-Loop-Schutz und Restart sind Konfiguration statt Eigenbau
@@ -64,7 +64,7 @@ function buildRunWrappers(spec: VmServicesSpec): Record<string, string> {
       `( . ${VM_ETC_DIR}/daemon.env.sh 2>/dev/null; bun install --silent ) \\`,
       '  || echo "macvibes: Delta-Install fehlgeschlagen — devCommand startet trotzdem" >&2',
       '# Dev-Server im Vordergrund — niedrige Priorität, damit der Agent-Turn',
-      '# in derselben VM nicht verhungert (Kaltstart, chatproblems.md #12).',
+      '# in derselben VM nicht verhungert (Kaltstart, docs/archiv/chatproblems.md #12).',
       `export PORT=${shQuote(String(spec.previewPort))}`,
       `exec nice -n 19 ionice -c 3 sh -c ${shQuote(spec.devCommand)}`,
       '',

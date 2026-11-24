@@ -5,7 +5,7 @@
  *   Endpunkt:  http://localhost:8787/v1/messages  (Anthropic-Format)
  *   Backend:   Ollama auf http://localhost:11434
  *
- * Bun-TS-Fassung von run.sh (windows-portierung-plan.md, P7): venv-Layout
+ * Bun-TS-Fassung von run.sh (docs/windows-portierung-plan.md, P7): venv-Layout
  * (bin/ vs. Scripts/) und Python-Suche per Feature-Detection statt
  * Plattform-Weiche. Die Python-venv lebt AUSSERHALB des Repos
  * (~/macvibes/local-router-venv) und wird beim allerersten Start automatisch
