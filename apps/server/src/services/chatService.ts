@@ -1,23 +1,20 @@
-import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
-import { DEFAULT_AGENT_MODEL, agentTimeoutsFor, isSlowAgentModel } from '../agent/agentModel';
-import type { AgentEvent } from '../agent/events';
 import type { AgentRunner, TurnHandle } from '../agent/runner';
 import type { Db } from '../db/client';
-import { chatMessages, projects, type ChatMessageRow, type UserRow } from '../db/schema';
+import type { ChatMessageRow, UserRow } from '../db/schema';
+import { ChatEventBus, type ChatEventPayload } from './chat/chatEventBus';
+import { ChatMessageStore, MAX_MESSAGE_CHARS } from './chat/chatMessageStore';
+import { ConfigWarmup } from './chat/configWarmup';
+import {
+  TurnAttempt,
+  abortedText,
+  type AttemptTurn,
+  type TurnAttemptDeps,
+  type TurnAttemptResult,
+} from './chat/turnAttempt';
 import { getProject, getProjectOwned } from './projectsService';
 
-/**
- * Obergrenze pro Chat-Zeile (F16). Jedes Delta schreibt die komplette Zeile
- * per UPDATE und broadcastet sie an alle Abonnenten — ohne Deckel wächst das
- * unbegrenzt, im Missbrauchsfall bis zur Sättigung von Speicher und Platte.
- */
-export const MAX_MESSAGE_CHARS = 200_000;
-
-export interface ChatEventPayload {
-  message: ChatMessageRow;
-  /** Läuft für dieses Projekt gerade (oder gleich, Queue) ein Agent-Turn? */
-  turnActive: boolean;
-}
+export { MAX_MESSAGE_CHARS };
+export type { ChatEventPayload } from './chat/chatEventBus';
 
 export interface ChatHooks {
   /** Für den Idle-Timer der Sandbox (R9). */
@@ -34,34 +31,16 @@ export interface SendMessageInput {
   interrupt?: boolean;
 }
 
-interface QueuedTurn {
-  turnId: string;
-  prompt: string;
-  workspaceDir: string;
-}
-
-/**
- * Anhang für Terminal-Zeilen, wenn ein Turn NACH sinnvollen Events abbrach:
- * Der Zwischenstand liegt im Workspace, die SDK-Session trägt den Kontext —
- * ein schlichtes „weiter" setzt nahtlos fort. Ohne den Hinweis weiß das
- * niemand; ohne sinnvolle Events gäbe es nichts fortzusetzen (dann weglassen).
- */
-const WEITER_HINWEIS =
-  'Der Zwischenstand bleibt erhalten — mit „weiter" setzt der Agent an dieser Stelle fort.';
-
-/** System-Zeile nach einem Abbruch — mit Weiter-Hinweis, wenn schon Arbeit sichtbar war. */
-function abbruchText(sawArbeit: boolean): string {
-  return 'Turn abgebrochen' + (sawArbeit ? ` — ${WEITER_HINWEIS}` : '');
-}
+type QueuedTurn = AttemptTurn;
 
 interface ProjectChatState {
   queue: QueuedTurn[];
   pumpRunning: boolean;
   /**
-   * Handle des laufenden Turns — das UMHÜLLTE aus `runAttempt`, nicht das des
+   * Handle des laufenden Turns — das UMHÜLLTE aus `TurnAttempt`, nicht das des
    * Runners. Sein `abort()` markiert den Turn als Nutzerabbruch und beendet ihn
    * damit endgültig (kein Retry). Genau dafür liegt hier der Wrapper: der
-   * Watchdog in `runAttempt` hat das rohe Handle und bricht ohne diese Wirkung
+   * Watchdog in `TurnAttempt` hat das rohe Handle und bricht ohne diese Wirkung
    * ab.
    */
   currentHandle: TurnHandle | null;
@@ -69,7 +48,7 @@ interface ProjectChatState {
    * Die turnId, die die Pump GERADE verarbeitet — gesetzt, BEVOR der erste
    * await in `runTurn`/`runAttempt` kommt, geräumt, wenn der Turn endet. Sie
    * macht das Startfenster sichtbar, in dem ein Turn AKTIV ist, aber sein
-   * Handle noch fehlt (Config-Warmup, DB-Abfrage in `runAttempt`): ein
+   * Handle noch fehlt (Config-Warmup, DB-Abfrage in `TurnAttempt`): ein
    * Stop/Interrupt in diesem Fenster pinnt sich an GENAU diese turnId — nie
    * an „irgendeinen nächsten" Turn.
    */
@@ -78,12 +57,11 @@ interface ProjectChatState {
    * „Stop heißt Stop — Gegenwart, kein aufgeschobener Wunsch": Abbruch für den
    * Turn, der beim Stop/Interrupt gerade STARTETE (aktiv, aber noch ohne
    * Handle). Immer eine Kopie von `activeTurnId` im Moment des Abbruchs;
-   * `runAttempt` löst ihn beim Handle-Setzen ein, wenn die turnId übereinstimmt,
+   * `TurnAttempt` löst ihn beim Handle-Setzen ein, wenn die turnId übereinstimmt,
    * und die Pump räumt ihn spätestens am Turn-Ende. Weil er an die AKTUELLE
    * turnId gepinnt ist, kann er keine später gestartete Nachricht treffen.
    */
   abortActiveTurnId: string | null;
-  subscribers: Set<(payload: ChatEventPayload) => void>;
 }
 
 export interface ChatServiceOptions {
@@ -107,7 +85,7 @@ export interface ChatServiceOptions {
   agentColdStartTimeoutMs?: number | undefined;
   /** Frist für den Config-Warmup (Default 60s). */
   agentWarmupTimeoutMs?: number | undefined;
-  /** Nachlauf nach dem Abbruch, um einen späten Fehlertext (stderr) einzusammeln. */
+  /** Nachlauf nach dem Abbruch, um einen späten Fehlertext einzusammeln. */
   agentAbortGraceMs?: number | undefined;
   /**
    * Timeout-Varianten für LANGSAME (lokale) Modelle — die denken vor dem ersten
@@ -133,50 +111,47 @@ export interface ChatServiceOptions {
 
 export class ChatService {
   private readonly states = new Map<string, ProjectChatState>();
-  /** Laufende Config-Warmups pro Projekt (siehe prewarm). */
-  private readonly warmups = new Map<string, Promise<void>>();
-  private readonly idleTimeoutMs: number;
-  private readonly firstEventTimeoutMs: number;
-  private readonly coldStartTimeoutMs: number;
-  /** Frist für den stillen Config-Warmup — er blockiert sonst den echten Turn. */
-  private readonly warmupTimeoutMs: number;
-  private readonly abortGraceMs: number;
-  private readonly slowIdleTimeoutMs: number;
-  private readonly slowFirstEventTimeoutMs: number;
-  private readonly slowColdStartTimeoutMs: number;
-  private readonly prewarmEnabled: boolean;
-  /** Bündel-Zeitfenster für Streaming-Deltas (s. ChatServiceOptions.agentDeltaFlushMs). */
-  private readonly deltaFlushMs: number;
+  private readonly bus = new ChatEventBus();
+  private readonly store: ChatMessageStore;
+  /** Stiller Config-Warmup frisch geforkter VMs (siehe prewarm). */
+  private readonly warmup: ConfigWarmup;
+  /** Was jeder Turn-Versuch braucht — einmal aufgelöst (Timeouts, Senken). */
+  private readonly attemptDeps: TurnAttemptDeps;
 
   constructor(
     private readonly db: Db,
-    private readonly runner: AgentRunner,
+    runner: AgentRunner,
     private readonly hooks: ChatHooks = {},
     options: ChatServiceOptions = {},
   ) {
-    this.idleTimeoutMs = options.agentIdleTimeoutMs ?? 180_000;
-    // Nie länger warten als der Idle-Timeout — der Start-Timeout ist die UNTERE Schranke.
-    this.firstEventTimeoutMs = Math.min(
-      options.agentFirstEventTimeoutMs ?? 8_000,
-      this.idleTimeoutMs,
-    );
-    this.coldStartTimeoutMs = Math.min(
-      options.agentColdStartTimeoutMs ?? 30_000,
-      this.idleTimeoutMs,
-    );
-    this.abortGraceMs = options.agentAbortGraceMs ?? 5_000;
-    this.slowIdleTimeoutMs = options.agentSlowIdleTimeoutMs ?? 600_000;
-    this.warmupTimeoutMs = options.agentWarmupTimeoutMs ?? 60_000;
-    this.slowFirstEventTimeoutMs = Math.min(
-      options.agentSlowFirstEventTimeoutMs ?? 180_000,
-      this.slowIdleTimeoutMs,
-    );
-    this.slowColdStartTimeoutMs = Math.min(
-      options.agentSlowColdStartTimeoutMs ?? 300_000,
-      this.slowIdleTimeoutMs,
-    );
-    this.prewarmEnabled = options.prewarmEnabled ?? true;
-    this.deltaFlushMs = options.agentDeltaFlushMs ?? 50;
+    this.store = new ChatMessageStore(db);
+    const idleMs = options.agentIdleTimeoutMs ?? 180_000;
+    const slowIdleMs = options.agentSlowIdleTimeoutMs ?? 600_000;
+    this.attemptDeps = {
+      store: this.store,
+      runner,
+      insertMessage: (projectId, turnId, role, content) =>
+        this.insertMessage(projectId, turnId, role, content),
+      publish: (projectId, message, turnActive) => this.publish(projectId, message, turnActive),
+      onAgentActivity: (projectId) => this.hooks.onAgentActivity?.(projectId),
+      fastTimeouts: {
+        idleMs,
+        // Nie länger warten als der Idle-Timeout — der Start-Timeout ist die UNTERE Schranke.
+        firstEventMs: Math.min(options.agentFirstEventTimeoutMs ?? 8_000, idleMs),
+        coldStartMs: Math.min(options.agentColdStartTimeoutMs ?? 30_000, idleMs),
+      },
+      slowTimeouts: {
+        idleMs: slowIdleMs,
+        firstEventMs: Math.min(options.agentSlowFirstEventTimeoutMs ?? 180_000, slowIdleMs),
+        coldStartMs: Math.min(options.agentSlowColdStartTimeoutMs ?? 300_000, slowIdleMs),
+      },
+      abortGraceMs: options.agentAbortGraceMs ?? 5_000,
+      deltaFlushMs: options.agentDeltaFlushMs ?? 50,
+    };
+    this.warmup = new ConfigWarmup(this.store, runner, {
+      enabled: options.prewarmEnabled ?? true,
+      timeoutMs: options.agentWarmupTimeoutMs ?? 60_000,
+    });
   }
 
   private state(projectId: string): ProjectChatState {
@@ -188,7 +163,6 @@ export class ChatService {
         currentHandle: null,
         activeTurnId: null,
         abortActiveTurnId: null,
-        subscribers: new Set(),
       };
       this.states.set(projectId, state);
     }
@@ -196,11 +170,7 @@ export class ChatService {
   }
 
   async listMessages(projectId: string): Promise<ChatMessageRow[]> {
-    return this.db
-      .select()
-      .from(chatMessages)
-      .where(eq(chatMessages.projectId, projectId))
-      .orderBy(sql`rowid`, asc(chatMessages.createdAt));
+    return this.store.list(projectId);
   }
 
   /**
@@ -221,110 +191,19 @@ export class ChatService {
    * (Grace-Aufschub, Eviction-Schutz). Umfasst neben echten Turns auch den
    * Config-Warmup: der belegt den Ein-Turn-Daemon genauso — Grace/LRU dürfen
    * die VM nicht unter ihm wegstoppen (N9). Der Warmup-Eintrag verschwindet
-   * garantiert im finally von prewarm — kein Dauer-busy-Risiko.
+   * garantiert nach dem Lauf (ConfigWarmup.prewarm) — kein Dauer-busy-Risiko.
    */
   isBusy(projectId: string): boolean {
-    return this.warmups.has(projectId) || this.isTurnActive(projectId);
+    return this.warmup.isRunning(projectId) || this.isTurnActive(projectId);
   }
 
   /**
-   * Wärmt die claude-Config einer frisch geforkten VM vor: ein stiller
-   * Wegwerf-Turn (Output verworfen, keine Chat-Nachricht), der beim Öffnen des
-   * Projekts läuft, während der User seinen ersten Prompt tippt. Ohne dies
-   * trägt der ERSTE echte Turn den ganzen claude-First-Run (~9s auf dem
-   * gemounteten Volume) — mit Warmup ist er danach schnell. No-Op, wenn schon
-   * ein Warmup läuft oder das Projekt bereits eine Session hat (Config warm).
-   *
-   * **Wirft nie.** Der Aufrufer (GraphQL-Resolver) startet den Warmup
-   * fire-and-forget; eine Rejection hätte dort keinen Handler und beendete den
-   * ganzen Serverprozess — eine SQLITE_BUSY beim Öffnen EINES Projekts risse
-   * damit alle anderen Sitzungen und alle laufenden MicroVMs mit. Der Warmup
-   * ist reine Beschleunigung: scheitert er, geht es ohne ihn weiter.
-   *
-   * Der Eintrag in `warmups` wird nach dem Lauf wieder entfernt. Er verhindert
-   * nur einen ZWEITEN gleichzeitigen Warmup — bliebe er liegen, wäre `prewarm`
-   * für dieses Projekt dauerhaft wirkungslos, auch nach erneutem Öffnen mit
-   * einer frischen VM, deren Config wieder kalt ist.
-   *
-   * Owner-only, und die Prüfung hängt HIER am Service (M5) — aber als
-   * FEATURE-GATING, nicht als Authz-Ablehnung: ein Besucher bekommt schlicht
-   * keinen Warmup (stille Rückkehr). Ein Wurf wäre falsch — er machte
-   * enterProject für Nur-Lese-Besucher (R10) kaputt, und es gibt nichts
-   * abzulehnen: der Warmup ist ein Beschleuniger, kein Nutzerbefehl.
+   * Wärmt die claude-Config einer frisch geforkten VM vor (stiller
+   * Wegwerf-Turn beim Öffnen des Projekts). Wirft nie, Owner-only als
+   * Feature-Gating — Einzelheiten und Begründungen in `ConfigWarmup.prewarm`.
    */
-  async prewarm(user: UserRow, projectId: string, workspaceDir: string): Promise<void> {
-    if (!this.prewarmEnabled) return;
-    if (this.warmups.has(projectId)) return;
-    // Der Aufrufer (schema/index.ts) startet prewarm als floating promise. Eine
-    // Rejection hätte dort keinen Handler und beendete den ganzen Serverprozess
-    // — eine SQLITE_BUSY beim Öffnen EINES Projekts risse damit alle anderen
-    // Sitzungen und alle laufenden MicroVMs mit. Der Warmup ist reine
-    // Beschleunigung: scheitert er, geht es ohne ihn weiter.
-    let projectRow;
-    try {
-      projectRow = (
-        await this.db.select().from(projects).where(eq(projects.id, projectId)).limit(1)
-      )[0];
-    } catch (error) {
-      console.error(`Config-Warmup für ${projectId} nicht gestartet (DB-Fehler):`, error);
-      return;
-    }
-    // Feature-Gating (M5, s. Methodenkommentar): fremdes oder unbekanntes
-    // Projekt → STILL zurück, kein Wurf. Vorwärmen dürfte sonst jeder
-    // Transport, der den Resolver-Branch vergisst, für fremde Projekte —
-    // und belegte damit deren Ein-Turn-Daemon.
-    if (projectRow === undefined || projectRow.ownerId !== user.id) return;
-    if (projectRow.claudeSessionId != null) return;
-    const model = projectRow.agentModel;
-    // Langsame lokale Modelle NICHT vorwärmen: der minutenlange Warmup belegt
-    // den Ein-Turn-Daemon und der erste echte Prompt würde abgewiesen.
-    if (isSlowAgentModel(model)) return;
-    // Eintrag nach dem Lauf wieder entfernen: er dient nur dazu, einen ZWEITEN
-    // gleichzeitigen Warmup zu verhindern. Blieb er liegen, war prewarm für
-    // dieses Projekt dauerhaft wirkungslos — auch nach Schliessen und erneutem
-    // Öffnen mit einer frischen VM, deren Config wieder kalt ist.
-    const lauf = this.runWarmup(projectId, workspaceDir, model).finally(() => {
-      this.warmups.delete(projectId);
-    });
-    this.warmups.set(projectId, lauf);
-  }
-
-  private async runWarmup(projectId: string, workspaceDir: string, model: string): Promise<void> {
-    try {
-      const handle = this.runner.startTurn({
-        projectId,
-        prompt: 'Antworte nur mit dem Wort: bereit',
-        workspaceDir,
-        resumeSessionId: null,
-        model,
-      });
-      // Der Warmup MUSS eine Frist haben: der echte Turn wartet auf ihn
-      // (runAttempt), bevor er in seine eigene Timeout-Schleife kommt. Ohne
-      // Frist hängt ein stiller Warmup — etwa weil die Claude-API nicht
-      // antwortet — das Projekt unbegrenzt auf, und im UI steht ewig
-      // „Agent arbeitet", ohne dass je ein Fehler sichtbar wird.
-      const deadline = Date.now() + this.warmupTimeoutMs;
-      const consume = (async () => {
-        // Events konsumieren und VERWERFEN — der Warmup initialisiert nur die
-        // claude-Config in der VM, er erzeugt keine Chat-Nachrichten.
-        for await (const event of handle.events) {
-          void event;
-        }
-      })();
-      const abgelaufen = await Promise.race([
-        consume.then(() => false),
-        Bun.sleep(Math.max(0, deadline - Date.now())).then(() => true),
-      ]);
-      if (abgelaufen) {
-        console.warn(
-          `Config-Warmup für ${projectId} nach ${Math.round(this.warmupTimeoutMs / 1000)}s ` +
-            'abgebrochen — der Agent antwortet nicht. Der nächste echte Turn läuft trotzdem.',
-        );
-        handle.abort();
-      }
-    } catch (error) {
-      console.error(`Config-Warmup für ${projectId} fehlgeschlagen:`, error);
-    }
+  prewarm(user: UserRow, projectId: string, workspaceDir: string): Promise<void> {
+    return this.warmup.prewarm(user, projectId, workspaceDir);
   }
 
   /**
@@ -336,7 +215,7 @@ export class ChatService {
    *
    * - Die Queue bleibt erhalten — abgebrochen wird nur der laufende Turn.
    * - Der abgebrochene Turn wird NICHT wiederholt. Der Retry ist für
-   *   msb-Flakes da; ein vom Nutzer veranlasster Abbruch ist keiner (s.
+   *   Flakes da (Agent-Start ohne Lebenszeichen); ein vom Nutzer veranlasster Abbruch ist keiner (s.
    *   `runTurn`).
    *
    * Ein `interrupt` bricht ab, was JETZT aktiv ist — niemals die eigene neue
@@ -400,7 +279,7 @@ export class ChatService {
    *   User-Bubble. Die Antwortzeilen gruppieren sich über die wiederverwendete
    *   turnId unter derselben Bubble.
    *
-   * `resumeSessionId` wird nicht übergeben — `runAttempt` liest es pro Versuch
+   * `resumeSessionId` wird nicht übergeben — `TurnAttempt` liest es pro Versuch
    * frisch aus der Projektzeile (`projects.claudeSessionId` + Modellabgleich).
    *
    * Owner-only, und die Prüfung hängt HIER am Service (M5): sie greift damit
@@ -421,11 +300,11 @@ export class ChatService {
     // Früher Guard nur als billiger Kurzschluss — er allein genügt NICHT.
     if (this.isTurnActive(projectId)) return false;
     // Feature-Gating (s. o.): fremdes oder unbekanntes Projekt → still false.
-    // VOR listMessages und VOR dem lazy state() — kein DB-Lesen der Historie
+    // VOR dem Lesen der letzten Zeile und VOR dem lazy state() — kein DB-Lesen der Historie
     // und kein liegenbleibender State-Eintrag für fremde Projekte.
     const project = await getProject(this.db, projectId);
     if (project === null || project.ownerId !== user.id) return false;
-    const history = await this.listMessages(projectId);
+    const lastRow = await this.store.last(projectId);
     // Re-Check NACH dem await (check-then-act-Race): zwei gleichzeitige
     // enterProject-Aufrufe des Owners (zwei Tabs; im Dev-Modus der React-
     // StrictMode-Doppel-Effekt) passieren sonst BEIDE den Guard oben, warten
@@ -436,7 +315,6 @@ export class ChatService {
     // synchron vor dem ersten await) sofort sichtbar, der zweite sieht hier
     // isTurnActive === true.
     if (this.isTurnActive(projectId)) return false;
-    const lastRow = history[history.length - 1];
     if (lastRow === undefined || lastRow.role !== 'user') return false;
     const state = this.state(projectId);
     state.queue.push({ turnId: lastRow.turnId, prompt: lastRow.content, workspaceDir });
@@ -460,13 +338,13 @@ export class ChatService {
    * Verpflichtung, die in die Zukunft reist:
    *
    * 1. **Der abgebrochene Turn wird NICHT wiederholt.** Der Retry in `runTurn`
-   *    ist für msb-Flakes gedacht; ein vom Nutzer veranlasster Abbruch ist
+   *    ist für Flakes gedacht (Agent-Start ohne Lebenszeichen); ein vom Nutzer veranlasster Abbruch ist
    *    keiner. Sonst liefe genau die Arbeit weiter, die er gerade gestoppt hat
    *    — inklusive Dateiänderungen und Auto-Commit.
    * 2. **Auch ein gerade erst STARTENDER Turn wird getroffen** — einer, den
    *    die Pump schon aus der Queue genommen hat, dessen Handle aber noch
    *    nicht steht (Config-Warmup, DB-Abfrage). Der Abbruch pinnt sich an
-   *    GENAU dessen turnId; `runAttempt` löst ihn beim Handle-Setzen ein.
+   *    GENAU dessen turnId; `TurnAttempt` löst ihn beim Handle-Setzen ein.
    * 3. **Läuft und startet gar nichts, ist der Aufruf ein No-op.** Es wird
    *    nichts vorgemerkt: ein Stop ins Leere (Doppelklick, veralteter
    *    `turnActive`-Stand im Client) darf keine später gesendete, unabhängige
@@ -494,7 +372,7 @@ export class ChatService {
     // letzten Eintrag) genügt: der Resume schaut nur auf die letzte Zeile.
     const letzter = verworfen[verworfen.length - 1];
     if (letzter !== undefined) {
-      await this.insertMessage(projectId, letzter.turnId, 'system', 'Turn abgebrochen');
+      await this.insertMessage(projectId, letzter.turnId, 'system', abortedText(false));
     }
   }
 
@@ -502,9 +380,9 @@ export class ChatService {
    * Bricht den JETZT aktiven Turn ab — synchron, ohne aufgeschobenen Wunsch.
    *
    * - Handle steht: sofort über das UMHÜLLTE Handle abbrechen (setzt
-   *   `benutzerAbbruch` in `runAttempt` → kein Retry).
+   *   `userAborted` in `TurnAttempt` → kein Retry).
    * - Turn startet gerade (`activeTurnId` gesetzt, Handle fehlt noch): Abbruch
-   *   an GENAU diese turnId pinnen; `runAttempt` löst ihn beim Handle-Setzen
+   *   an GENAU diese turnId pinnen; `TurnAttempt` löst ihn beim Handle-Setzen
    *   ein. Weil der Pin die AKTUELLE turnId trägt (nie „den nächsten"), kann
    *   er keine später gestartete Nachricht treffen.
    * - Nichts aktiv: No-op — nichts zu stoppen heißt, es passiert nichts.
@@ -535,9 +413,9 @@ export class ChatService {
     if (state === undefined) return;
     state.queue.length = 0;
     state.currentHandle?.abort();
-    state.subscribers.clear();
+    this.bus.forget(projectId);
     this.states.delete(projectId);
-    this.warmups.delete(projectId);
+    this.warmup.forget(projectId);
   }
 
   /** Wie viele Projekte im Speicher gehalten werden (die Zahl hinter dem Leck). */
@@ -547,63 +425,13 @@ export class ChatService {
 
   /** Live-Stream aller Chat-Events eines Projekts (auch für Nur-Lese-Besucher, R10). */
   subscribe(projectId: string): AsyncIterableIterator<ChatEventPayload> {
-    const state = this.state(projectId);
-    const buffer: ChatEventPayload[] = [];
-    let notify: (() => void) | null = null;
-    let closed = false;
-
-    const push = (payload: ChatEventPayload): void => {
-      // Neuester Stand gewinnt: liegt der letzte noch ungelesene Eintrag zur
-      // SELBEN Zeile vor (Streaming), wird er ersetzt statt ein weiterer
-      // Voll-Schnappschuss angehängt. Ein langsamer Abonnent hält so pro Zeile
-      // einen Stand statt einer wachsenden Reihe; Clients upserten per ID.
-      const letzter = buffer[buffer.length - 1];
-      if (letzter !== undefined && letzter.message.id === payload.message.id) {
-        buffer[buffer.length - 1] = payload;
-      } else {
-        buffer.push(payload);
-      }
-      notify?.();
-    };
-    state.subscribers.add(push);
-
-    const iterator: AsyncIterableIterator<ChatEventPayload> = {
-      [Symbol.asyncIterator]() {
-        return this;
-      },
-      next: async (): Promise<IteratorResult<ChatEventPayload>> => {
-        while (buffer.length === 0 && !closed) {
-          await new Promise<void>((resolve) => {
-            notify = resolve;
-          });
-          notify = null;
-        }
-        const value = buffer.shift();
-        if (value !== undefined) {
-          return { value, done: false };
-        }
-        return { value: undefined, done: true };
-      },
-      return: async (): Promise<IteratorResult<ChatEventPayload>> => {
-        closed = true;
-        state.subscribers.delete(push);
-        notify?.();
-        return { value: undefined, done: true };
-      },
-    };
-    return iterator;
+    // Der Projekt-Zustand entsteht wie bisher schon beim Abonnieren (lazy).
+    this.state(projectId);
+    return this.bus.subscribe(projectId);
   }
 
   private publish(projectId: string, message: ChatMessageRow, turnActive: boolean): void {
-    // Bewusst states.get statt state(): ein noch auslaufender Turn eines
-    // GELÖSCHTEN Projekts (forget() hat den State entfernt) darf hier keinen
-    // frischen, leeren State neu anlegen — sonst kehrt das gerade behobene Leck
-    // zurück. Ohne State gibt es keine Subscriber, an die zu senden wäre.
-    const state = this.states.get(projectId);
-    if (!state) return;
-    for (const subscriber of state.subscribers) {
-      subscriber({ message, turnActive });
-    }
+    this.bus.publish(projectId, message, turnActive);
   }
 
   /**
@@ -616,39 +444,13 @@ export class ChatService {
     });
   }
 
-  /**
-   * Sichert die Agent-Session samt Modell am Projekt (R9). Das Modell gehört
-   * dazu: ein späterer Modellwechsel darf diese Session NICHT fortsetzen
-   * (--resume + anderes --model hängt).
-   */
-  private async saveSession(projectId: string, sessionId: string, model: string): Promise<void> {
-    await this.db
-      .update(projects)
-      .set({ claudeSessionId: sessionId, claudeSessionModel: model })
-      .where(eq(projects.id, projectId));
-  }
-
   private async insertMessage(
     projectId: string,
     turnId: string,
     role: ChatMessageRow['role'],
     content: string,
   ): Promise<ChatMessageRow> {
-    // Zweiter Riegel gegen zu lange Inhalte: MAX_MESSAGE_CHARS griff nur im
-    // Append-Pfad (appendDelta), nicht hier. Damit kam jede Nicht-Delta-Quelle
-    // — insbesondere tool-use/error aus der untrusted VM — am Deckel vorbei.
-    // Die Protokoll-Schicht begrenzt die Felder schon; das hier ist die
-    // Absicherung an der Senke, damit kein künftiger Pfad sie umgeht.
-    const gekuerzt =
-      content.length > MAX_MESSAGE_CHARS ? `${content.slice(0, MAX_MESSAGE_CHARS)}…` : content;
-    const inserted = await this.db
-      .insert(chatMessages)
-      .values({ id: crypto.randomUUID(), projectId, turnId, role, content: gekuerzt })
-      .returning();
-    const row = inserted[0];
-    if (!row) {
-      throw new Error('Chat-Insert lieferte keine Zeile zurück');
-    }
+    const row = await this.store.insert(projectId, turnId, role, content);
     this.publish(projectId, row, this.isTurnActive(projectId));
     return row;
   }
@@ -672,7 +474,7 @@ export class ChatService {
           // verwaist liegen (isBusy für immer true, „Agent arbeitet" ohne
           // Ende) — die wartenden Nachrichten laufen stattdessen weiter.
           // runTurn fängt seine Kernpfade selbst; hier landen nur Randwürfe
-          // (DB-Read vor dem try in runAttempt, withHistoryContext).
+          // (DB-Read vor dem try in TurnAttempt.run, withHistoryContext).
           console.error(`Turn ${turn.turnId} für ${projectId} scheiterte hart:`, error);
         } finally {
           // Nichts überlebt das Turn-Ende: weder der Aktiv-Marker noch ein
@@ -695,9 +497,10 @@ export class ChatService {
    *
    * - Wiederholt wird nur ein **Flake**: ein Versuch, der weder abgeschlossen
    *   ist noch ein einziges sinnvolles Lebenszeichen geliefert hat. Das ist der
-   *   Fall, in dem `msb exec` stirbt oder nie Output liefert.
-   * - **Nach einem Nutzerabbruch wird NIE wiederholt** (`benutzerAbbruch` aus
-   *   `runAttempt`). Ein Stop, der den Turn gleich darauf erneut ausführt, wäre
+   *   Fall, in dem der Agent-Start scheitert oder nie ein Event liefert (etwa
+   *   weil der Daemon in der VM nicht verbunden ist).
+   * - **Nach einem Nutzerabbruch wird NIE wiederholt** (`userAborted` aus
+   *   `TurnAttempt`). Ein Stop, der den Turn gleich darauf erneut ausführt, wäre
    *   das Gegenteil dessen, was der Nutzer wollte — der Agent schriebe Dateien
    *   und committete sie.
    * - Der Wiederholungsversuch startet bewusst OHNE Session-Resume: hing der
@@ -705,15 +508,15 @@ export class ChatService {
    *   resumte jeder Turn dieselbe kaputte Sitzung und hinge endlos.
    */
   private async runTurn(projectId: string, turn: QueuedTurn): Promise<void> {
-    // Bewusst states.get statt state() (Leck-Klasse wie in `publish`): nach
+    // Bewusst states.get statt state() (Leck-Klasse wie in `ChatEventBus.publish`): nach
     // einem forget() — Projekt gelöscht — darf hier kein frischer, leerer
     // State entstehen, der für die Prozesslebensdauer liegen bliebe. Das
     // VOR einem etwaigen forget() geholte Objekt darf lokal weiterbenutzt
     // werden; nur NEU anlegen ist verboten.
     const state = this.states.get(projectId);
     if (state === undefined) return;
-    // msb exec ist gelegentlich flaky: die Exec-Session stirbt oder liefert nie
-    // Output. Liefert ein Versuch KEIN einziges sinnvolles Event, wird er genau
+    // Ein Agent-Start kann flaken: er scheitert oder liefert nie ein Event.
+    // Liefert ein Versuch KEIN einziges sinnvolles Event, wird er genau
     // einmal wiederholt (transparent per Systemzeile) — erst dann Fehler.
     const maxAttempts = 2;
     let lastRow: ChatMessageRow | null = null;
@@ -729,7 +532,7 @@ export class ChatService {
       completed = result.completed;
       // Ein Nutzerabbruch beendet den Turn endgültig: ihn zu wiederholen hiesse,
       // genau die Arbeit auszuführen, die der Nutzer gerade gestoppt hat.
-      if (result.completed || result.sawMeaningful || result.benutzerAbbruch) break;
+      if (result.completed || result.sawMeaningful || result.userAborted) break;
       // Wurde das Projekt ZWISCHEN den Versuchen per forget() gelöscht, endet
       // der Turn hier sauber: kein Retry, keine „zweiter Versuch"-Zeile — das
       // Projekt existiert nicht mehr. (Sonst legte der nächste runAttempt über
@@ -763,432 +566,42 @@ export class ChatService {
   }
 
   /**
-   * Stellt dem Prompt den bisherigen Gesprächsverlauf voran, falls es einen gibt
-   * (nur user/assistant, gekappt). Nur nötig, wenn OHNE `--resume` gestartet wird
-   * — sonst würde der Agent den Kontext der Konversation nicht kennen.
-   */
-  private async withHistoryContext(
-    projectId: string,
-    currentTurnId: string,
-    prompt: string,
-  ): Promise<string> {
-    // Nur user/assistant-Zeilen laden — und das Filtern schon in die DB legen,
-    // NICHT erst danach. Sonst füllt ein tool-lastiger Turn die geholten Zeilen
-    // mit `tool`/`system`/`error` und nach dem Filter bleibt fast nichts (im
-    // schlimmsten Fall nichts) übrig: der Agent startete dann ohne Resume UND
-    // ohne Kontext und beantwortete ein „weiter" gedächtnislos.
-    const convo = (
-      await this.db
-        .select()
-        .from(chatMessages)
-        .where(
-          and(
-            eq(chatMessages.projectId, projectId),
-            ne(chatMessages.turnId, currentTurnId),
-            inArray(chatMessages.role, ['user', 'assistant']),
-          ),
-        )
-        .orderBy(desc(sql`rowid`))
-        .limit(30)
-    ).reverse();
-    if (convo.length === 0) return prompt;
-    const MAX_CHARS = 8_000;
-    let verlauf = convo
-      .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
-      .join('\n\n');
-    if (verlauf.length > MAX_CHARS) verlauf = `…\n\n${verlauf.slice(-MAX_CHARS)}`;
-    return (
-      'Bisheriger Gesprächsverlauf dieses Projekts (der Sitzungskontext wurde ' +
-      'nach einem Abbruch neu aufgebaut; der aktuelle Stand des Codes liegt in ' +
-      `den Dateien im Workspace):\n\n${verlauf}\n\n---\n\nAktuelle Aufgabe:\n${prompt}`
-    );
-  }
-
-  /**
-   * Ein einzelner Anlauf eines Turns: Runner starten, Events verarbeiten,
-   * Watchdog fahren.
-   *
-   * Der Rückgabewert ist die Entscheidungsgrundlage für den Retry in
-   * `runTurn`. Besonders `benutzerAbbruch` gehört zum Vertrag: Er unterscheidet
-   * den Abbruch DURCH DEN NUTZER (Stop-Button, Steering) vom Abbruch durch den
-   * WATCHDOG (stiller Hänger). Nur letzterer darf wiederholt werden.
-   *
-   * Umgesetzt ist die Unterscheidung ohne zusätzlichen Zustand: nach aussen —
-   * also über `state.currentHandle` — ist nur ein umhülltes Handle erreichbar,
-   * dessen `abort()` den Nutzerabbruch vermerkt. Der Watchdog weiter unten
-   * greift bewusst auf das ROHE Handle zu.
-   *
-   * ⚠️ Wer hier eine weitere Abbruchstelle einbaut, muss dieselbe Wahl treffen:
-   * `handle.abort()` heisst „Nutzer wollte das, kein Retry", `rohHandle.abort()`
-   * heisst „technischer Abbruch, Retry erlaubt". Ein Griff zum falschen Handle
-   * schaltet den Retry für echte Hänger still ab.
+   * Ein einzelner Anlauf eines Turns. Prüft, ob es das Projekt noch gibt,
+   * wartet einen laufenden Config-Warmup ab und übergibt dann an `TurnAttempt`
+   * (Runner starten, Events verarbeiten, Watchdog — s. dort, auch zum Vertrag
+   * von `userAborted`).
    */
   private async runAttempt(
     projectId: string,
     turn: QueuedTurn,
     isLastAttempt: boolean,
     allowResume: boolean,
-  ): Promise<{
-    completed: boolean;
-    sawMeaningful: boolean;
-    lastRow: ChatMessageRow | null;
-    /** Vom Nutzer abgebrochen (Stop/Steering) — kein Flake, also kein Retry. */
-    benutzerAbbruch: boolean;
-  }> {
-    // Bewusst states.get statt state() (Leck-Klasse wie in `publish`): wurde
+  ): Promise<TurnAttemptResult> {
+    // Bewusst states.get statt state() (Leck-Klasse wie in `runTurn`): wurde
     // das Projekt zwischen zwei Versuchen per forget() gelöscht, legte das
     // lazy-anlegende state() hier einen leeren State-Eintrag an, der für die
     // Prozesslebensdauer liegen bliebe. Ohne State ist der Versuch
-    // gegenstandslos: sauber beenden — kein Retry (benutzerAbbruch wirkt wie
+    // gegenstandslos: sauber beenden — kein Retry (userAborted wirkt wie
     // beim Nutzer-Stop endgültig), keine neuen Zeilen, kein onTurnEnd.
     const state = this.states.get(projectId);
     if (state === undefined) {
-      return { completed: false, sawMeaningful: false, lastRow: null, benutzerAbbruch: true };
+      return { completed: false, sawMeaningful: false, lastRow: null, userAborted: true };
     }
 
-    // Läuft ein Config-Warmup, erst darauf warten — sonst konkurrieren zwei
-    // claude-exec-Sessions in der VM (microsandbox serialisiert sie → langsam).
-    const warmup = this.warmups.get(projectId);
+    // Läuft ein Config-Warmup, erst darauf warten — er belegt den
+    // Ein-Turn-Daemon der VM, ein gleichzeitiger echter Turn würde abgewiesen.
+    const warmup = this.warmup.pending(projectId);
     if (warmup) {
       await warmup;
     }
 
-    const projectRow = (
-      await this.db.select().from(projects).where(eq(projects.id, projectId)).limit(1)
-    )[0];
-
-    // Modell PRO PROJEKT (Dropdown im Chat); langsame lokale Modelle bekommen
-    // großzügigere Timeouts, sonst bricht der Watchdog mitten im „Denken" ab.
-    const model = projectRow?.agentModel ?? DEFAULT_AGENT_MODEL;
-    const timeouts = agentTimeoutsFor(
-      model,
-      {
-        idleMs: this.idleTimeoutMs,
-        firstEventMs: this.firstEventTimeoutMs,
-        coldStartMs: this.coldStartTimeoutMs,
-      },
-      {
-        idleMs: this.slowIdleTimeoutMs,
-        firstEventMs: this.slowFirstEventTimeoutMs,
-        coldStartMs: this.slowColdStartTimeoutMs,
-      },
-    );
-    // Nur fortsetzen, wenn die Session mit dem AKTUELLEN Projekt-Modell erstellt
-    // wurde. Sonst (anderes/kein Modell) frisch starten — ein --resume über einen
-    // Modellwechsel hinweg bringt Claude Code zum Hängen ("Agent arbeitet" ewig).
-    const canResume =
-      allowResume && projectRow?.claudeSessionId != null && projectRow.claudeSessionModel === model;
-    // Kaltstart: erster Turn dieser (frischen) VM — mehr Zeit bis zum ersten Event.
-    const firstEventBudget = canResume ? timeouts.firstEventMs : timeouts.coldStartMs;
-    // Kontext-Recovery: OHNE Resume sähe claude nur den neuen Prompt (z. B. nur
-    // „weiter"). Gibt es schon einen Chat-Verlauf (nach Interrupt-Reset oder
-    // heilendem Retry), betten wir ihn in den Prompt ein — sonst startet der
-    // Agent gedächtnislos. Mit Resume trägt --resume den Kontext, dann nicht.
-    const prompt = canResume
-      ? turn.prompt
-      : await this.withHistoryContext(projectId, turn.turnId, turn.prompt);
-    const rohHandle = this.runner.startTurn({
+    return new TurnAttempt(
+      this.attemptDeps,
+      state,
       projectId,
-      prompt,
-      workspaceDir: turn.workspaceDir,
-      resumeSessionId: canResume ? projectRow.claudeSessionId : null,
-      model,
-    });
-    // Ein vom NUTZER ausgelöster Abbruch (Stop-Button, Steering) ist kein
-    // msb-Flake und darf deshalb keinen zweiten Durchlauf auslösen. Von aussen
-    // ist nur dieses umhüllte Handle erreichbar (state.currentHandle), der
-    // Watchdog unten greift bewusst auf rohHandle zu — so bleiben die beiden
-    // Abbruchgründe unterscheidbar, ohne zusätzlichen Zustand.
-    let benutzerAbbruch = false;
-    const handle: TurnHandle = {
-      events: rohHandle.events,
-      /**
-       * Abbruch DURCH DEN NUTZER (Stop-Button, Steering) — beendet den Turn
-       * endgültig, `runTurn` wiederholt ihn nicht.
-       *
-       * Das ist die einzige Stelle, an der `benutzerAbbruch` gesetzt wird, und
-       * dieses umhüllte Handle ist das einzige, das nach aussen gelangt
-       * (`state.currentHandle`). Der Watchdog weiter unten ruft bewusst
-       * `rohHandle.abort()` — ein stiller Hänger ist genau der Fall, für den
-       * der Retry existiert.
-       */
-      abort: () => {
-        benutzerAbbruch = true;
-        rohHandle.abort();
-      },
-    };
-    // Ab hier ist der Turn von aussen abbrechbar — und zwar nur über das
-    // umhüllte Handle.
-    state.currentHandle = handle;
-    // Ein Stop/Interrupt, der im Startfenster DIESES Turns ankam (aktiv, aber
-    // Handle stand noch nicht), ist an genau diese turnId gepinnt — jetzt, wo
-    // das Handle steht, wird er eingelöst. Bewusst über das UMHÜLLTE Handle:
-    // das setzt `benutzerAbbruch`, also kein Retry. Ein Pin auf eine fremde
-    // turnId kann hier nicht auftauchen — die Pump räumt ihn spätestens am
-    // Ende seines Turns.
-    if (state.abortActiveTurnId === turn.turnId) {
-      state.abortActiveTurnId = null;
-      handle.abort();
-    }
-
-    let assistantRow: ChatMessageRow | null = null;
-    let thinkingRow: ChatMessageRow | null = null;
-    // Zuletzt gesendete Zeile — damit das Turn-Ende IMMER signalisiert werden kann,
-    // auch wenn der Turn mit einem Tool-Call endet (sonst hängt "Agent arbeitet").
-    let lastRow: ChatMessageRow | null = null;
-    let completed = false;
-    // Kam irgendein sinnvolles Lebenszeichen (alles außer error/turn-aborted)?
-    // Wenn nicht, war der Start ein msb-Flake und darf wiederholt werden.
-    let sawMeaningful = false;
-    let sawAnyEvent = false;
-    // Getrennt von sawMeaningful (dem Flake-Detektor der Retry-Politik, den
-    // schon ein session-Event setzt): NUR echte Arbeit — Text, Denken,
-    // Tool-Calls — rechtfertigt den „weiter"-Hinweis. Sonst verspräche die
-    // Terminal-Zeile einen Zwischenstand, den es nicht gibt.
-    let sawArbeit = false;
-
-    // Gebündeltes Streaming: Deltas landen sofort im Speicher (assistantRow/
-    // thinkingRow/lastRow tragen immer den vollen Text), in die DB und an die
-    // Abonnenten gehen sie höchstens einmal pro Zeitfenster. Ohne Bündelung
-    // schrieb und sendete JEDES Delta die ganze Zeile neu — quadratisch in der
-    // Antwortlänge, auf dem Event-Loop, den sich Proxy und Gateways teilen.
-    const offeneDeltas = new Map<string, ChatMessageRow>();
-    let flushTimer: ReturnType<typeof setTimeout> | undefined;
-    // Schreibvorgänge strikt hintereinander: der Timer feuert neben der
-    // Event-Schleife, die Stände einer Zeile dürfen sich nie überholen.
-    let flushKette: Promise<void> = Promise.resolve();
-    const flushDeltas = (): Promise<void> => {
-      if (flushTimer !== undefined) {
-        clearTimeout(flushTimer);
-        flushTimer = undefined;
-      }
-      const lauf = flushKette.then(async () => {
-        const rows = [...offeneDeltas.values()];
-        offeneDeltas.clear();
-        for (const row of rows) {
-          await this.db
-            .update(chatMessages)
-            .set({ content: row.content })
-            .where(eq(chatMessages.id, row.id));
-          this.publish(projectId, row, true);
-        }
-      });
-      // Ein gescheiterter Lauf (Projekt gelöscht) darf die Kette nicht vergiften.
-      flushKette = lauf.catch(() => {});
-      return lauf;
-    };
-
-    // Jede NEUE Zeile schließt vorher die laufenden ab — Reihenfolge und Inhalt
-    // stimmen so auch dann, wenn das Zeitfenster noch nicht abgelaufen ist.
-    const insert = async (
-      role: ChatMessageRow['role'],
-      content: string,
-    ): Promise<ChatMessageRow> => {
-      await flushDeltas();
-      lastRow = await this.insertMessage(projectId, turn.turnId, role, content);
-      return lastRow;
-    };
-
-    // Streamt ein Delta in die laufende Zeile der jeweiligen Rolle (assistant/thinking).
-    const appendDelta = async (
-      current: ChatMessageRow | null,
-      role: ChatMessageRow['role'],
-      text: string,
-    ): Promise<ChatMessageRow> => {
-      if (current === null) {
-        return insert(role, text);
-      }
-      // Deckel gegen unbegrenztes Wachstum (F16): ein kompromittierter Daemon
-      // könnte sonst Speicher, Platte und alle SSE-Abonnenten sättigen. Die
-      // Zeile wird abgeschlossen und eine neue begonnen — der Stream bricht
-      // nicht ab, der Inhalt bleibt vollständig.
-      if (current.content.length + text.length > MAX_MESSAGE_CHARS) {
-        return insert(role, text);
-      }
-      const updated: ChatMessageRow = { ...current, content: current.content + text };
-      lastRow = updated;
-      offeneDeltas.set(updated.id, updated);
-      if (this.deltaFlushMs <= 0) {
-        await flushDeltas();
-      } else {
-        // Ein Timer pro Fenster — er schreibt auch dann, wenn kein weiteres
-        // Event mehr kommt (der Agent denkt nach), der Text bleibt nie hängen.
-        flushTimer ??= setTimeout(() => {
-          flushTimer = undefined;
-          flushDeltas().catch((error: unknown) => {
-            console.error(
-              `Streaming-Stand für ${projectId} konnte nicht gespeichert werden:`,
-              error,
-            );
-          });
-        }, this.deltaFlushMs);
-      }
-      return updated;
-    };
-
-    const iterator = handle.events[Symbol.asyncIterator]();
-    // Genau EIN laufendes next() teilen — sonst geht bei einem Timeout das gerade
-    // schwebende Event verloren (der spätere Fehlertext läge im verworfenen next()).
-    let pending = iterator.next();
-    const race = async (timeoutMs: number): Promise<IteratorResult<AgentEvent> | 'timeout'> => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const timeoutP = new Promise<'timeout'>((resolve) => {
-        timer = setTimeout(() => resolve('timeout'), timeoutMs);
-      });
-      try {
-        return await Promise.race([pending, timeoutP]);
-      } finally {
-        clearTimeout(timer);
-      }
-    };
-    // Nach dem Abbruch: kurz weiterlesen und einen etwaigen Fehlertext einsammeln.
-    const drainForErrorDetail = async (): Promise<string> => {
-      const deadline = Date.now() + this.abortGraceMs;
-      const parts: string[] = [];
-      for (;;) {
-        const remaining = deadline - Date.now();
-        if (remaining <= 0) break;
-        const step = await race(remaining);
-        if (step === 'timeout') break;
-        pending = iterator.next();
-        if (step.done) break;
-        if (step.value.type === 'error') parts.push(step.value.message);
-      }
-      return parts.join('\n');
-    };
-    const handleEvent = async (event: AgentEvent): Promise<void> => {
-      this.hooks.onAgentActivity?.(projectId);
-      sawAnyEvent = true;
-      if (event.type !== 'error' && event.type !== 'turn-aborted') {
-        sawMeaningful = true;
-      }
-      switch (event.type) {
-        case 'text-delta':
-          sawArbeit = true;
-          assistantRow = await appendDelta(assistantRow, 'assistant', event.text);
-          break;
-        case 'thinking-delta':
-          sawArbeit = true;
-          // Denken live in eine eigene Zeile streamen (falls die API es liefert).
-          thinkingRow = await appendDelta(thinkingRow, 'thinking', event.text);
-          break;
-        case 'tool-use':
-          sawArbeit = true;
-          // Neuer Tool-Call beginnt: die laufende Text-/Denk-Bubble ist zu Ende.
-          assistantRow = null;
-          thinkingRow = null;
-          await insert('tool', event.detail ? `${event.name}: ${event.detail}` : event.name);
-          break;
-        case 'block-stop':
-          // Blockgrenze: die nächste Text-/Denk-Sequenz startet eine neue Bubble.
-          await flushDeltas();
-          assistantRow = null;
-          thinkingRow = null;
-          break;
-        case 'session':
-          // Session-ID früh sichern — überlebt auch einen abgebrochenen Turn (R9).
-          // Modell mitschreiben: ein späterer Modellwechsel darf diese Session
-          // NICHT fortsetzen (--resume + anderes --model hängt).
-          await this.saveSession(projectId, event.sessionId, model);
-          break;
-        case 'api-retry':
-          // Sichtbar machen (R6) — aber nur einmal pro Turn, kein Retry-Spam.
-          if (event.attempt === 1) {
-            await insert(
-              'system',
-              `Claude-API-Störung: ${event.message} — automatische Wiederholung läuft (max. ${event.maxRetries} Versuche)`,
-            );
-          }
-          break;
-        case 'error':
-          await insert('error', event.message);
-          break;
-        case 'turn-aborted':
-          // Stiller Flake-Abbruch (nichts Sinnvolles passiert, Retry folgt):
-          // keine verwirrende „Turn abgebrochen"-Zeile posten. Beim
-          // Nutzerabbruch folgt kein Retry, also ist dieser Versuch der letzte
-          // — die Rückmeldung MUSS dann sichtbar sein.
-          if (benutzerAbbruch || sawMeaningful || isLastAttempt) {
-            await insert('system', abbruchText(sawArbeit));
-          }
-          break;
-        case 'turn-completed':
-          completed = true;
-          if (event.sessionId !== null) {
-            await this.saveSession(projectId, event.sessionId, model);
-          }
-          break;
-      }
-    };
-
-    try {
-      for (;;) {
-        // Vor dem ersten Event gilt der kurze Start-Timeout (kaputter msb-exec
-        // wird in Sekunden erkannt), danach der großzügige Idle-Timeout.
-        const step = await race(sawAnyEvent ? timeouts.idleMs : firstEventBudget);
-        if (step === 'timeout') {
-          // Stiller Hänger: abbrechen. Beim letzten Versuch als Fehler SICHTBAR
-          // machen (statt ewig „Agent arbeitet"); sonst folgt gleich der Retry.
-          // Bewusst rohHandle: DAS hier ist der Watchdog, kein Nutzerabbruch —
-          // ein Hänger ist genau der Fall, für den der Retry gedacht ist.
-          rohHandle.abort();
-          const detail = await drainForErrorDetail();
-          if (benutzerAbbruch) {
-            // Nutzer-Stop, aber der Runner hat sein turn-aborted nie geliefert
-            // (z. B. Daemon nie verbunden, M1): Terminal-Zeile trotzdem
-            // schreiben — sonst bliebe die letzte Zeile die User-Nachricht
-            // (resumeUnansweredTurn führte den gerade gestoppten Prompt beim
-            // nächsten Öffnen erneut aus) und mangels lastRow würde
-            // turnActive:false nie publiziert („Agent arbeitet" für immer).
-            // Gleiches Vokabular wie der turn-aborted-Pfad, EIN Stop-Bild im UI.
-            await insert('system', abbruchText(sawArbeit));
-          } else if (sawMeaningful || isLastAttempt) {
-            const usedMs = sawAnyEvent ? timeouts.idleMs : firstEventBudget;
-            const secs = Math.round(usedMs / 1000);
-            await insert(
-              'error',
-              `Der Agent hat ${secs}s lang nicht reagiert und wurde abgebrochen.` +
-                (detail
-                  ? `\n\n${detail}`
-                  : ' Kein weiterer Fehlertext verfügbar — mögliche Ursache: die Claude-API ' +
-                    'antwortet nicht (Netz-/Rate-Limit-Problem).') +
-                (sawArbeit ? `\n\n${WEITER_HINWEIS}` : ''),
-            );
-          }
-          break;
-        }
-        pending = iterator.next();
-        if (step.done) break;
-        await handleEvent(step.value);
-      }
-    } catch (error) {
-      // Runner-Fehler nie verschlucken — als error-Zeile in die Historie.
-      // Der Insert selbst darf aber NICHT werfen (F18): wurde das Projekt
-      // während des Turns gelöscht, scheitert er am Fremdschlüssel, und die
-      // Exception entkäme über die floating pump() als Unhandled Rejection.
-      try {
-        await insert('error', error instanceof Error ? error.message : String(error));
-      } catch (insertError) {
-        console.error(
-          `Fehlermeldung für ${projectId} konnte nicht gespeichert werden (Projekt gelöscht?):`,
-          insertError,
-        );
-      }
-    } finally {
-      state.currentHandle = null;
-      // Rest schreiben, BEVOR das Turn-Ende signalisiert wird — sonst stünde in
-      // der DB ein älterer Stand als im letzten Event. Darf nicht werfen (F18,
-      // wie der Fehler-Insert oben: Projekt während des Turns gelöscht).
-      try {
-        await flushDeltas();
-      } catch (flushError) {
-        console.error(
-          `Streaming-Stand für ${projectId} konnte nicht gespeichert werden (Projekt gelöscht?):`,
-          flushError,
-        );
-      }
-    }
-
-    return { completed, sawMeaningful, lastRow, benutzerAbbruch };
+      turn,
+      isLastAttempt,
+      allowResume,
+    ).run();
   }
 }
