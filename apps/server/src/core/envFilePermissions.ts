@@ -1,6 +1,6 @@
 import { existsSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { supportsPosixModes } from './fsCapabilities';
+import { supportsPosixModes } from '@macvibes/shared/node';
 
 /**
  * Meldet eine group/other-lesbare .env — dort steht der Claude-Token im

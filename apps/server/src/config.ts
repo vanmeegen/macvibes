@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_MAX_SANDBOXES } from '@macvibes/shared';
+import { macvibesHomeDir, parseEnvFile } from '@macvibes/shared/node';
 
 /** Modell-Route aus `MACVIBES_MODEL_ROUTES`: Präfix → Upstream samt optionalem Key. */
 interface ModelRouteConfig {
@@ -196,7 +196,7 @@ const SERVER_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
 /** Datenverzeichnis: `MACVIBES_HOME`, sonst `~/macvibes`. */
 function defaultMacvibesHome(): string {
-  return Bun.env.MACVIBES_HOME ?? join(homedir(), 'macvibes');
+  return macvibesHomeDir(Bun.env);
 }
 
 /**
@@ -222,36 +222,6 @@ export function resolveDbPath(macvibesHome?: string, serverRoot: string = SERVER
   if (existsSync(legacy)) return legacy;
   const home = macvibesHome ?? defaultMacvibesHome();
   return join(home, 'data', name);
-}
-
-/**
- * Minimaler Parser für die Home-Fallback-`.env` (`<macvibesHome>/.env`).
- *
- * Bewusst OHNE `$`-Expansion — anders als Buns cwd-Autolader, der `$VAR` auch in
- * Single-Quotes expandiert (Quirk, dokumentiert in scripts/lib/setup.ts). Das
- * Setup schreibt hier ohnehin nur single-quotierte Werte ohne `$`/`\`/`'`
- * (envQuote lehnt die ab), deshalb ist literales Lesen korrekt und frei von
- * Überraschungs-Expansion. Umschließende einfache/doppelte Quotes werden
- * entfernt; Kommentar- und Leerzeilen ignoriert.
- */
-export function parseEnvFile(content: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const raw of content.split('\n')) {
-    const line = raw.trim();
-    if (line === '' || line.startsWith('#')) continue;
-    const match = /^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
-    if (!match) continue;
-    let value = (match[2] ?? '').trim();
-    if (
-      value.length >= 2 &&
-      ((value.startsWith("'") && value.endsWith("'")) ||
-        (value.startsWith('"') && value.endsWith('"')))
-    ) {
-      value = value.slice(1, -1);
-    }
-    out[match[1] as string] = value;
-  }
-  return out;
 }
 
 /**

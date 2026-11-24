@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadConfig, loadHomeEnvFile, parseEnvFile, resolveDbPath } from '../config';
+import { parseEnvFile } from '@macvibes/shared/node';
+import { loadConfig, loadHomeEnvFile, resolveDbPath } from '../config';
 import { PORT_DEFAULTS } from '../../../../scripts/lib/ports';
 import { LITELLM_BRIDGE_URL } from '../../../../scripts/lib/setup';
 import { DEFAULT_BRIDGE_PORT } from '../../local-router/bridgePort';

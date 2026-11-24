@@ -14,18 +14,11 @@
  *   ~/macvibes-Baum → Baselines (msb) / Prozess-Fallback → Abschluss-Hinweis.
  */
 import { randomBytes } from 'node:crypto';
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { usernameSchema } from '@macvibes/shared';
+import { supportsPosixModes } from '@macvibes/shared/node';
 import { doctor } from './lib/doctor';
 import { druckeDoctorReport, erhebeDoctorInput } from './lib/doctorState';
 import { macvibesHome } from './lib/env';
@@ -59,26 +52,6 @@ type EigenerAnbieter = Extract<ProviderChoice, { kind: 'custom-anthropic' | 'cus
 
 /** Repo-Root modul-relativ (scripts/ liegt direkt darunter) — cwd-unabhängig. */
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
-
-/**
- * Kann das Dateisystem unter `dir` POSIX-Modes durchsetzen? Feature-Detection
- * wie apps/server/src/core/fsCapabilities.ts (supportsPosixModes), hier BEWUSST
- * dupliziert statt importiert: Skripte importieren keinen Server-Code aus
- * apps/server/src/** (M6-Env-Gate, Composition-Root-Sauberkeit). Unter NTFS
- * meldet stat trotz chmod 0o666 → false, dann ist chmod 600 wirkungslos.
- */
-function unterstuetztPosixModes(dir: string): boolean {
-  const probe = join(dir, `.macvibes-mode-probe-${process.pid}-${Date.now()}`);
-  try {
-    writeFileSync(probe, '');
-    chmodSync(probe, 0o600);
-    return (statSync(probe).mode & 0o077) === 0;
-  } catch {
-    return false;
-  } finally {
-    rmSync(probe, { force: true });
-  }
-}
 
 /**
  * Hinweis am Prompt, wenn eine Eingabe ein Zeichen enthält, das die
@@ -734,7 +707,7 @@ function schreibeEnv(envPfad: string, answers: SetupAnswers): void {
   // Das nachträgliche chmod bleibt als defensiver Zweitschritt (u. a. falls die
   // Datei schon existierte und writeFileSync den Mode dann nicht mehr anpasst).
   writeFileSync(envPfad, buildEnvContent(answers), { mode: 0o600 });
-  if (unterstuetztPosixModes(ordner)) {
+  if (supportsPosixModes(ordner)) {
     chmodSync(envPfad, 0o600);
     console.log(`→ ${envPfad} geschrieben (chmod 600).`);
   } else {

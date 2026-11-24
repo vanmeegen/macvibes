@@ -80,7 +80,7 @@ Skips / 0 fail; Web 151/151; Lint+Typecheck sauber).
 **Stufe 1 ist damit formal abgeschlossen.** Die einzige bewusste
 `process.platform`-Weiche im Produktivcode liegt weiterhin in
 `scripts/lib/prozesse.ts` (verifiziert per Repo-Grep, 2026-08-05); `core/exec.ts`
-und `core/fsCapabilities.ts` kapseln die Plattformunterschiede stattdessen über
+und `fsCapabilities.ts` (inzwischen in `packages/shared/src/node/`) kapseln die Plattformunterschiede stattdessen über
 Feature-Detection (`bun exec`, `tree-kill`, `supportsPosixModes`). Zwei weitere
 `process.platform`-Treffer liegen bewusst in Tests
 (`core/__tests__/fsCapabilities.test.ts`, `sandbox/__tests__/microsandboxProvider.test.ts`

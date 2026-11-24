@@ -6,6 +6,22 @@ Live-Preview der entstehenden App, ähnlich Lovable, aber komplett lokal.
 
 Status: umgesetzt (Phase A + B + C), Stand 2026-07-04
 
+> **Dieses PRD beschreibt den Stand vom 2026-07-04.** Der Ist-Zustand steht in
+> [`CLAUDE.md`](CLAUDE.md) und den [ADRs](docs/adr/). Seither hat sich geändert
+> (die Stellen unten sind bewusst NICHT umgeschrieben):
+>
+> - **Preview-Routing:** das iframe zeigt nicht mehr direkt auf den Host-Port
+>   der VM, sondern auf das Preview-Gateway (fester Port 4173, Session-Prüfung).
+> - **Agent-Session:** der Daemon in der VM hält eine langlebige SDK-`query()`;
+>   kein `--resume` pro Turn mehr.
+> - **Baselines:** die Builder-VM installiert das Agent SDK sowie tini + monit,
+>   nicht mehr Claude Code per `bun add -g`.
+> - **Template `pwa`:** Bun-nativ, ohne Vite.
+> - **Ressourcen:** Default 4 vCPUs je Sandbox (statt 2).
+> - **Nicht mehr „Out of Scope":** HTTPS im LAN (Caddy), Admin-Rolle mit
+>   Freischaltung, GitHub-Mirror und das Unterbrechen eines Turns mit neuer
+>   Anweisung sind umgesetzt.
+
 ---
 
 ## 1. Ziel & Vision

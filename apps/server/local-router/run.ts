@@ -20,8 +20,8 @@
  * MACVIBES_LOCAL_ROUTER_CONFIG). Auflösung: configPath.ts.
  */
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { macvibesHomeDir } from '@macvibes/shared/node';
 import { resolveBridgePort } from './bridgePort';
 import { resolveRouterConfigPath } from './configPath';
 
@@ -30,7 +30,7 @@ const port = resolveBridgePort({
   portEnv: process.env['MACVIBES_LOCAL_ROUTER_PORT'],
   urlEnv: process.env['MACVIBES_LITELLM_URL'],
 });
-const macvibesHome = process.env['MACVIBES_HOME'] ?? join(homedir(), 'macvibes');
+const macvibesHome = macvibesHomeDir();
 const venv = join(macvibesHome, 'local-router-venv');
 // Upgrade-feste Router-Config: MACVIBES_LOCAL_ROUTER_CONFIG >
 // <macvibesHome>/litellm.yaml > mitgelieferte Datei — Begründung in configPath.ts

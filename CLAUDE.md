@@ -79,16 +79,36 @@ unmonitor` ≙ `failed`). Der Host **liest** den Status nur: der
   - `agent/` — `AgentRunner`-Interface: `DaemonAgentRunner` (VM-Daemon über das
     WS-Gateway, der Produktivpfad), `ClaudeAgentRunner` (Host, Dev ohne msb),
     `FakeAgentRunner` (Tests). `agent/daemon/` ist der In-VM-Daemon,
-    `agentGateway` die Host-Gegenstelle, `sdkMessageMapping`
-    (`agentEventsFromMessage`) mappt SDK-Messages auf `AgentEvent`s.
-  - `services/` — `chatService` (Turn-Queue, Streaming, Historie, Steering),
-    `projectsService`, `authService`, `autoCommitService`, `mirrorService`.
+    (`main` = Verdrahtung, `gatewayConnection` = Anmeldung/Heartbeat/Reconnect,
+    `daemonSession` = Turns), `agentGateway` die Host-Gegenstelle,
+    `sdkMessageMapping` (`agentEventsFromMessage`) mappt SDK-Messages auf
+    `AgentEvent`s — für Daemon UND Host-Runner; `appendPrompt` ist die
+    gemeinsame Zusatz-System-Anweisung, `vmAgentEnv` baut die VM-Umgebung.
+  - `services/` — `chatService` (Turn-Queue, Retry, Stop/Steering) mit seinen
+    Teilen unter `services/chat/` (`chatEventBus`, `chatMessageStore`,
+    `turnAttempt`, `configWarmup`), `projectsService`, `projectSessionService`,
+    `authService`, `autoCommitService` (ein `createAutoCommitter` für alle
+    automatischen Commits), `modelServerService` (oMLX + optionale
+    LiteLLM-Bridge mitstarten), `mirrorService`.
     (`gitService` — Orphan-Branch pro Projekt im Bare-Repo — und
     `workspaceService` liegen in `core/`.)
+  - `schema/` — GraphQL, nach Themen geschnitten: `types`, `guards`
+    (requireUser/requireAdmin, Rate-Limit), `authSchema`, `projectsSchema`,
+    `chatSchema`; `index` legt nur die Wurzeltypen an.
   - `http/anthropicProxy` — Credential-Proxy: die VM sieht nie einen Token.
+  - `testing/` — geteilte Test-Hilfen (DB, Temp-Verzeichnisse, Fixtures) für
+    die Tests aller Schichten.
 
-- **`apps/web`** — React 18 + MobX + MUI, Vite. Presentation-Model-Pattern.
-- **`packages/shared`** — Zod-Schemas, Branch-Slugify (Zod v4); die Schemas validieren serverseitig autoritativ, das Web importiert sie derzeit nicht.
+- **`apps/web`** — React 18 + MobX + MUI, Vite. Presentation-Model-Pattern:
+  Stores/Models unter `models/` (u. a. `ChatPageModel` für den Lebenszyklus
+  der Chat-Seite, `AdminUsersStore`, `NameDialogModel`), logikfreie Seiten
+  unter `pages/` mit ihren Teil-Komponenten in `pages/chat/`, `pages/projects/`
+  und `pages/components/`.
+- **`packages/shared`** — Zod-Schemas, Branch-Slugify (Zod v4),
+  Shutdown-Fristen; die Schemas validieren serverseitig autoritativ, das Web
+  importiert sie derzeit nicht. Der Einstieg `@macvibes/shared/node` trägt die
+  Node-only-Helfer, die Server UND Skripte teilen (`macvibesHomeDir`,
+  `parseEnvFile`, `supportsPosixModes`).
 - **`templates/`** — Projekt-Vorlagen (NICHT Teil der Workspaces), dynamisch
   aus `templates.json` gelesen. `pwa` ist Bun-nativ (kein Vite), `fullstack`
   spiegelt den macvibes-Stack.
@@ -175,7 +195,7 @@ Prozess-Provider laufen nativ unter Windows 11; die CI-Matrix in
 **Pflicht** (kein `continue-on-error` mehr).
 Leitprinzip aus `docs/windows-portierung-plan.md`: **plattformneutrale
 Mechanismen statt `process.platform`-Weichen** (`bun exec` + `tree-kill` in
-`core/exec.ts`, Feature-Detection in `core/fsCapabilities.ts`) — bitte
+`core/exec.ts`, Feature-Detection in `packages/shared/src/node/fsCapabilities.ts`) — bitte
 beibehalten. Wichtig:
 
 - **Bun-Pin 1.3.14** unter Windows via winget/scoop (kein brew).

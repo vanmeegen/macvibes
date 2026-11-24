@@ -3,7 +3,7 @@ import { existsSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { sql } from 'drizzle-orm';
-import { supportsPosixModes } from '../../core/fsCapabilities';
+import { supportsPosixModes } from '@macvibes/shared/node';
 import { createDb } from '../client';
 import { createTempDir, removeDir } from '../../testing/testUtils';
 
