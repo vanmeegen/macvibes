@@ -1,4 +1,5 @@
 import { AGENT_CONFIG_GUEST_DIR, PROXY_TOKEN_HEADER } from '../core/vmContract';
+import { AGENT_GATEWAY_PATH } from './daemon/protocol';
 
 export interface VmAgentEnvParams {
   /** Port des macvibes-Servers (Host-Proxy). */
@@ -53,5 +54,25 @@ export function buildVmAgentEnv(params: VmAgentEnvParams): Record<string, string
     ...(params.appendSystemPrompt != null
       ? { MACVIBES_AGENT_APPEND_PROMPT: params.appendSystemPrompt }
       : {}),
+  };
+}
+
+export interface VmDaemonEnvParams extends VmAgentEnvParams {
+  /** Name der Sandbox — der Daemon weist sich damit am Gateway aus. */
+  sandboxName: string;
+}
+
+/**
+ * Umgebung des Agent-Daemons in der VM: die Claude-Umgebung plus die Adresse
+ * des Host-Gateways, in das sich der Daemon ausgehend einwählt (Token-Auth
+ * mit demselben VM-Token wie der Credential-Proxy). Das Arbeitsverzeichnis
+ * wird nicht mitgegeben: der Daemon kennt GUEST_WORKDIR aus dem Host↔VM-Vertrag.
+ */
+export function buildVmDaemonEnv(params: VmDaemonEnvParams): Record<string, string> {
+  return {
+    ...buildVmAgentEnv(params),
+    MACVIBES_AGENT_GATEWAY_URL:
+      `ws://${params.hostAlias}:${params.serverPort}${AGENT_GATEWAY_PATH}` +
+      `?sandbox=${encodeURIComponent(params.sandboxName)}&token=${encodeURIComponent(params.proxyToken)}`,
   };
 }

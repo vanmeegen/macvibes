@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { buildVmAgentEnv } from '../vmAgentEnv';
+import { buildVmAgentEnv, buildVmDaemonEnv } from '../vmAgentEnv';
 import { AGENT_CONFIG_GUEST_DIR, PROXY_TOKEN_HEADER } from '../../core/vmContract';
 // Test darf über Schichtgrenzen greifen (s. eslint.config.js): hier wird die
 // PRODUKTIONS-Verdrahtung gepinnt — msb-Alias injiziert wie in index.ts.
@@ -80,5 +80,24 @@ describe('buildVmAgentEnv — kritische Agent-Umgebung', () => {
       appendSystemPrompt: null,
     });
     expect('MACVIBES_AGENT_APPEND_PROMPT' in explizitNull).toBe(false);
+  });
+});
+
+describe('buildVmDaemonEnv — Daemon wählt sich ins Host-Gateway ein', () => {
+  test('Gateway-URL trägt Alias, Port, Sandbox-Namen und Token (URL-kodiert)', () => {
+    const env = buildVmDaemonEnv({
+      serverPort: 4000,
+      proxyToken: 'tok/en+1',
+      egressPort: 4010,
+      hostAlias: MSB_HOST_ALIAS,
+      sandboxName: 'macvibes-projekt 1',
+    });
+    expect(env.MACVIBES_AGENT_GATEWAY_URL).toBe(
+      'ws://host.microsandbox.internal:4000/agent?sandbox=macvibes-projekt%201&token=tok%2Fen%2B1',
+    );
+    // Die Claude-Umgebung bleibt vollständig enthalten.
+    expect(env.ANTHROPIC_BASE_URL).toBe('http://host.microsandbox.internal:4000/anthropic');
+    // Das Arbeitsverzeichnis kommt aus dem Host↔VM-Vertrag, nicht aus der Env.
+    expect('MACVIBES_AGENT_CWD' in env).toBe(false);
   });
 });

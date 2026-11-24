@@ -1,6 +1,7 @@
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { commitArgs, runGitInRepo, type ProjectRepo } from '../core/gitService';
 import { projectRepoFor } from '../core/workspaceService';
-import type { ChatService } from './chatService';
 
 export type AutoCommitResult = 'committed' | 'nothing-to-commit';
 
@@ -30,30 +31,51 @@ export async function autoCommit(repo: ProjectRepo, message: string): Promise<Au
   return 'committed';
 }
 
-export interface AutoCommitHookOptions {
+export interface AutoCommitterOptions {
   macvibesHome: string;
-  chatService: ChatService;
+  /**
+   * Meldet einen gescheiterten Commit sichtbar im Chat des Projekts. Als
+   * Funktion statt ChatService: der Committer entsteht in der Composition
+   * Root VOR dem ChatService (dessen Hooks ihn brauchen).
+   */
+  postError: (projectId: string, text: string) => Promise<void>;
+}
+
+export interface AutoCommitter {
+  /** onTurnEnd-Hook (R8): Auto-Commit nach jedem abgeschlossenen Agent-Turn. */
+  afterTurn(projectId: string, userPrompt: string): Promise<void>;
+  /**
+   * Offenen Workspace-Stand sichern — vor jedem Sandbox-Stopp (R9) und vor
+   * jedem Frischstart (N7). `reason` ist Commit-Message und Fehlertext
+   * zugleich. Ohne Projekt-Repo (Projekt nie geöffnet) ein No-op.
+   */
+  saveOpenState(projectId: string, reason: string): Promise<void>;
 }
 
 /**
- * onTurnEnd-Hook (R8): Auto-Commit nach jedem abgeschlossenen Agent-Turn.
- * Fehler landen sichtbar als error-Zeile im Chat — nie stillschweigend.
+ * EINE Stelle für alle automatischen Commits samt Fehlerbehandlung: Fehler
+ * landen im Server-Log UND sichtbar als error-Zeile im Chat — nie
+ * stillschweigend, und nie als geworfene Exception im Turn- oder Stopp-Pfad.
  */
-export function createTurnEndAutoCommit(
-  options: AutoCommitHookOptions,
-): (projectId: string, userPrompt: string) => Promise<void> {
-  return async (projectId, userPrompt) => {
-    const repo = projectRepoFor(options.macvibesHome, projectId);
+export function createAutoCommitter(options: AutoCommitterOptions): AutoCommitter {
+  const commit = async (projectId: string, message: string, label: string): Promise<void> => {
     try {
-      await autoCommit(repo, buildCommitMessage(userPrompt));
+      await autoCommit(projectRepoFor(options.macvibesHome, projectId), message);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`Auto-Commit für ${projectId} fehlgeschlagen:`, error);
-      await options.chatService.postMessage(
-        projectId,
-        'error',
-        `Auto-Commit fehlgeschlagen: ${message}`,
-      );
+      const detail = error instanceof Error ? error.message : String(error);
+      console.error(`${label} für ${projectId} fehlgeschlagen:`, error);
+      await options.postError(projectId, `${label} fehlgeschlagen: ${detail}`);
     }
+  };
+  return {
+    afterTurn: (projectId, userPrompt) =>
+      commit(projectId, buildCommitMessage(userPrompt), 'Auto-Commit'),
+    saveOpenState: async (projectId, reason) => {
+      // Kriterium ist das gitDir NEBEN dem Arbeitsbaum (F1) — ein `.git` im
+      // Arbeitsbaum wäre gast-geschrieben und damit kein Beleg für ein Repo.
+      const repo = projectRepoFor(options.macvibesHome, projectId);
+      if (!existsSync(join(repo.gitDir, 'HEAD'))) return;
+      await commit(projectId, reason, reason);
+    },
   };
 }

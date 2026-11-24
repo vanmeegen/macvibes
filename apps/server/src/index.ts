@@ -6,15 +6,14 @@ import { createTargetChecker, startEgressProxy } from './http/egressProxy';
 import { startPreviewGateway } from './http/previewGateway';
 import { createAppYoga } from './http/createAppYoga';
 import { serveWebUi } from './http/staticFiles';
-import { existsSync, statSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { AGENT_GATEWAY_PATH, AgentGateway } from './agent/agentGateway';
 import { loadUserAgentModels } from './agent/agentModel';
 import { ClaudeAgentRunner } from './agent/claudeRunner';
 import { buildDaemonBundle } from './agent/daemonBundle';
 import { DaemonAgentRunner } from './agent/daemonRunner';
 import { FakeAgentRunner } from './agent/fakeRunner';
-import { buildVmAgentEnv } from './agent/vmAgentEnv';
+import { buildVmDaemonEnv } from './agent/vmAgentEnv';
 import {
   MSB_HOST_ALIAS,
   MicrosandboxSandboxProvider,
@@ -24,10 +23,9 @@ import { msbAvailable, touchSandbox } from './sandbox/msbClient';
 import { ProcessSandboxProvider } from './sandbox/processProvider';
 import { selectBackends, type BackendSelection } from './sandbox/backendSelection';
 import { SandboxManager } from './sandbox/sandboxManager';
-import { supportsPosixModes } from './core/fsCapabilities';
-import { GUEST_WORKDIR } from './core/vmContract';
+import { warnIfEnvFileReadable } from './core/envFilePermissions';
 import { createVmTokenRegistry } from './core/vmTokens';
-import { autoCommit, createTurnEndAutoCommit } from './services/autoCommitService';
+import { createAutoCommitter } from './services/autoCommitService';
 import { ensureAdmin, purgeExpiredSessions, resolveSession } from './services/authService';
 import { ChatService } from './services/chatService';
 import { ensureBareRepo } from './core/gitService';
@@ -35,7 +33,6 @@ import { startMirrorScheduler } from './services/mirrorService';
 import { MODEL_SERVER_UNAVAILABLE, startModelServer } from './services/modelServerService';
 import { ShutdownSequence } from './shutdownSequence';
 import { FIXED_SHUTDOWN_STEP_TIMEOUTS_MS, sandboxShutdownBudgetMs } from '@macvibes/shared';
-import { projectRepoFor } from './core/workspaceService';
 import { initHotReload } from './devHotReload';
 
 // Dev-Hot-Reload (`bun --hot`): Bun führt dieses Modul bei jeder Quelldatei-
@@ -200,32 +197,6 @@ shutdownSequence.register(
   FIXED_SHUTDOWN_STEP_TIMEOUTS_MS['lokaler Modell-Router'],
 );
 
-/** Meldet eine group/other-lesbare .env — dort steht der Claude-Token (F26). */
-function warnIfEnvFileReadable(envPath: string): void {
-  if (!existsSync(envPath)) return;
-  try {
-    // Feature-Detection (P5): ohne durchsetzbare POSIX-Modes wäre der
-    // Mode-Check immer „lesbar" und der chmod-Rat sinnlos — stattdessen
-    // EINE ehrliche Warnung über die dokumentierte Abschwächung.
-    if (!supportsPosixModes(dirname(envPath))) {
-      console.warn(
-        `WARNUNG: Das Dateisystem von ${envPath} setzt keine POSIX-Dateirechte ` +
-          `durch — die Datei (enthält den Claude-Token) ist für andere lokale ` +
-          `Konten dieses Rechners lesbar (F26 abgeschwächt).`,
-      );
-      return;
-    }
-    if ((statSync(envPath).mode & 0o077) !== 0) {
-      console.warn(
-        `WARNUNG: ${envPath} ist auch für andere lokale Konten lesbar und enthält ` +
-          `den Claude-Token. Bitte "chmod 600 ${envPath}" ausführen.`,
-      );
-    }
-  } catch {
-    // Rechte nicht ermittelbar — kein Grund, den Start zu stören.
-  }
-}
-
 // chatService entsteht erst nach dem Manager — Hooks greifen über diese Referenz.
 let chatServiceRef: ChatService | null = null;
 
@@ -281,19 +252,14 @@ const sandboxProvider = useMicrosandbox
           // MSB_HOST_ALIAS wird hier injiziert (wie sandboxNameFor beim
           // Runner): der Weg VM→Host ist msb-Topologie — ein anderes
           // VM-Backend reicht seinen eigenen Alias herein.
-          return {
-            ...buildVmAgentEnv({
-              serverPort: config.port,
-              proxyToken: vmToken,
-              egressPort,
-              hostAlias: MSB_HOST_ALIAS,
-              appendSystemPrompt: config.agent.appendSystemPrompt,
-            }),
-            MACVIBES_AGENT_GATEWAY_URL:
-              `ws://${MSB_HOST_ALIAS}:${config.port}${AGENT_GATEWAY_PATH}` +
-              `?sandbox=${encodeURIComponent(sandboxName)}&token=${encodeURIComponent(vmToken)}`,
-            MACVIBES_AGENT_CWD: GUEST_WORKDIR,
-          };
+          return buildVmDaemonEnv({
+            serverPort: config.port,
+            proxyToken: vmToken,
+            egressPort,
+            hostAlias: MSB_HOST_ALIAS,
+            appendSystemPrompt: config.agent.appendSystemPrompt,
+            sandboxName,
+          });
         },
       },
       // Preview-Status kommt als Push über die Daemon-Verbindung (ADR 0001).
@@ -312,25 +278,15 @@ console.log(
   `Sandbox-Backend: ${useMicrosandbox ? `microsandbox (${config.sandbox.image}, ${config.sandbox.cpus} CPUs, ${config.sandbox.memoryMib} MiB)` : 'process (kein VM-Isolat!)'}`,
 );
 
-// Offenen Workspace-Stand per Auto-Commit sichern — vor jedem Stopp (R9) und
-// vor jedem Frischstart (N7: msb-.replace() überbootet eine nach Hot-Reload
-// verwaiste VM ohne stop(), also ohne den Stopp-Hook).
-const sichereProjektStand = async (projectId: string, anlass: string): Promise<void> => {
-  // Kriterium ist das gitDir NEBEN dem Arbeitsbaum (F1) — ein `.git` im
-  // Arbeitsbaum wäre gast-geschrieben und damit kein Beleg für ein Repo.
-  const repo = projectRepoFor(config.macvibesHome, projectId);
-  if (!existsSync(join(repo.gitDir, 'HEAD'))) return;
-  try {
-    await autoCommit(repo, anlass);
-  } catch (error) {
-    console.error(`${anlass} für ${projectId} fehlgeschlagen:`, error);
-    await chatServiceRef?.postMessage(
-      projectId,
-      'error',
-      `${anlass} fehlgeschlagen: ${String(error)}`,
-    );
-  }
-};
+// Alle automatischen Commits (R8 nach jedem Turn, R9 vor jedem Stopp, N7 vor
+// jedem Frischstart — msb-.replace() überbootet eine nach Hot-Reload verwaiste
+// VM ohne stop(), also ohne den Stopp-Hook) samt Fehlermeldung in den Chat.
+const autoCommitter = createAutoCommitter({
+  macvibesHome: config.macvibesHome,
+  postError: async (projectId, text) => {
+    await chatServiceRef?.postMessage(projectId, 'error', text);
+  },
+});
 
 const sandboxManager = new SandboxManager({
   provider: sandboxProvider,
@@ -352,11 +308,12 @@ const sandboxManager = new SandboxManager({
   // absichtlich nicht mit.
   isBusy: (projectId) => chatServiceRef?.isBusy(projectId) ?? false,
   // Offenen Stand vor jedem Stopp sichern (R9).
-  onBeforeStop: (projectId) => sichereProjektStand(projectId, 'Auto-Commit vor Sandbox-Stopp'),
+  onBeforeStop: (projectId) =>
+    autoCommitter.saveOpenState(projectId, 'Auto-Commit vor Sandbox-Stopp'),
   // … und vor jedem Frischstart (N7, verwaiste VM nach Hot-Reload): bei leerem
   // git status ein No-op, der Normalfall kostet ein git status.
   onBeforeStart: (projectId) =>
-    sichereProjektStand(projectId, 'Auto-Commit vor Sandbox-Start (verwaister Stand?)'),
+    autoCommitter.saveOpenState(projectId, 'Auto-Commit vor Sandbox-Start (verwaister Stand?)'),
 });
 // Beim Hot-Reload nur die Timer entschärfen — KEIN stopAll(): laufende
 // MicroVMs (samt Auto-Commit-Hook) bleiben unangetastet, sonst würde ein
@@ -410,13 +367,7 @@ const chatService = new ChatService(
   {
     onAgentActivity: (projectId) => sandboxManager.noteAgentActivity(projectId),
     // Auto-Commit nach jedem abgeschlossenen Turn (R8).
-    onTurnEnd: (projectId, userPrompt) => {
-      if (chatServiceRef === null) return Promise.resolve();
-      return createTurnEndAutoCommit({
-        macvibesHome: config.macvibesHome,
-        chatService: chatServiceRef,
-      })(projectId, userPrompt);
-    },
+    onTurnEnd: (projectId, userPrompt) => autoCommitter.afterTurn(projectId, userPrompt),
   },
   {
     // Reagiert der Agent so lange gar nicht, gilt der Turn als hängend und wird
