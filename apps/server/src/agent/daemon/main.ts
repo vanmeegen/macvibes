@@ -3,9 +3,9 @@ import { GUEST_WORKDIR, MONIT_HTTPD_PORT } from '../../core/vmContract';
 import { httpProbe } from '../../preview/httpProbe';
 import { defaultAppendSystemPrompt } from '../appendPrompt';
 import { DaemonSession } from './daemonSession';
+import { GatewayConnection } from './gatewayConnection';
 import type { QueryHandle } from './daemonSession';
 import { PreviewStatusReporter } from './previewStatusReporter';
-import { parseHostToDaemon } from './protocol';
 import type { DaemonToHostMessage } from './protocol';
 
 /**
@@ -36,7 +36,10 @@ const cwd = process.env['MACVIBES_AGENT_CWD'] ?? GUEST_WORKDIR;
 const appendSystemPrompt =
   process.env['MACVIBES_AGENT_APPEND_PROMPT'] ?? defaultAppendSystemPrompt(cwd);
 
-let socket: WebSocket | null = null;
+// Die Session entsteht vor der Verbindung (ihre Events brauchen `send`), die
+// Verbindung vor dem ersten Kommando — deshalb die späte Referenz.
+let connection: GatewayConnection | null = null;
+const send = (message: DaemonToHostMessage): boolean => connection?.send(message) ?? false;
 
 const session = new DaemonSession({
   cwd,
@@ -44,9 +47,7 @@ const session = new DaemonSession({
     if (message.kind === 'event') {
       console.log(`Agent-Daemon: Event ${message.event.type} (Turn ${message.turnId})`);
     }
-    if (socket !== null && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify(message));
-    } else {
+    if (!send(message)) {
       // Verbindung gerade weg — der Host bricht den Turn seinerseits ab;
       // die Claude-Session im SDK lebt weiter (nächster Turn resumt nahtlos).
       console.error('Agent-Daemon: Event verworfen (Gateway nicht verbunden):', message.kind);
@@ -95,116 +96,24 @@ if (Number.isFinite(previewPort) && previewPort > 0) {
       return response.text();
     },
     probe: () => httpProbe(`http://127.0.0.1:${previewPort}/`),
-    send: (status) => {
-      if (socket !== null && socket.readyState === WebSocket.OPEN) {
-        socket.send(
-          JSON.stringify({ kind: 'preview-status', status } satisfies DaemonToHostMessage),
-        );
-      }
-    },
+    // Ohne Verbindung verworfen: der nächste Takt meldet den dann aktuellen Status.
+    send: (status) => void send({ kind: 'preview-status', status }),
   });
   reporter.start();
 } else {
   console.error('Agent-Daemon: MACVIBES_PREVIEW_PORT fehlt — kein Preview-Status-Push.');
 }
 
-/**
- * Heartbeat-Intervall: hält den NAT-Flow VM→Host warm. microsandbox lässt
- * idle TCP-Flows nach kurzer Zeit still sterben — ohne Ping verschwinden
- * Host-Kommandos nach ruhigen Phasen spurlos (Live-Befund 2026-07-06).
- */
-const PING_INTERVAL_MS = 15_000;
-
-/** Dauerhafte Verbindung zum Host-Gateway mit Backoff-Reconnect. */
-function connect(attempt = 0): void {
-  const ws = new WebSocket(gatewayUrl as string);
-  socket = ws;
-  let pingTimer: ReturnType<typeof setInterval> | null = null;
-
-  ws.addEventListener('open', () => {
-    console.log('Agent-Daemon: mit Host-Gateway verbunden');
-    ws.send(JSON.stringify({ kind: 'ready' } satisfies DaemonToHostMessage));
-    pingTimer = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ kind: 'ping' } satisfies DaemonToHostMessage));
-      }
-    }, PING_INTERVAL_MS);
-  });
-
-  ws.addEventListener('message', (event) => {
-    const raw = typeof event.data === 'string' ? event.data : '';
-    const message = parseHostToDaemon(raw);
-    if (message === null) {
-      console.error('Agent-Daemon: unverständliche Host-Nachricht verworfen:', raw.slice(0, 200));
-      return;
-    }
-    if (message.kind === 'pong') {
-      // Heartbeat-Antwort — hält den NAT-Flow in beide Richtungen aktiv.
-      return;
-    }
-    console.log(
-      `Agent-Daemon: Kommando ${message.kind}` +
-        ('turnId' in message ? ` (Turn ${message.turnId})` : ''),
-    );
-    try {
-      if (message.kind === 'start-turn') {
-        // Sofortige Quittung: beweist dem Host, dass das Kommando ankam
-        // (Schutz gegen halbtote Verbindungen nach Daemon-Neustart).
-        ws.send(
-          JSON.stringify({
-            kind: 'turn-started',
-            turnId: message.turnId,
-          } satisfies DaemonToHostMessage),
-        );
-        session.startTurn(message);
-      } else if (message.kind === 'interrupt') {
-        session.interrupt(message.turnId);
-      } else {
-        // shutdown: sauber beenden — der In-VM-Supervisor startet uns frisch.
-        console.error('Agent-Daemon: Shutdown angefordert — Supervisor übernimmt den Neustart.');
-        process.exit(0);
-      }
-    } catch (error) {
-      // Nie still scheitern — der Host würde sonst ewig warten.
-      console.error('Agent-Daemon: Kommando fehlgeschlagen:', error);
-      if (message.kind === 'start-turn') {
-        const failure: DaemonToHostMessage = {
-          kind: 'event',
-          turnId: message.turnId,
-          event: { type: 'error', message: `Daemon-Kommando fehlgeschlagen: ${String(error)}` },
-        };
-        const abort: DaemonToHostMessage = {
-          kind: 'event',
-          turnId: message.turnId,
-          event: { type: 'turn-aborted' },
-        };
-        ws.send(JSON.stringify(failure));
-        ws.send(JSON.stringify(abort));
-      }
-    }
-  });
-
-  ws.addEventListener('close', () => {
-    if (pingTimer !== null) clearInterval(pingTimer);
-    if (socket === ws) socket = null;
-    // Der Host hat den Turn bei einem Abriss seinerseits abgebrochen. Ohne
-    // diesen Aufruf bliebe currentTurnId hier gesetzt und die Notwehr-Sperre
-    // in startTurn wiese ab da JEDEN Folge-Turn ab.
-    session.abandonTurn();
-    const delayMs = Math.min(10_000, 500 * 2 ** Math.min(attempt, 4));
-    console.error(`Agent-Daemon: Gateway-Verbindung weg — Reconnect in ${delayMs}ms`);
-    setTimeout(() => connect(attempt + 1), delayMs);
-  });
-
-  ws.addEventListener('error', (event) => {
-    // close folgt ohnehin — hier nur Diagnose.
-    console.error('Agent-Daemon: WebSocket-Fehler:', event);
-  });
-
-  // Nach erfolgreichem Connect den Backoff zurücksetzen.
-  ws.addEventListener('open', () => {
-    attempt = 0;
-  });
-}
-
-connect();
+// Dauerhafte Verbindung zum Host-Gateway (Anmeldung, Heartbeat, Kommandos,
+// Backoff-Reconnect): gatewayConnection.ts.
+connection = new GatewayConnection({
+  url: gatewayUrl,
+  session: {
+    startTurn: (message) => session.startTurn(message),
+    interrupt: (turnId) => session.interrupt(turnId),
+    abandonTurn: () => session.abandonTurn(),
+  },
+  // Sauber beenden — der In-VM-Supervisor (monit) startet den Daemon frisch.
+  onShutdown: () => process.exit(0),
+});
+connection.start();
