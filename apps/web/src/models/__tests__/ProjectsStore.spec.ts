@@ -584,6 +584,18 @@ describe('Status-Polling pausiert im versteckten Tab', () => {
     store.stopPolling();
   });
 
+  it('ein zweites startPolling ersetzt das Intervall (Seitenwechsel Übersicht → Chat)', () => {
+    const store = new ProjectsStore(makeAuthStore('alice'));
+    store.startPolling(2000);
+    store.startPolling(1000);
+    vi.advanceTimersByTime(1000);
+    expect(mockGql).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1000);
+    // Liefe das alte 2-s-Intervall weiter, wären es hier drei Abfragen.
+    expect(mockGql).toHaveBeenCalledTimes(2);
+    store.stopPolling();
+  });
+
   it('reagiert nach stopPolling nicht mehr auf Sichtbarkeitswechsel', () => {
     const store = new ProjectsStore(makeAuthStore('alice'));
     store.startPolling(1000);

@@ -442,56 +442,34 @@ describe('ChatStore', () => {
   });
 });
 
-describe('Chat ausblendbar (Preview im Vollbild)', () => {
-  it('chatCollapsed startet sichtbar und lässt sich togglen', () => {
+describe('Ableitungen für die Eingabezeile und die „arbeitet"-Bubble', () => {
+  it('canSend: nur mit nicht-leerem Entwurf', () => {
     const store = new ChatStore();
-    expect(store.chatCollapsed).toBe(false);
-    store.toggleChatCollapsed();
-    expect(store.chatCollapsed).toBe(true);
-    store.toggleChatCollapsed();
-    expect(store.chatCollapsed).toBe(false);
+    expect(store.canSend).toBe(false);
+    store.setDraft('   ');
+    expect(store.canSend).toBe(false);
+    store.setDraft('Bau mir was');
+    expect(store.canSend).toBe(true);
   });
 
-  it('previewCollapsed startet sichtbar und lässt sich togglen (Preview ein/ausblenden)', () => {
+  it('showWorkingIndicator: Turn läuft und der Agent streamt noch nichts Sichtbares', () => {
     const store = new ChatStore();
-    expect(store.previewCollapsed).toBe(false);
-    store.togglePreviewCollapsed();
-    expect(store.previewCollapsed).toBe(true);
-    store.togglePreviewCollapsed();
-    expect(store.previewCollapsed).toBe(false);
-  });
+    store.projectId = 'p1';
+    expect(store.showWorkingIndicator).toBe(false);
 
-  it('Chat und Preview sind wechselseitig exklusiv — nie beide ausgeblendet (leerer Screen)', () => {
-    const store = new ChatStore();
-    store.toggleChatCollapsed();
-    expect(store.chatCollapsed).toBe(true);
-    // Preview ausblenden hebt das Chat-Ausblenden auf.
-    store.togglePreviewCollapsed();
-    expect(store.previewCollapsed).toBe(true);
-    expect(store.chatCollapsed).toBe(false);
-    // Und umgekehrt.
-    store.toggleChatCollapsed();
-    expect(store.chatCollapsed).toBe(true);
-    expect(store.previewCollapsed).toBe(false);
-  });
+    store.applyEvent({ message: message('m1', 'user', 'Hallo'), turnActive: true });
+    expect(store.showWorkingIndicator).toBe(true);
 
-  it('connect() eines Projekts blendet Chat UND Preview wieder ein (kein versteckter Chat/Preview beim Projektwechsel)', async () => {
-    const store = new ChatStore();
-    store.toggleChatCollapsed();
-    expect(store.chatCollapsed).toBe(true);
-    gqlRequestMock.mockResolvedValueOnce({ chatMessages: [], turnActive: false });
-    // jsdom hat kein EventSource — minimaler Stub reicht für connect().
-    vi.stubGlobal(
-      'EventSource',
-      class {
-        addEventListener(): void {}
-        close(): void {}
-        onerror: unknown = null;
-      },
-    );
-    await store.connect('p1');
-    vi.unstubAllGlobals();
-    expect(store.chatCollapsed).toBe(false);
-    expect(store.previewCollapsed).toBe(false);
+    store.applyEvent({ message: message('m2', 'tool', 'Read'), turnActive: true });
+    expect(store.showWorkingIndicator).toBe(true);
+
+    store.applyEvent({ message: message('m3', 'thinking', '…'), turnActive: true });
+    expect(store.showWorkingIndicator).toBe(false);
+
+    store.applyEvent({ message: message('m4', 'assistant', 'Fertig'), turnActive: true });
+    expect(store.showWorkingIndicator).toBe(false);
+
+    store.applyEvent({ message: message('m5', 'tool', 'Write'), turnActive: false });
+    expect(store.showWorkingIndicator).toBe(false);
   });
 });

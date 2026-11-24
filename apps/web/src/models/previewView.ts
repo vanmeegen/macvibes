@@ -1,6 +1,6 @@
 import type { PreviewStatus } from '../api/types';
 
-interface PreviewView {
+export interface PreviewView {
   /** iframe anzeigen? Nur wenn der Dev-Server läuft und der Gateway-Port da ist. */
   showIframe: boolean;
   url: string | null;

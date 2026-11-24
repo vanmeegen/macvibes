@@ -10,7 +10,6 @@ import Button from '@mui/material/Button';
 import Card from '@mui/material/Card';
 import CardActionArea from '@mui/material/CardActionArea';
 import CardContent from '@mui/material/CardContent';
-import Chip from '@mui/material/Chip';
 import CircularProgress from '@mui/material/CircularProgress';
 import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
@@ -42,7 +41,8 @@ import type { AuthStore } from '../models/AuthStore';
 import type { CreateProjectModel } from '../models/CreateProjectModel';
 import type { NameDialogModel } from '../models/NameDialogModel';
 import type { ProjectFilter, ProjectsStore } from '../models/ProjectsStore';
-import { formatTimestamp, projectStatusChip } from '../models/projectPresentation';
+import { formatTimestamp } from '../models/projectPresentation';
+import { StatusChip } from './components/StatusChip';
 
 export interface ProjectsPageProps {
   authStore: AuthStore;
@@ -83,14 +83,10 @@ const ProjectCard = observer(function ProjectCard({
               <Typography variant="h5" component="h2" noWrap>
                 {project.name}
               </Typography>
-              <Chip
-                size="small"
-                label={projectStatusChip(project.sandboxStatus, project.turnActive).label}
-                color={projectStatusChip(project.sandboxStatus, project.turnActive).color}
-                variant="outlined"
-                data-testselector={`project-status-${project.id}`}
-                data-status={project.sandboxStatus}
-                data-turn-active={project.turnActive ? 'true' : 'false'}
+              <StatusChip
+                sandboxStatus={project.sandboxStatus}
+                turnActive={project.turnActive}
+                testselector={`project-status-${project.id}`}
               />
             </Stack>
             <Typography variant="body2" color="text.secondary">

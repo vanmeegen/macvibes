@@ -97,10 +97,6 @@ export class SpeechStore {
   /**
    * Beschriftung des Mikro-Buttons. Die Verfügbarkeit schlägt den Status: wer
    * gar nicht aufnehmen kann, soll den Grund lesen, nicht „Aufnahme stoppen".
-   *
-   * Lag vorher als Funktion in ChatPage.tsx — Verzweigungslogik in einer
-   * Komponente, entgegen der verbindlichen Presentation-Model-Regel, und dort
-   * auch nicht testbar.
    */
   get tooltip(): string {
     switch (this.availability) {
@@ -120,6 +116,25 @@ export class SpeechStore {
     if (this.status === 'recording') return 'Aufnahme stoppen';
     if (this.status === 'installing') return 'Sprachpaket wird installiert …';
     return 'Diktieren — läuft komplett lokal im Browser';
+  }
+
+  get isRecording(): boolean {
+    return this.status === 'recording';
+  }
+
+  /** Aria-Label des Mikro-Buttons. */
+  get micLabel(): string {
+    return this.isRecording ? 'Aufnahme stoppen' : 'Diktieren';
+  }
+
+  /** Kürzel der Diktiersprache für den Umschalter. */
+  get langLabel(): string {
+    return this.lang === 'de-DE' ? 'DE' : 'EN';
+  }
+
+  /** Vorläufiger Erkennungstext — nur während der Aufnahme und wenn es einen gibt. */
+  get showInterim(): boolean {
+    return this.isRecording && this.interimText.length > 0;
   }
 
   /** Grundvoraussetzungen prüfen (beim Mount) — nur synchrone Checks. */
@@ -148,7 +163,9 @@ export class SpeechStore {
     }
 
     if (this.availability === 'downloadable') {
-      this.status = 'installing';
+      runInAction(() => {
+        this.status = 'installing';
+      });
       const installed = await this.installFn(this.lang);
       if (!installed) {
         runInAction(() => {
@@ -184,6 +201,11 @@ export class SpeechStore {
     this.storage.setItem(SPEECH_LANG_STORAGE_KEY, lang);
     // Probe zurücksetzen — der nächste Klick prüft die neue Sprache.
     this.init();
+  }
+
+  /** Wechselt zwischen Deutsch und Englisch. */
+  toggleLang(): void {
+    this.setLang(this.lang === 'de-DE' ? 'en-US' : 'de-DE');
   }
 
   private handleInterim(text: string): void {

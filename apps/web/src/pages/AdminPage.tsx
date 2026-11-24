@@ -1,10 +1,8 @@
-import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import Alert from '@mui/material/Alert';
 import AppBar from '@mui/material/AppBar';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
-import IconButton from '@mui/material/IconButton';
 import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
 import Table from '@mui/material/Table';
@@ -16,8 +14,8 @@ import Toolbar from '@mui/material/Toolbar';
 import Typography from '@mui/material/Typography';
 import { observer } from 'mobx-react-lite';
 import { useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
 import type { AdminUsersStore } from '../models/AdminUsersStore';
+import { BackButton } from './components/BackButton';
 
 interface AdminPageProps {
   adminUsersStore: AdminUsersStore;
@@ -31,8 +29,6 @@ interface AdminPageProps {
 export const AdminPage = observer(function AdminPage({
   adminUsersStore,
 }: AdminPageProps): JSX.Element {
-  const navigate = useNavigate();
-
   useEffect(() => {
     void adminUsersStore.loadUsers();
   }, [adminUsersStore]);
@@ -43,15 +39,7 @@ export const AdminPage = observer(function AdminPage({
     <Box sx={{ minHeight: '100vh', pb: 8 }}>
       <AppBar position="sticky">
         <Toolbar>
-          <IconButton
-            edge="start"
-            aria-label="Zurück zur Projektübersicht"
-            onClick={() => navigate('/')}
-            sx={{ mr: 2 }}
-            data-testselector="admin-back-button"
-          >
-            <ArrowBackIcon />
-          </IconButton>
+          <BackButton testselector="admin-back-button" />
           <Typography variant="h5" component="h1" sx={{ flexGrow: 1 }}>
             Nutzerverwaltung
           </Typography>

@@ -326,7 +326,10 @@ export class ProjectsStore {
    * sichtbar wird.
    */
   startPolling(intervalMs = 2000): void {
-    if (this.pollTimer !== null) return;
+    // Ein laufendes Polling wird ERSETZT, nicht behalten: Übersicht und
+    // Chat-Seite wollen verschiedene Intervalle, und ein stilles „läuft schon"
+    // ließe beim Seitenwechsel das alte Intervall weiterlaufen.
+    this.stopPolling();
     this.pollTimer = setInterval(() => {
       if (!document.hidden) void this.refresh();
     }, intervalMs);

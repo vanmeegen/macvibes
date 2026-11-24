@@ -253,6 +253,31 @@ describe('SpeechStore', () => {
       expect(store.status).toBe('idle');
     });
 
+    it('toggleLang wechselt DE ↔ EN, langLabel zeigt das Kürzel', () => {
+      const { store } = makeStore();
+      expect(store.langLabel).toBe('DE');
+      store.toggleLang();
+      expect(store.lang).toBe('en-US');
+      expect(store.langLabel).toBe('EN');
+      store.toggleLang();
+      expect(store.lang).toBe('de-DE');
+    });
+
+    it('micLabel/isRecording/showInterim folgen dem Aufnahme-Status', async () => {
+      const { store, transcriber } = makeStore();
+      store.init();
+      expect(store.isRecording).toBe(false);
+      expect(store.micLabel).toBe('Diktieren');
+
+      await store.toggle();
+      expect(store.isRecording).toBe(true);
+      expect(store.micLabel).toBe('Aufnahme stoppen');
+      expect(store.showInterim).toBe(false);
+
+      transcriber.callbacks?.onInterim('hallo we');
+      expect(store.showInterim).toBe(true);
+    });
+
     it('setLang setzt die Probe zurück — nächster Klick prüft die neue Sprache', async () => {
       const availability = vi.fn((lang: string) =>
         Promise.resolve<SpeechAvailability>(lang === 'de-DE' ? 'available' : 'downloadable'),

@@ -1,5 +1,6 @@
 import { AdminUsersStore } from './AdminUsersStore';
 import { AuthStore } from './AuthStore';
+import { ChatPageModel } from './ChatPageModel';
 import { ChatStore } from './ChatStore';
 import { CreateProjectModel } from './CreateProjectModel';
 import { LoginModel } from './LoginModel';
@@ -17,3 +18,4 @@ export const createProjectModel = new CreateProjectModel(projectsStore);
 export const loginModel = new LoginModel(authStore);
 export const chatStore = new ChatStore();
 export const speechStore = new SpeechStore(chatStore);
+export const chatPageModel = new ChatPageModel(projectsStore, chatStore, speechStore);

@@ -5,6 +5,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import {
   adminUsersStore,
   authStore,
+  chatPageModel,
   chatStore,
   createProjectModel,
   loginModel,
@@ -72,6 +73,7 @@ export const App = observer(function App(): JSX.Element {
         element={
           loggedIn ? (
             <ChatPage
+              model={chatPageModel}
               projectsStore={projectsStore}
               chatStore={chatStore}
               speechStore={speechStore}
