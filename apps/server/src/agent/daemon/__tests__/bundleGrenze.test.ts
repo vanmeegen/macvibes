@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url';
  * folgt jedem erlaubten lokalen Import in dessen Zieldatei und prüft auch
  * DEREN Importe gegen dieselbe Whitelist. Vorher garantierte die Begründung
  * eines Eintrags („host-frei") nichts: ein Import von `db/` in
- * `claudeStreamJson.ts` blieb unsichtbar — die Datei liegt außerhalb des
+ * `sdkMessageMapping.ts` blieb unsichtbar — die Datei liegt außerhalb des
  * Daemon-Ordners und wurde nie gescannt, eslint erlaubt agent→db, und
  * `Bun.build` hätte den Host-Code kommentarlos ins VM-Bundle inlined. Jeder
  * künftige Whitelist-Eintrag ist damit automatisch mitgeprüft — ohne dass
@@ -57,7 +57,7 @@ const ERLAUBTE_IMPORTE: ReadonlyArray<{ muster: RegExp; grund: string }> = [
   // Mapping SDK-Message → AgentEvent, läuft bewusst in der VM. Erlaubt ist
   // ihm transitiv nur, was selbst auf dieser Whitelist steht (heute: nur der
   // Typ-Import aus `../events`).
-  { muster: /^\.\.\/claudeStreamJson$/, grund: 'SDK-Message-Mapping' },
+  { muster: /^\.\.\/sdkMessageMapping$/, grund: 'SDK-Message-Mapping' },
   // Eingebaute Zusatz-System-Anweisung: importfreie Textfunktion, geteilt mit
   // dem Host-Runner, damit Dev- und VM-Pfad denselben Default haben.
   { muster: /^\.\.\/appendPrompt$/, grund: 'geteilter Default-Prompt (importfrei)' },
@@ -111,7 +111,7 @@ function importe(quelle: string): string[] {
 /**
  * Normalisiert einen Import auf den DAEMON-relativen Modulpfad — die Form,
  * in der die Whitelist ihre Muster formuliert. Ein `./events` in
- * `agent/claudeStreamJson.ts` wird so zu `../events`, ein `./status` in
+ * `agent/sdkMessageMapping.ts` wird so zu `../events`, ein `./status` in
  * `preview/monitStatus.ts` zu `../../preview/status`: dieselbe Regel gilt
  * damit für jede Datei des Bundles, egal wo sie liegt.
  * (`relative` liefert unter Windows Backslashes — die Muster erwarten `/`.)
@@ -175,7 +175,7 @@ describe('Grenze des VM-Bundles', () => {
 
   test('der Scan erreicht die Whitelist-Ziele außerhalb des Daemon-Ordners (sonst prüft er nichts)', () => {
     // Selbsttest der Fitnessfunktion: genau die Dateien, deren Ungeprüftheit
-    // die Lücke war (events, claudeStreamJson, preview/*, vmContract), müssen
+    // die Lücke war (events, sdkMessageMapping, preview/*, vmContract), müssen
     // im rekursiven Scan auftauchen — sonst ist die Grenze wieder nur eine
     // Behauptung im Whitelist-Kommentar.
     const besucht = new Set<string>();
@@ -186,7 +186,7 @@ describe('Grenze des VM-Bundles', () => {
     const srcDir = resolve(agentDir, '..');
     for (const erwartet of [
       join(agentDir, 'events.ts'),
-      join(agentDir, 'claudeStreamJson.ts'),
+      join(agentDir, 'sdkMessageMapping.ts'),
       join(srcDir, 'preview', 'status.ts'),
       join(srcDir, 'preview', 'monitStatus.ts'),
       join(srcDir, 'preview', 'httpProbe.ts'),

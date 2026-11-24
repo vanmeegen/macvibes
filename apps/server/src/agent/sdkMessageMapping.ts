@@ -1,8 +1,10 @@
 import type { AgentEvent } from './events';
 
 /**
- * Mapping SDK-Message (`query()`-Stream, formgleich mit den früheren
- * CLI-stream-json-Zeilen) → AgentEvents. Genutzt vom Agent-Daemon in der VM.
+ * Mapping SDK-Message (`query()`-Stream des Agent SDK) → AgentEvents. EINE
+ * Abbildung für beide Agent-Pfade: den Agent-Daemon in der VM und den
+ * Host-Runner (Dev) — deshalb importfrei bis auf das Event-Vokabular (die
+ * Datei wird ins VM-Bundle gebündelt).
  */
 export function agentEventsFromMessage(message: unknown): AgentEvent[] {
   if (typeof message !== 'object' || message === null) return [];

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { agentEventsFromMessage } from '../claudeStreamJson';
+import { agentEventsFromMessage } from '../sdkMessageMapping';
 
 describe('agentEventsFromMessage (SDK-Messages → AgentEvents, Daemon-Pfad)', () => {
   test('ignoriert Nicht-Objekte und unbekannte Typen', () => {

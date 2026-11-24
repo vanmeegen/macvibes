@@ -1,4 +1,4 @@
-import { agentEventsFromMessage } from '../claudeStreamJson';
+import { agentEventsFromMessage } from '../sdkMessageMapping';
 import type { AgentEvent } from '../events';
 import type { DaemonToHostMessage } from './protocol';
 

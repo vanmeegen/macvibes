@@ -79,7 +79,7 @@ unmonitor` ≙ `failed`). Der Host **liest** den Status nur: der
   - `agent/` — `AgentRunner`-Interface: `DaemonAgentRunner` (VM-Daemon über das
     WS-Gateway, der Produktivpfad), `ClaudeAgentRunner` (Host, Dev ohne msb),
     `FakeAgentRunner` (Tests). `agent/daemon/` ist der In-VM-Daemon,
-    `agentGateway` die Host-Gegenstelle, `claudeStreamJson`
+    `agentGateway` die Host-Gegenstelle, `sdkMessageMapping`
     (`agentEventsFromMessage`) mappt SDK-Messages auf `AgentEvent`s.
   - `services/` — `chatService` (Turn-Queue, Streaming, Historie, Steering),
     `projectsService`, `authService`, `autoCommitService`, `mirrorService`.
