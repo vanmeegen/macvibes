@@ -388,7 +388,9 @@ export function loadConfig(): ServerConfig {
       fakeDelayMs: envNumber('MACVIBES_FAKE_DELAY_MS') ?? 25,
       prewarm: !envFlag('MACVIBES_DISABLE_PREWARM'),
       allowHostAgent: envFlag('MACVIBES_ALLOW_HOST_AGENT'),
-      appendSystemPrompt: Bun.env.MACVIBES_AGENT_APPEND_PROMPT ?? null,
+      // Leer zählt als „nicht gesetzt": eine auskommentiert-leere Zeile soll die
+      // eingebaute Anweisung nicht abschalten.
+      appendSystemPrompt: Bun.env.MACVIBES_AGENT_APPEND_PROMPT || null,
       timeouts: {
         idleMs: envNumber('MACVIBES_AGENT_IDLE_TIMEOUT_MS'),
         firstEventMs: envNumber('MACVIBES_AGENT_FIRST_EVENT_TIMEOUT_MS'),

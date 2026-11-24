@@ -43,10 +43,14 @@ export function spawnShellCommand(
     stdout: out,
     stderr: err,
   });
+  let killing = false;
   return {
     pid: proc.pid,
     kill: () => {
-      if (proc.exitCode === null) void killTreeOnceSettled(proc);
+      // Wiederholte Aufrufe starten keine zweite Warteschleife.
+      if (killing || proc.exitCode !== null) return;
+      killing = true;
+      void killTreeOnceSettled(proc);
     },
     exited: proc.exited.then((code) => code ?? 0),
   };

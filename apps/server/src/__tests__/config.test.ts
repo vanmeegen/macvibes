@@ -232,6 +232,12 @@ describe('loadConfig zentralisiert die früher verstreuten Env-Reads (M6)', () =
     }
   });
 
+  test('ein leeres MACVIBES_AGENT_APPEND_PROMPT schaltet die eingebaute Anweisung nicht ab', () => {
+    clearAll();
+    Bun.env.MACVIBES_AGENT_APPEND_PROMPT = '';
+    expect(loadConfig().agent.appendSystemPrompt).toBeNull();
+  });
+
   test("Schalter akzeptieren einheitlich '1' und 'true'", () => {
     clearAll();
     Bun.env.MACVIBES_DEBUG_ERRORS = 'true';
