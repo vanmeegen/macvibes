@@ -5,9 +5,11 @@ import { createAnthropicProxy } from './http/anthropicProxy';
 import { createTargetChecker, startEgressProxy } from './http/egressProxy';
 import { startPreviewGateway } from './http/previewGateway';
 import { createAppYoga } from './http/createAppYoga';
+import { createRequestRouter } from './http/requestRouter';
 import { serveWebUi } from './http/staticFiles';
 import { join, resolve } from 'node:path';
-import { AGENT_GATEWAY_PATH, AgentGateway } from './agent/agentGateway';
+import type { Server } from 'bun';
+import { AGENT_GATEWAY_PATH, AgentGateway, type GatewaySocketData } from './agent/agentGateway';
 import { loadUserAgentModels } from './agent/agentModel';
 import { ClaudeAgentRunner } from './agent/claudeRunner';
 import { buildDaemonBundle } from './agent/daemonBundle';
@@ -159,7 +161,7 @@ const localRouterReady =
         label: 'Lokaler Modell-Server (oMLX)',
         upstreamUrl: config.localModels.upstreamUrl,
         command: config.localModels.serverCommand,
-        commandEnvVar: 'MACVIBES_LOCAL_ROUTER_CMD',
+        commandEnvVar: 'MACVIBES_LOCAL_SERVER_CMD',
         impact: 'lokale Modelle sind nicht verfügbar, Claude-Modelle funktionieren normal',
         probePath: config.localModels.probePath,
         logFile: join(config.macvibesHome, 'local-router.log'),
@@ -376,13 +378,7 @@ const chatService = new ChatService(
     // Fristen greifen pro Turn bei LANGSAMEN (lokalen) Modellen, die warmup-
     // Frist deckt den stillen Config-Warmup ab, auf den der erste echte Turn
     // wartet, bevor sein eigener Timeout greift.
-    agentIdleTimeoutMs: config.agent.timeouts.idleMs,
-    agentFirstEventTimeoutMs: config.agent.timeouts.firstEventMs,
-    agentColdStartTimeoutMs: config.agent.timeouts.coldStartMs,
-    agentWarmupTimeoutMs: config.agent.timeouts.warmupMs,
-    agentSlowIdleTimeoutMs: config.agent.timeouts.slowIdleMs,
-    agentSlowFirstEventTimeoutMs: config.agent.timeouts.slowFirstEventMs,
-    agentSlowColdStartTimeoutMs: config.agent.timeouts.slowColdStartMs,
+    timeouts: config.agent.timeouts,
     prewarmEnabled: config.agent.prewarm,
   },
 );
@@ -402,29 +398,16 @@ const server = Bun.serve({
   idleTimeout: 255,
   // Agent-Gateway: die Daemons in den VMs halten hierüber ihre WS-Verbindung.
   websocket: agentGateway.websocket,
-  fetch: async (request, server) => {
-    const url = new URL(request.url);
-    if (url.pathname === AGENT_GATEWAY_PATH) {
-      return agentGateway.handleUpgrade(request, server);
-    }
-    if (url.pathname === '/graphql') {
-      // Client-IP in den Server-Context — Grundlage fürs Rate-Limit (F14).
-      return yoga.fetch(request, { ip: server.requestIP(request)?.address ?? null });
-    }
-    // Credential-Proxy für den Agenten in der VM (B5c): /anthropic/* → Claude API.
-    if (url.pathname.startsWith('/anthropic/')) {
-      const upstreamPath = url.pathname.slice('/anthropic'.length) + url.search;
-      return anthropicProxy(request, upstreamPath);
-    }
-    const staticResponse = await serveWebUi(config.webDistDir, url.pathname);
-    if (staticResponse) {
-      return staticResponse;
-    }
-    return new Response(
-      'macvibes-Server läuft. Web-UI: im Dev-Modus http://localhost:5173, sonst apps/web bauen.',
-      { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8' } },
-    );
-  },
+  fetch: createRequestRouter({
+    gatewayPath: AGENT_GATEWAY_PATH,
+    upgradeGateway: (request, server: Server<GatewaySocketData>) =>
+      agentGateway.handleUpgrade(request, server),
+    // Client-IP in den Server-Context — Grundlage fürs Rate-Limit (F14).
+    graphql: (request, server) =>
+      yoga.fetch(request, { ip: server.requestIP(request)?.address ?? null }),
+    anthropicProxy,
+    serveStatic: (pathname) => serveWebUi(config.webDistDir, pathname),
+  }),
 });
 // stop(true) kappt auch die Gateway-WebSockets der Daemons SAUBER (Close-Frame
 // statt hängender halbtoter Verbindung): die Daemons in den weiterlaufenden

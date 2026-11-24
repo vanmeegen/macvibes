@@ -64,37 +64,47 @@ interface ProjectChatState {
   abortActiveTurnId: string | null;
 }
 
-export interface ChatServiceOptions {
+/**
+ * Turn-Fristen, alle optional (undefined = eingebauter Default). Dieselbe Form
+ * wie `config.agent.timeouts` — die Config wird unverändert durchgereicht,
+ * statt Feld für Feld umbenannt zu werden.
+ */
+export interface ChatTimeoutOverrides {
   /**
    * Reagiert der Agent so lange gar nicht (kein einziges Event), gilt der Turn
    * als hängend: er wird abgebrochen und der Hänger als Fehler sichtbar gemacht,
    * statt ewig auf „Agent arbeitet" zu stehen.
    */
-  agentIdleTimeoutMs?: number | undefined;
+  idleMs?: number | undefined;
   /**
    * Kommt nach dem Start GAR KEIN Event in dieser Zeit, ist der Start kaputt
    * (claudes init-Zeile kommt sonst in 1–3s) — sofort abbrechen/retryen statt
    * den vollen Idle-Timeout abzuwarten.
    */
-  agentFirstEventTimeoutMs?: number | undefined;
+  firstEventMs?: number | undefined;
   /**
    * Erster Turn eines Projekts = frisch geforkte VM + claude-First-Run; das
    * dauert deutlich länger als ein Folge-Turn. Für diesen Kaltstart gilt ein
    * großzügigerer First-Event-Timeout (der User sieht derweil „MicroVM startet").
    */
-  agentColdStartTimeoutMs?: number | undefined;
+  coldStartMs?: number | undefined;
   /** Frist für den Config-Warmup (Default 60s). */
-  agentWarmupTimeoutMs?: number | undefined;
-  /** Nachlauf nach dem Abbruch, um einen späten Fehlertext einzusammeln. */
-  agentAbortGraceMs?: number | undefined;
+  warmupMs?: number | undefined;
   /**
-   * Timeout-Varianten für LANGSAME (lokale) Modelle — die denken vor dem ersten
+   * Varianten für LANGSAME (lokale) Modelle — die denken vor dem ersten
    * sichtbaren Token deutlich länger. Welche Variante greift, entscheidet das
    * Projekt-Modell pro Turn (agentTimeoutsFor).
    */
-  agentSlowIdleTimeoutMs?: number | undefined;
-  agentSlowFirstEventTimeoutMs?: number | undefined;
-  agentSlowColdStartTimeoutMs?: number | undefined;
+  slowIdleMs?: number | undefined;
+  slowFirstEventMs?: number | undefined;
+  slowColdStartMs?: number | undefined;
+}
+
+export interface ChatServiceOptions {
+  /** Turn-Fristen (MACVIBES_AGENT_*_TIMEOUT_MS über config.agent.timeouts). */
+  timeouts?: ChatTimeoutOverrides | undefined;
+  /** Nachlauf nach dem Abbruch, um einen späten Fehlertext einzusammeln. */
+  abortGraceMs?: number | undefined;
   /**
    * Stillen Config-Warmup beim Projekt-Öffnen ausführen. Default true (Claude).
    * Bei langsamen lokalen Modellen abschalten — der Warmup belegt sonst den
@@ -125,8 +135,9 @@ export class ChatService {
     options: ChatServiceOptions = {},
   ) {
     this.store = new ChatMessageStore(db);
-    const idleMs = options.agentIdleTimeoutMs ?? 180_000;
-    const slowIdleMs = options.agentSlowIdleTimeoutMs ?? 600_000;
+    const timeouts = options.timeouts ?? {};
+    const idleMs = timeouts.idleMs ?? 180_000;
+    const slowIdleMs = timeouts.slowIdleMs ?? 600_000;
     this.attemptDeps = {
       store: this.store,
       runner,
@@ -137,20 +148,20 @@ export class ChatService {
       fastTimeouts: {
         idleMs,
         // Nie länger warten als der Idle-Timeout — der Start-Timeout ist die UNTERE Schranke.
-        firstEventMs: Math.min(options.agentFirstEventTimeoutMs ?? 8_000, idleMs),
-        coldStartMs: Math.min(options.agentColdStartTimeoutMs ?? 30_000, idleMs),
+        firstEventMs: Math.min(timeouts.firstEventMs ?? 8_000, idleMs),
+        coldStartMs: Math.min(timeouts.coldStartMs ?? 30_000, idleMs),
       },
       slowTimeouts: {
         idleMs: slowIdleMs,
-        firstEventMs: Math.min(options.agentSlowFirstEventTimeoutMs ?? 180_000, slowIdleMs),
-        coldStartMs: Math.min(options.agentSlowColdStartTimeoutMs ?? 300_000, slowIdleMs),
+        firstEventMs: Math.min(timeouts.slowFirstEventMs ?? 180_000, slowIdleMs),
+        coldStartMs: Math.min(timeouts.slowColdStartMs ?? 300_000, slowIdleMs),
       },
-      abortGraceMs: options.agentAbortGraceMs ?? 5_000,
+      abortGraceMs: options.abortGraceMs ?? 5_000,
       deltaFlushMs: options.agentDeltaFlushMs ?? 50,
     };
     this.warmup = new ConfigWarmup(this.store, runner, {
       enabled: options.prewarmEnabled ?? true,
-      timeoutMs: options.agentWarmupTimeoutMs ?? 60_000,
+      timeoutMs: timeouts.warmupMs ?? 60_000,
     });
   }
 
