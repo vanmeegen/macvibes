@@ -1,6 +1,6 @@
 /**
  * Prozess-/Port-Helfer für die Repo-Skripte. Enthält die EINZIGE bewusste
- * Plattform-Weiche der Skripte (windows-portierung-plan.md, P6): „welche PID
+ * Plattform-Weiche der Skripte (docs/windows-portierung-plan.md, P6): „welche PID
  * lauscht auf Port X" und „welche PIDs passen auf ein Kommandozeilen-Muster"
  * sind ohne Systemwerkzeuge nicht neutral zu beantworten. Alles andere
  * (Belegt-Probe, Kill) ist plattformneutral.
