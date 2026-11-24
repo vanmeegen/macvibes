@@ -3,6 +3,8 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfig, loadHomeEnvFile, parseEnvFile, resolveDbPath } from '../config';
 import { PORT_DEFAULTS } from '../../../../scripts/lib/ports';
+import { LITELLM_BRIDGE_URL } from '../../../../scripts/lib/setup';
+import { DEFAULT_BRIDGE_PORT } from '../../local-router/bridgePort';
 import { createTempDir, removeDir } from '../services/__tests__/testUtils';
 
 const tempDirs: string[] = [];
@@ -195,6 +197,49 @@ describe('loadConfig zentralisiert die früher verstreuten Env-Reads (M6)', () =
     expect(config.adminBootstrapToken).toBeNull();
   });
 
+  test('vertippte Zahlen kippen keinen Wert auf NaN — es gilt der Default', () => {
+    // Number('abc') ist NaN: ein NaN-Port bindet nichts, eine NaN-Frist läuft
+    // nie ab, `x >= NaN` ist immer false. Bisher war nur maxSandboxes gehärtet.
+    clearAll();
+    Bun.env.PORT = 'viertausend';
+    Bun.env.MACVIBES_PREVIEW_GATEWAY_PORT = '41 73';
+    Bun.env.MACVIBES_EGRESS_PORT = 'x';
+    Bun.env.MACVIBES_AGENT_IDLE_TIMEOUT_MS = '60s';
+    Bun.env.MACVIBES_PROXY_KEEPALIVE_MS = 'aus';
+    Bun.env.MACVIBES_WEB_PORT = 'vite';
+    const warn = console.warn;
+    const warnungen: string[] = [];
+    console.warn = (...args: unknown[]): void => void warnungen.push(args.join(' '));
+    try {
+      const config = loadConfig();
+      expect(config.port).toBe(4000);
+      expect(config.sandbox.previewGatewayPort).toBe(4173);
+      expect(config.egress.port).toBe(4010);
+      expect(config.agent.timeouts.idleMs).toBeUndefined();
+      expect(config.anthropic.keepAliveMs).toBeUndefined();
+      expect(config.devWebPort).toBeNull();
+    } finally {
+      console.warn = warn;
+    }
+    // Nicht still: jede verworfene Angabe wird mit Namen gemeldet.
+    for (const name of [
+      'PORT',
+      'MACVIBES_PREVIEW_GATEWAY_PORT',
+      'MACVIBES_AGENT_IDLE_TIMEOUT_MS',
+    ]) {
+      expect(warnungen.some((w) => w.includes(name))).toBe(true);
+    }
+  });
+
+  test("Schalter akzeptieren einheitlich '1' und 'true'", () => {
+    clearAll();
+    Bun.env.MACVIBES_DEBUG_ERRORS = 'true';
+    Bun.env.MACVIBES_RATE_LIMIT_DISABLED = 'true';
+    const config = loadConfig();
+    expect(config.debugErrors).toBe(true);
+    expect(config.rateLimitDisabled).toBe(true);
+  });
+
   test('Env-Overrides landen geparst in der Config', () => {
     clearAll();
     Bun.env.MACVIBES_EGRESS_PORT = '4011';
@@ -248,5 +293,22 @@ describe('loadConfig zentralisiert die früher verstreuten Env-Reads (M6)', () =
     expect(config.port).toBe(PORT_DEFAULTS.server);
     expect(config.egress.port).toBe(PORT_DEFAULTS.egress);
     expect(config.sandbox.previewGatewayPort).toBe(PORT_DEFAULTS.gateway);
+  });
+
+  /**
+   * Die URL der LiteLLM-Bridge steht an drei Stellen: im Server-Default, im
+   * Setup (das Routen dorthin schreibt) und als Port-Default der Bridge
+   * selbst. Driften sie, zeigen frisch geschriebene Routen ins Leere.
+   */
+  test('Bridge-URL driftet nicht gegen Setup und Bridge-Port-Default', () => {
+    const gesichert = Bun.env.MACVIBES_LITELLM_URL;
+    delete Bun.env.MACVIBES_LITELLM_URL;
+    try {
+      const url = loadConfig().litellm.url;
+      expect(url).toBe(LITELLM_BRIDGE_URL);
+      expect(new URL(url).port).toBe(DEFAULT_BRIDGE_PORT);
+    } finally {
+      if (gesichert !== undefined) Bun.env.MACVIBES_LITELLM_URL = gesichert;
+    }
   });
 });

@@ -160,7 +160,7 @@ export interface ServerConfig {
      * URL noch nichts Gesundes antwortet). Env MACVIBES_LOCAL_ROUTER_CMD;
      * Default: `omlx serve`, falls `omlx` im PATH ist. null = kein Autostart.
      */
-    routerCommand: string | null;
+    serverCommand: string | null;
   };
   /**
    * Optionale LiteLLM-Bridge (apps/server/local-router): übersetzt Anthropic-
@@ -312,18 +312,29 @@ function detectLitellmCommand(): string | null {
  * URL, greift das Kommando nie (der Supervisor übernimmt „extern"). Fehlt
  * `omlx` im PATH, gibt es keinen Autostart — Claude-Modelle laufen trotzdem.
  */
-function detectLocalRouterCommand(): string | null {
+function detectLocalServerCommand(): string | null {
   const omlx = Bun.which('omlx');
   return omlx === null ? null : `'${omlx}' serve`;
 }
 
-/** Zahl aus der Env; undefined (auch bei leerem Wert) = Default des Konsumenten. */
+/**
+ * Zahl aus der Env; undefined (auch bei leerem Wert) = Default des Konsumenten.
+ * Ein nicht-numerischer Wert wird gemeldet und verworfen statt als NaN
+ * durchgereicht: ein NaN-Port bindet nichts, eine NaN-Frist läuft nie ab und
+ * `x >= NaN` ist immer false — ein Tippfehler darf keine Grenze abschalten.
+ */
 function envNumber(name: string): number | undefined {
   const raw = Bun.env[name];
-  return raw ? Number(raw) : undefined;
+  if (!raw) return undefined;
+  const value = Number(raw);
+  if (!Number.isFinite(value)) {
+    console.warn(`${name}="${raw}" ist keine Zahl — es gilt der Default.`);
+    return undefined;
+  }
+  return value;
 }
 
-/** Schalter, der wie bisher '1' ODER 'true' akzeptiert. */
+/** Schalter: '1' ODER 'true' — für ALLE Flags dieselbe Regel. */
 function envFlag(name: string): boolean {
   const raw = Bun.env[name];
   return raw === '1' || raw === 'true';
@@ -370,7 +381,7 @@ export function homeEnvPathFor(macvibesHome?: string): string {
 export function loadConfig(): ServerConfig {
   const macvibesHome = defaultMacvibesHome();
   return {
-    port: Number(Bun.env.PORT ?? 4000),
+    port: envNumber('PORT') ?? 4000,
     hostname: Bun.env.HOST ?? '0.0.0.0',
     macvibesHome,
     bareRepoPath: join(macvibesHome, 'macvibes-apps.git'),
@@ -382,13 +393,12 @@ export function loadConfig(): ServerConfig {
     sessionTtlMs: 3 * 24 * 60 * 60 * 1000,
     webDistDir: Bun.env.MACVIBES_WEB_DIST ?? DEFAULT_WEB_DIST_DIR,
     sandbox: {
-      graceMs: Number(Bun.env.MACVIBES_GRACE_MS ?? 15 * 60 * 1000),
-      idleMs: Number(Bun.env.MACVIBES_IDLE_MS ?? 30 * 60 * 1000),
-      // NaN-Härtung: ein vertippter Wert deaktivierte sonst die LRU-Eviction
-      // (`active().length >= NaN` ist immer false → unbegrenzt viele VMs).
-      maxSandboxes: Number.isFinite(Number(Bun.env.MACVIBES_MAX_SANDBOXES))
-        ? Number(Bun.env.MACVIBES_MAX_SANDBOXES)
-        : DEFAULT_MAX_SANDBOXES,
+      graceMs: envNumber('MACVIBES_GRACE_MS') ?? 15 * 60 * 1000,
+      idleMs: envNumber('MACVIBES_IDLE_MS') ?? 30 * 60 * 1000,
+      // NaN-Härtung (envNumber): ein vertippter Wert deaktivierte sonst die
+      // LRU-Eviction (`active().length >= NaN` ist immer false → unbegrenzt
+      // viele VMs).
+      maxSandboxes: envNumber('MACVIBES_MAX_SANDBOXES') ?? DEFAULT_MAX_SANDBOXES,
       backend:
         Bun.env.MACVIBES_SANDBOX === 'process' || Bun.env.MACVIBES_SANDBOX === 'microsandbox'
           ? Bun.env.MACVIBES_SANDBOX
@@ -396,18 +406,16 @@ export function loadConfig(): ServerConfig {
       // Bun-Version bewusst gepinnt (kein "latest"-Tag): das nächste große Bun
       // ist ein Rust-Rewrite — Upgrade nur nach intensivem Test aller Sandbox-Pfade.
       image: Bun.env.MACVIBES_SANDBOX_IMAGE ?? 'oven/bun:1.3.14',
-      cpus: Number(Bun.env.MACVIBES_SANDBOX_CPUS ?? 4),
-      memoryMib: Number(Bun.env.MACVIBES_SANDBOX_MEMORY_MIB ?? 4096),
-      previewGatewayPort: Number(Bun.env.MACVIBES_PREVIEW_GATEWAY_PORT ?? 4173),
+      cpus: envNumber('MACVIBES_SANDBOX_CPUS') ?? 4,
+      memoryMib: envNumber('MACVIBES_SANDBOX_MEMORY_MIB') ?? 4096,
+      previewGatewayPort: envNumber('MACVIBES_PREVIEW_GATEWAY_PORT') ?? 4173,
       // HTTPS-Port des Preview-Gateways (TLS-Terminierung z. B. via Caddy) —
       // null = kein HTTPS; die iframe-URL nutzt dann http (LAN wie bisher).
-      previewGatewayHttpsPort: Bun.env.MACVIBES_PREVIEW_GATEWAY_HTTPS_PORT
-        ? Number(Bun.env.MACVIBES_PREVIEW_GATEWAY_HTTPS_PORT)
-        : null,
+      previewGatewayHttpsPort: envNumber('MACVIBES_PREVIEW_GATEWAY_HTTPS_PORT') ?? null,
     },
     agent: {
       backend: Bun.env.MACVIBES_AGENT === 'fake' ? 'fake' : 'claude',
-      fakeDelayMs: Number(Bun.env.MACVIBES_FAKE_DELAY_MS ?? 25),
+      fakeDelayMs: envNumber('MACVIBES_FAKE_DELAY_MS') ?? 25,
       prewarm: !envFlag('MACVIBES_DISABLE_PREWARM'),
       allowHostAgent: envFlag('MACVIBES_ALLOW_HOST_AGENT'),
       appendSystemPrompt: Bun.env.MACVIBES_AGENT_APPEND_PROMPT ?? null,
@@ -433,13 +441,13 @@ export function loadConfig(): ServerConfig {
     },
     devWebPort: envNumber('MACVIBES_WEB_PORT') ?? null,
     allowedOrigins: parseAllowedOrigins(Bun.env.MACVIBES_ALLOWED_ORIGINS),
-    debugErrors: Bun.env.MACVIBES_DEBUG_ERRORS === '1',
-    rateLimitDisabled: Bun.env.MACVIBES_RATE_LIMIT_DISABLED === '1',
+    debugErrors: envFlag('MACVIBES_DEBUG_ERRORS'),
+    rateLimitDisabled: envFlag('MACVIBES_RATE_LIMIT_DISABLED'),
     localModels: {
       upstreamUrl: Bun.env.MACVIBES_LOCAL_UPSTREAM_URL ?? 'http://localhost:8000',
       apiKey: Bun.env.MACVIBES_LOCAL_API_KEY ?? 'local',
       probePath: Bun.env.MACVIBES_LOCAL_ROUTER_PROBE_PATH ?? '/health',
-      routerCommand: Bun.env.MACVIBES_LOCAL_ROUTER_CMD ?? detectLocalRouterCommand(),
+      serverCommand: Bun.env.MACVIBES_LOCAL_ROUTER_CMD ?? detectLocalServerCommand(),
     },
     litellm: {
       url: Bun.env.MACVIBES_LITELLM_URL ?? 'http://localhost:8787',
@@ -450,7 +458,7 @@ export function loadConfig(): ServerConfig {
     modelRoutes: parseModelRoutes(Bun.env.MACVIBES_MODEL_ROUTES),
     mirror: {
       remoteUrl: Bun.env.MACVIBES_GITHUB_REMOTE ?? null,
-      intervalMs: Number(Bun.env.MACVIBES_MIRROR_INTERVAL_MS ?? 10 * 60 * 1000),
+      intervalMs: envNumber('MACVIBES_MIRROR_INTERVAL_MS') ?? 10 * 60 * 1000,
     },
   };
 }

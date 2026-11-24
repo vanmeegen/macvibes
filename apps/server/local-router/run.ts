@@ -22,10 +22,14 @@
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { resolveBridgePort } from './bridgePort';
 import { resolveRouterConfigPath } from './configPath';
 
 const hier = import.meta.dir;
-const port = process.env['MACVIBES_LOCAL_ROUTER_PORT'] ?? '8787';
+const port = resolveBridgePort({
+  portEnv: process.env['MACVIBES_LOCAL_ROUTER_PORT'],
+  urlEnv: process.env['MACVIBES_LITELLM_URL'],
+});
 const macvibesHome = process.env['MACVIBES_HOME'] ?? join(homedir(), 'macvibes');
 const venv = join(macvibesHome, 'local-router-venv');
 // Upgrade-feste Router-Config: MACVIBES_LOCAL_ROUTER_CONFIG >
@@ -86,7 +90,7 @@ if (litellm === null) {
   process.exit(1);
 }
 
-// Kein `exec`-Ersatz nötig: der localRouterService beendet bei Bedarf den
+// Kein `exec`-Ersatz nötig: der modelServerService beendet bei Bedarf den
 // ganzen Prozessbaum (tree-kill); manuell gestartet reicht Ctrl+C.
 console.log(`LiteLLM-Config: ${configPfad}`);
 const router = Bun.spawn([litellm, '--config', configPfad, '--port', port, '--host', '127.0.0.1'], {
