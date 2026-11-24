@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -17,20 +17,13 @@ import {
   createTemplatesFixture,
   createTestDb,
   createUser,
-  removeDir,
+  trackTempDirs,
   waitFor,
 } from '../../testing/testUtils';
 import { projects } from '../../db/schema';
 import type { Db } from '../../db/client';
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (dir) await removeDir(dir);
-  }
-});
+const tempDirs = trackTempDirs();
 
 async function setupWorkspace(): Promise<{
   home: string;

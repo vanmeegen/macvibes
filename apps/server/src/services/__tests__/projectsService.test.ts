@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DomainError } from '../../core/errors';
@@ -18,17 +18,10 @@ import {
   createTemplatesFixture,
   createTestDb,
   createUser,
-  removeDir,
+  trackTempDirs,
 } from '../../testing/testUtils';
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (dir) await removeDir(dir);
-  }
-});
+const tempDirs = trackTempDirs();
 
 async function setup() {
   const db = createTestDb();

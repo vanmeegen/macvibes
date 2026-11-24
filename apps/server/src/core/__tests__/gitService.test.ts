@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -12,16 +12,9 @@ import {
   runGit,
   runGitInRepo,
 } from '../gitService';
-import { createTempDir, createTemplatesFixture, removeDir } from '../../testing/testUtils';
+import { createTempDir, createTemplatesFixture, trackTempDirs } from '../../testing/testUtils';
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (dir) await removeDir(dir);
-  }
-});
+const tempDirs = trackTempDirs();
 
 async function setup(): Promise<{ bare: string; templatePath: string }> {
   const home = await createTempDir('macvibes-home-');

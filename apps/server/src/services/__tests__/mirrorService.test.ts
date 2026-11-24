@@ -1,17 +1,10 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { createProjectBranch, ensureBareRepo, listBranches } from '../../core/gitService';
 import { mirrorToGitHub, startMirrorScheduler } from '../mirrorService';
-import { createTempDir, createTemplatesFixture, removeDir } from '../../testing/testUtils';
+import { createTempDir, createTemplatesFixture, trackTempDirs } from '../../testing/testUtils';
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (dir) await removeDir(dir);
-  }
-});
+const tempDirs = trackTempDirs();
 
 function silentLogger() {
   const infos: string[] = [];

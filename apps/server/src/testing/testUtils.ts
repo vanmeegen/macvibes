@@ -1,3 +1,4 @@
+import { afterEach } from 'bun:test';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -38,6 +39,22 @@ export async function removeDir(path: string): Promise<void> {
       await Bun.sleep(100);
     }
   }
+}
+
+/**
+ * Temp-Verzeichnisse einer Testdatei: was in die zurückgegebene Liste gelegt
+ * wird, räumt ein afterEach-Hook nach jedem Test wieder ab. Ersetzt den in
+ * jeder Datei wiederholten Block aus Liste + afterEach + Schleife.
+ */
+export function trackTempDirs(): string[] {
+  const dirs: string[] = [];
+  afterEach(async () => {
+    while (dirs.length > 0) {
+      const dir = dirs.pop();
+      if (dir) await removeDir(dir);
+    }
+  });
+  return dirs;
 }
 
 /**

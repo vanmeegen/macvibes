@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -21,7 +21,7 @@ import {
   createTemplatesFixture,
   createTestDb,
   createUser,
-  removeDir,
+  trackTempDirs,
 } from '../../testing/testUtils';
 
 /**
@@ -97,14 +97,7 @@ describe('sandboxContextFor (Stufe 1)', () => {
   });
 });
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (dir) await removeDir(dir);
-  }
-});
+const tempDirs = trackTempDirs();
 
 async function setup() {
   const db = createTestDb();

@@ -1,17 +1,10 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { loadTemplates } from '../templatesService';
-import { createTempDir, createTemplatesFixture, removeDir } from '../../testing/testUtils';
+import { createTempDir, createTemplatesFixture, trackTempDirs } from '../../testing/testUtils';
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (dir) await removeDir(dir);
-  }
-});
+const tempDirs = trackTempDirs();
 
 function collectWarnings(): { warnings: string[]; logger: { warn(m: string): void } } {
   const warnings: string[] = [];
