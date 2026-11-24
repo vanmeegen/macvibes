@@ -321,8 +321,9 @@ builder.mutationType({
       resolve: async (_root, args, ctx) => {
         assertWithinLimit(ctx, registerLimiter, [`ip:${ctx.clientIp ?? 'unbekannt'}`]);
         const result = await register(ctx.db, ctx.config, args);
-        // Nur der erste (Admin-)Nutzer ist sofort freigeschaltet und bekommt eine
-        // Session. Alle anderen sind pending und müssen zuerst zugelassen werden.
+        // Nur der konfigurierte Bootstrap-Admin (MACVIBES_ADMIN_USERNAME) ist
+        // sofort freigeschaltet und bekommt eine Session. Alle anderen sind
+        // pending und müssen zuerst zugelassen werden.
         if (result.session) {
           await ctx.session.write(result.session.token, result.session.expiresAt);
         }

@@ -41,8 +41,16 @@ export class ProcessSandboxProvider implements SandboxProvider {
     // Workspace, den der nicht vertrauenswürdige Agent beschreibt — ohne das
     // liefen seine preinstall/postinstall-Hooks als Host-Nutzer.
     if (existsSync(join(workspaceDir, 'package.json'))) {
-      await Bun.spawn(['bun', 'install', '--silent', '--ignore-scripts'], { cwd: workspaceDir })
-        .exited;
+      const exitCode = await Bun.spawn(['bun', 'install', '--silent', '--ignore-scripts'], {
+        cwd: workspaceDir,
+      }).exited;
+      if (exitCode !== 0) {
+        // Nicht abbrechen (der Dev-Server meldet fehlende Pakete selbst), aber
+        // auch nicht verschweigen — sonst sieht die Ursache wie ein Preview-Bug aus.
+        console.warn(
+          `bun install in ${workspaceDir} endete mit Exit-Code ${exitCode} — die Preview startet womöglich nicht.`,
+        );
+      }
     }
 
     const spawn = (): SupervisedProcess =>

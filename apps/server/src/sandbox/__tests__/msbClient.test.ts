@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import { SandboxNotFoundError } from 'microsandbox';
 import {
   buildSandboxConfig,
-  istSandboxNichtGefunden,
-  istSnapshotNichtGefunden,
+  isSandboxNotFound,
+  isSnapshotNotFound,
   msbAvailable,
   removeSandbox,
   snapshotExists,
@@ -29,31 +29,31 @@ const pwaSnapshotDa = available && (await snapshotExists('macvibes-tpl-pwa'));
  */
 describe('Fehlerklassifikation', () => {
   test('erkennt eine fehlende Sandbox am typisierten Fehler', () => {
-    expect(istSandboxNichtGefunden(new SandboxNotFoundError('sandbox not found: x'))).toBe(true);
+    expect(isSandboxNotFound(new SandboxNotFoundError('sandbox not found: x'))).toBe(true);
   });
 
   test('deutet andere Fehler NICHT als „fehlt"', () => {
     // Genau der Fall, der die Baseline-Meldung vorher verfälscht hat.
     const schema = new Error('runtime error: database schema is newer than this msb binary');
-    expect(istSandboxNichtGefunden(schema)).toBe(false);
-    expect(istSnapshotNichtGefunden(schema)).toBe(false);
-    expect(istSandboxNichtGefunden(new Error('permission denied'))).toBe(false);
-    expect(istSnapshotNichtGefunden(new Error('permission denied'))).toBe(false);
+    expect(isSandboxNotFound(schema)).toBe(false);
+    expect(isSnapshotNotFound(schema)).toBe(false);
+    expect(isSandboxNotFound(new Error('permission denied'))).toBe(false);
+    expect(isSnapshotNotFound(new Error('permission denied'))).toBe(false);
   });
 
   test('erkennt einen fehlenden Snapshot an der Kennung im Text', () => {
     // Das SDK typisiert Snapshot-Fehler (noch) nicht: Snapshot.get wirft ein
     // generiches Error mit code=GenericFailure und der Kennung im Text.
     // Empirisch geprüft gegen microsandbox 0.6.8.
-    expect(
-      istSnapshotNichtGefunden(new Error('[SnapshotNotFound] snapshot not found: gibtsnicht')),
-    ).toBe(true);
+    expect(isSnapshotNotFound(new Error('[SnapshotNotFound] snapshot not found: gibtsnicht'))).toBe(
+      true,
+    );
   });
 
   test('verträgt Nicht-Fehler ohne zu werfen', () => {
     for (const wert of [null, undefined, 'text', 42, {}]) {
-      expect(istSandboxNichtGefunden(wert)).toBe(false);
-      expect(istSnapshotNichtGefunden(wert)).toBe(false);
+      expect(isSandboxNotFound(wert)).toBe(false);
+      expect(isSnapshotNotFound(wert)).toBe(false);
     }
   });
 });
@@ -221,7 +221,7 @@ describe.skipIf(!pwaSnapshotDa)('Egress-Grenze ist der Default', () => {
     // gesperrt, erlaubt sind DNS zum Host und das öffentliche Netz — aber NICHT
     // das Host-Gateway-Netz 172.16/12. Die Builder-VM braucht es nicht.
     const cfg = JSON.parse(
-      JSON.stringify(await buildSandboxConfig({ ...basis, netzwerk: 'unbeschraenkt' })),
+      JSON.stringify(await buildSandboxConfig({ ...basis, network: 'unrestricted' })),
     );
     const ziele = cfg.network.policy.rules.map((r: { destination: unknown }) => r.destination);
     expect(ziele).not.toContainEqual({ cidr: '172.16.0.0/12' });

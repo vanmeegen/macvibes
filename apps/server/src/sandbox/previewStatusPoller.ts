@@ -1,7 +1,7 @@
 import type { PreviewStatus } from './provider';
 
 export interface PreviewStatusPollerDeps {
-  /** Holt den aktuellen Status (monit-API oder passiver HTTP-Probe). Darf werfen. */
+  /** Holt den aktuellen Status (Daemon-Push oder passive HTTP-Probe). Darf werfen. */
   fetchStatus: () => Promise<PreviewStatus>;
   /**
    * Abstand zwischen zwei Abfragen, NACHDEM die Preview einmal bereit war
@@ -23,9 +23,8 @@ export interface PreviewStatusPollerDeps {
 
 /**
  * Pollt den Preview-Status der VM im Hintergrund und hält ihn synchron
- * abfragbar (SandboxHandle.previewStatus ist sync). Ersetzt beim
- * Daemon-Transport den host-seitigen ProcessSupervisor: Restarts macht der
- * In-VM-Supervisor — hier wird nur noch GELESEN.
+ * abfragbar (SandboxHandle.previewStatus ist sync). Restarts macht der
+ * In-VM-Supervisor — hier wird nur GELESEN.
  */
 export class PreviewStatusPoller {
   private status: PreviewStatus = 'starting';

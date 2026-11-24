@@ -1,10 +1,9 @@
 /**
  * Erzeugt die Service-Konfiguration für den In-VM-Supervisor (tini + monit,
- * Entscheidung siehe docs/archiv/architektur.md). Statt des bisherigen
- * `sleep infinity`-Halters läuft PID 1 als echter Supervisor, der Dev-Server
- * und Agent-Daemon startet, überwacht und neu startet — Health-Check,
- * Crash-Loop-Schutz und Restart sind Konfiguration statt Eigenbau
- * (ersetzt den host-seitigen ProcessSupervisor-Watchdog).
+ * Entscheidung siehe docs/archiv/architektur.md). PID 1 ist ein echter
+ * Supervisor, der Dev-Server und Agent-Daemon startet, überwacht und neu
+ * startet — Health-Check, Crash-Loop-Schutz und Restart sind Konfiguration
+ * statt Eigenbau; einen host-seitigen Watchdog gibt es für VMs nicht.
  *
  * Die Dateien werden auf dem HOST geschrieben und read-only nach
  * `/opt/macvibes/etc` gemountet; das Daemon-Bundle liegt unter

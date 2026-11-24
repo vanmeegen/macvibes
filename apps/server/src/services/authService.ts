@@ -136,9 +136,9 @@ export async function register(
   // Emptiness-Check und Insert durch das await auf argon2 getrennt sind,
   // ergaben zwei parallele Registrierungen sogar zwei Admins.
   // Der Erst-Admin wird jetzt nur, wer den konfigurierten Bootstrap-Namen
-  // trägt (MACVIBES_ADMIN_USERNAME); ohne Konfiguration bleibt der erste
-  // Nutzer aus Bequemlichkeit Admin, aber nur wenn wirklich noch keiner da
-  // ist — geprüft in derselben Transaktion wie der Insert.
+  // trägt (MACVIBES_ADMIN_USERNAME) — und nur, solange noch kein Admin
+  // existiert; geprüft in derselben Transaktion wie der Insert. Ohne
+  // Konfiguration wird niemand automatisch Admin (H3, s. unten).
   const passwordHash = await Bun.password.hash(password);
   const bootstrapName = config.adminUsername ?? null;
   // bun:sqlite ist synchron — Prüfung und Insert laufen ohne await dazwischen,

@@ -114,7 +114,8 @@ const BUN_CACHE_GUEST_DIR = '/bun-cache';
  *
  * Schnittstelle zum Template (template-agnostisch): ausschließlich
  * `devCommand` + `previewPort` + PORT-Env aus templates.json. Der
- * Preview-Status wird nur noch GELESEN (monit-HTTP-API + HTTP-Probe).
+ * Preview-Status wird nur noch GELESEN (Daemon-Push laut ADR 0001 +
+ * HTTP-Probe des Hosts auf den Preview-Port).
  */
 export class MicrosandboxSandboxProvider implements SandboxProvider {
   // Geteilt über ALLE Sandboxen dieses Providers → kollisionsfreie Host-Ports
@@ -181,7 +182,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       pushed.receive(status),
     );
     poller = new PreviewStatusPoller({
-      fetchStatus: pushed.fetchStatus(() => httpProbe(`http://localhost:${hostPort}/`)),
+      fetchStatus: pushed.fetchStatus(() => httpProbe(`http://127.0.0.1:${hostPort}/`)),
       onStatusChange: (status) => console.log(`Preview ${context.projectId}: ${status}`),
     });
     poller.start();

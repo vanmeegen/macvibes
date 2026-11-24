@@ -21,7 +21,7 @@ export interface SandboxHandle {
    * Die URL baut der Client mit seinem eigenen Hostnamen (LAN, R7).
    */
   previewHostPort: number | null;
-  /** Aktueller Zustand des Dev-Servers laut Watchdog (für das UI-Overlay). */
+  /** Aktueller Zustand des Dev-Servers (für das UI-Overlay). */
   previewStatus(): PreviewStatus;
   stop(): Promise<void>;
 }

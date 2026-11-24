@@ -70,7 +70,7 @@ export async function buildTemplateBaseline(options: BuildBaselineOptions): Prom
     command: ['/bin/sleep', 'infinity'],
     // Wie vorher (CLI ohne --net-rule): der Bau braucht apt und das
     // npm-Registry. Die VM läuft ohne Agent und nur während des Baus.
-    netzwerk: 'unbeschraenkt',
+    network: 'unrestricted',
   });
 
   // Der Builder braucht dieselbe Ready-Wartezeit wie Projekt-VMs: `msb run -d`

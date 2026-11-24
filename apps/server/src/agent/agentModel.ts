@@ -29,7 +29,9 @@ export interface AgentModelInfo {
  *   [{ "id": "openrouter/qwen/qwen3-coder", "label": "Qwen3 Coder", "slow": true }]
  * Der Quellcode liegt bei einer Installation (Homebrew) in libexec und wird
  * bei jedem Upgrade ersetzt — nur die Home-Datei überlebt das. Das Modell muss
- * zusätzlich im LiteLLM-Router als `model_name` geführt sein (s. README,
+ * zusätzlich ROUTBAR sein: über eine Route in MACVIBES_MODEL_ROUTES
+ * (Anthropic-kompatibler Endpunkt direkt oder die LiteLLM-Bridge, dort dann
+ * als `model_name` geführt) — `bun run setup` verdrahtet beides (s. README,
  * „Andere Modelle").
  */
 export const AGENT_MODELS: readonly AgentModelInfo[] = [

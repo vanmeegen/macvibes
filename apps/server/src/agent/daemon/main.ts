@@ -78,7 +78,7 @@ const session = new DaemonSession({
 /**
  * Preview-Status-Push (ADR 0001): monit lokal lesen, Status über die stehende
  * Daemon-Verbindung melden — kein fragiles monit-Port-Mapping auf dem Host.
- * Ohne MACVIBES_PREVIEW_PORT (z. B. alte Provider-Version) läuft der Daemon
+ * Ohne MACVIBES_PREVIEW_PORT läuft der Daemon
  * ohne Reporter weiter; der Host fällt dann auf seine HTTP-Probe zurück.
  */
 const previewPort = Number(process.env['MACVIBES_PREVIEW_PORT'] ?? '');

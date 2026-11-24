@@ -1,9 +1,9 @@
 /**
  * Credential-Proxy (PRD „Proxy über Host"): Die VM erhält keinerlei
  * Claude-Credentials. Ihr ANTHROPIC_BASE_URL zeigt auf diesen Endpunkt;
- * der Proxy authentifiziert sich mit dem Shared-Secret der Plattform,
- * ersetzt alle Auth-Header und reicht Request/Response (inkl. SSE-Streaming)
- * unverändert an die Claude API durch.
+ * die VM weist sich mit ihrem eigenen Token aus (eines pro Sandbox,
+ * core/vmTokens), der Proxy ersetzt alle Auth-Header und reicht
+ * Request/Response (inkl. SSE-Streaming) unverändert an die Claude API durch.
  */
 
 import { logSafe } from '../logSafe';
@@ -89,12 +89,12 @@ export interface AnthropicProxyConfig {
    */
   keepAliveMs?: number | undefined;
   /**
-   * Upstream für NICHT-Claude-Modelle (lokaler Router/Shim, z. B. LiteLLM).
+   * Upstream für NICHT-Claude-Modelle (lokaler Modell-Server, Default oMLX).
    * Der Proxy routet pro Request nach dem `model` im Body: claude-* geht an
    * `upstreamUrl` (mit den Claude-Credentials), alles andere hierhin.
    */
   localUpstreamUrl?: string | undefined;
-  /** API-Key für den lokalen Router (LiteLLM/Ollama ignorieren ihn meist). */
+  /** API-Key für den lokalen Modell-Server (oMLX ignoriert ihn meist). */
   localApiKey?: string | undefined;
   /** Zusätzliche Modell-Routen (OpenRouter-Stil), matchen VOR den Defaults. */
   extraRoutes?: ModelRoute[] | undefined;
@@ -246,9 +246,9 @@ function checkUpstreamPath(upstreamPath: string, method: string): PathVerdict {
 
 export function createAnthropicProxy(config: AnthropicProxyConfig): AnthropicProxyHandler {
   // Routen-Tabelle (Reihenfolge = Priorität): Zusatz-Routen (OpenRouter-Stil),
-  // dann claude-* an die Anthropic-API, dann Catch-all an den lokalen Router.
-  // Claude Code ruft intern auch Hilfsmodelle (claude-haiku-*) auf — fehlt der
-  // Claude-Zugang, fallen die auf den lokalen Router zurück (Wildcard im Shim).
+  // dann claude-* an die Anthropic-API, dann Catch-all an den lokalen
+  // Modell-Server. Claude Code ruft intern auch Hilfsmodelle (claude-haiku-*)
+  // auf — fehlt der Claude-Zugang, fallen die auf den lokalen Server zurück.
   const routes: ModelRoute[] = [
     ...(config.extraRoutes ?? []),
     {

@@ -1,11 +1,13 @@
 /**
- * Startet den lokalen Modell-Router (LiteLLM) — wird von macvibes automatisch
- * aufgerufen (localRouterService), kann aber auch manuell laufen.
+ * Startet die optionale LiteLLM-Bridge (OpenAI-kompatible Anbieter hinter
+ * einem Anthropic-Endpunkt) — macvibes ruft sie automatisch auf, sobald eine
+ * `litellm.yaml` existiert; `bun run router` startet sie manuell. Das lokale
+ * Modell braucht sie NICHT: es läuft direkt auf oMLX.
  *
  *   Endpunkt:  http://localhost:8787/v1/messages  (Anthropic-Format)
- *   Backend:   Ollama auf http://localhost:11434
+ *   Backends:  laut `model_list` der Config (Cloud-Anbieter, optional oMLX)
  *
- * Bun-TS-Fassung von run.sh (docs/windows-portierung-plan.md, P7): venv-Layout
+ * Plattformneutral (docs/windows-portierung-plan.md, P7): venv-Layout
  * (bin/ vs. Scripts/) und Python-Suche per Feature-Detection statt
  * Plattform-Weiche. Die Python-venv lebt AUSSERHALB des Repos
  * (~/macvibes/local-router-venv) und wird beim allerersten Start automatisch

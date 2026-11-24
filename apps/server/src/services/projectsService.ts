@@ -184,7 +184,7 @@ async function insertProjectRow(
         id: crypto.randomUUID(),
         ...values,
         ownerId: owner.id,
-        // Neue Chats starten mit dem Default-Modell (Sonnet 5, env-übersteuerbar).
+        // Neue Chats starten mit dem Default-Modell (DEFAULT_AGENT_MODEL, agent/agentModel).
         agentModel: DEFAULT_AGENT_MODEL,
       })
       .returning();
