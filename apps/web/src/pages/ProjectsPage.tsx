@@ -491,6 +491,16 @@ export const ProjectsPage = observer(function ProjectsPage({
           </ToggleButtonGroup>
         </Stack>
 
+        {authStore.error !== null && (
+          <Alert
+            severity="error"
+            sx={{ mb: 3 }}
+            onClose={authStore.clearError}
+            data-testselector="auth-error"
+          >
+            {authStore.error}
+          </Alert>
+        )}
         {projectsStore.error !== null && (
           <Alert severity="error" sx={{ mb: 3 }} data-testselector="projects-error">
             {projectsStore.error}

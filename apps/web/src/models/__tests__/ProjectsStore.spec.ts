@@ -446,6 +446,31 @@ describe('enterProject: Eager-Start ohne Betrachter-Kennung', () => {
     expect(variablen[0]).toEqual({ id: 'p1' });
   });
 
+  it('ein alter Fehler klebt nicht: die nächste Aktion räumt ihn weg', async () => {
+    // Vorher blieb z. B. ein setProjectModel-Fehler dauerhaft über der
+    // Chat-Seite stehen, weil nur load() und deleteProject() ihn löschten.
+    const store = new ProjectsStore(makeAuthStore('alice'));
+    runInAction(() => {
+      store.error = 'Alter Fehler';
+    });
+    vi.mocked(gqlRequest).mockResolvedValue({ projects: [], templates: [], agentModels: [] });
+
+    await store.enterProject('p1');
+
+    expect(store.error).toBeNull();
+  });
+
+  it('clearError verwirft die Fehlermeldung (Seitenwechsel)', () => {
+    const store = new ProjectsStore(makeAuthStore('alice'));
+    runInAction(() => {
+      store.error = 'Alter Fehler';
+    });
+
+    store.clearError();
+
+    expect(store.error).toBeNull();
+  });
+
   it('der Store kennt kein leaveProject mehr — Abmelden ist Subscription-Sache', () => {
     const store = new ProjectsStore(makeAuthStore('alice'));
     expect('leaveProject' in store).toBe(false);

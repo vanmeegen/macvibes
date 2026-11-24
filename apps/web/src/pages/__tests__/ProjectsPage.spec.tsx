@@ -166,6 +166,19 @@ describe('ProjectsPage', () => {
     expect(screen.getByTestId('current-username')).toHaveTextContent('alice');
   });
 
+  it('zeigt einen fehlgeschlagenen Logout in der Übersicht an', async () => {
+    renderPage();
+    await screen.findByText('Mein Vibe-Projekt');
+    mockGql.mockImplementation(async (query: string) => {
+      if (query.includes('logout')) throw new Error('Abmelden fehlgeschlagen');
+      return { projects, templates };
+    });
+
+    fireEvent.click(screen.getByTestId('logout-button'));
+
+    expect(await screen.findByTestId('auth-error')).toHaveTextContent('Abmelden fehlgeschlagen');
+  });
+
   it('zeigt „arbeitet" im Status-Chip, wenn der Agent des Projekts gerade einen Turn hat', async () => {
     const working = [{ ...projects[0]!, sandboxStatus: 'running', turnActive: true }];
     mockGql.mockResolvedValue({ projects: working, templates });

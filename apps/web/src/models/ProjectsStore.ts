@@ -354,6 +354,7 @@ export class ProjectsStore {
    * serverseitig ab.
    */
   async enterProject(id: string): Promise<void> {
+    this.error = null;
     try {
       await gqlRequest<{ enterProject: { id: string } }>(ENTER_PROJECT_MUTATION, { id });
       await this.refresh();
@@ -372,6 +373,7 @@ export class ProjectsStore {
   async setProjectModel(projectId: string, model: string): Promise<boolean> {
     const project = this.projects.find((p) => p.id === projectId);
     const previous = project?.agentModel ?? null;
+    this.error = null;
     if (project) {
       project.agentModel = model;
     }
@@ -392,6 +394,11 @@ export class ProjectsStore {
       });
       return false;
     }
+  }
+
+  /** Verwirft die Fehlermeldung — z. B. beim Betreten einer anderen Seite. */
+  clearError(): void {
+    this.error = null;
   }
 
   async deleteProject(id: string): Promise<boolean> {
