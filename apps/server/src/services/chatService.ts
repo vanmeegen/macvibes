@@ -1,11 +1,12 @@
 import { eq } from 'drizzle-orm';
-import { DEFAULT_AGENT_MODEL, agentTimeoutsFor, isSlowAgentModel } from '../agent/agentModel';
+import { DEFAULT_AGENT_MODEL, agentTimeoutsFor } from '../agent/agentModel';
 import type { AgentEvent } from '../agent/events';
 import type { AgentRunner, TurnHandle } from '../agent/runner';
 import type { Db } from '../db/client';
 import { projects, type ChatMessageRow, type UserRow } from '../db/schema';
 import { ChatEventBus, type ChatEventPayload } from './chat/chatEventBus';
 import { ChatMessageStore, MAX_MESSAGE_CHARS } from './chat/chatMessageStore';
+import { ConfigWarmup } from './chat/configWarmup';
 import { getProject, getProjectOwned } from './projectsService';
 
 export { MAX_MESSAGE_CHARS };
@@ -126,18 +127,15 @@ export class ChatService {
   private readonly states = new Map<string, ProjectChatState>();
   private readonly bus = new ChatEventBus();
   private readonly store: ChatMessageStore;
-  /** Laufende Config-Warmups pro Projekt (siehe prewarm). */
-  private readonly warmups = new Map<string, Promise<void>>();
+  /** Stiller Config-Warmup frisch geforkter VMs (siehe prewarm). */
+  private readonly warmup: ConfigWarmup;
   private readonly idleTimeoutMs: number;
   private readonly firstEventTimeoutMs: number;
   private readonly coldStartTimeoutMs: number;
-  /** Frist für den stillen Config-Warmup — er blockiert sonst den echten Turn. */
-  private readonly warmupTimeoutMs: number;
   private readonly abortGraceMs: number;
   private readonly slowIdleTimeoutMs: number;
   private readonly slowFirstEventTimeoutMs: number;
   private readonly slowColdStartTimeoutMs: number;
-  private readonly prewarmEnabled: boolean;
   /** Bündel-Zeitfenster für Streaming-Deltas (s. ChatServiceOptions.agentDeltaFlushMs). */
   private readonly deltaFlushMs: number;
 
@@ -160,7 +158,6 @@ export class ChatService {
     );
     this.abortGraceMs = options.agentAbortGraceMs ?? 5_000;
     this.slowIdleTimeoutMs = options.agentSlowIdleTimeoutMs ?? 600_000;
-    this.warmupTimeoutMs = options.agentWarmupTimeoutMs ?? 60_000;
     this.slowFirstEventTimeoutMs = Math.min(
       options.agentSlowFirstEventTimeoutMs ?? 180_000,
       this.slowIdleTimeoutMs,
@@ -169,7 +166,10 @@ export class ChatService {
       options.agentSlowColdStartTimeoutMs ?? 300_000,
       this.slowIdleTimeoutMs,
     );
-    this.prewarmEnabled = options.prewarmEnabled ?? true;
+    this.warmup = new ConfigWarmup(this.store, runner, {
+      enabled: options.prewarmEnabled ?? true,
+      timeoutMs: options.agentWarmupTimeoutMs ?? 60_000,
+    });
     this.deltaFlushMs = options.agentDeltaFlushMs ?? 50;
   }
 
@@ -210,110 +210,19 @@ export class ChatService {
    * (Grace-Aufschub, Eviction-Schutz). Umfasst neben echten Turns auch den
    * Config-Warmup: der belegt den Ein-Turn-Daemon genauso — Grace/LRU dürfen
    * die VM nicht unter ihm wegstoppen (N9). Der Warmup-Eintrag verschwindet
-   * garantiert im finally von prewarm — kein Dauer-busy-Risiko.
+   * garantiert nach dem Lauf (ConfigWarmup.prewarm) — kein Dauer-busy-Risiko.
    */
   isBusy(projectId: string): boolean {
-    return this.warmups.has(projectId) || this.isTurnActive(projectId);
+    return this.warmup.isRunning(projectId) || this.isTurnActive(projectId);
   }
 
   /**
-   * Wärmt die claude-Config einer frisch geforkten VM vor: ein stiller
-   * Wegwerf-Turn (Output verworfen, keine Chat-Nachricht), der beim Öffnen des
-   * Projekts läuft, während der User seinen ersten Prompt tippt. Ohne dies
-   * trägt der ERSTE echte Turn den ganzen claude-First-Run (~9s auf dem
-   * gemounteten Volume) — mit Warmup ist er danach schnell. No-Op, wenn schon
-   * ein Warmup läuft oder das Projekt bereits eine Session hat (Config warm).
-   *
-   * **Wirft nie.** Der Aufrufer (GraphQL-Resolver) startet den Warmup
-   * fire-and-forget; eine Rejection hätte dort keinen Handler und beendete den
-   * ganzen Serverprozess — eine SQLITE_BUSY beim Öffnen EINES Projekts risse
-   * damit alle anderen Sitzungen und alle laufenden MicroVMs mit. Der Warmup
-   * ist reine Beschleunigung: scheitert er, geht es ohne ihn weiter.
-   *
-   * Der Eintrag in `warmups` wird nach dem Lauf wieder entfernt. Er verhindert
-   * nur einen ZWEITEN gleichzeitigen Warmup — bliebe er liegen, wäre `prewarm`
-   * für dieses Projekt dauerhaft wirkungslos, auch nach erneutem Öffnen mit
-   * einer frischen VM, deren Config wieder kalt ist.
-   *
-   * Owner-only, und die Prüfung hängt HIER am Service (M5) — aber als
-   * FEATURE-GATING, nicht als Authz-Ablehnung: ein Besucher bekommt schlicht
-   * keinen Warmup (stille Rückkehr). Ein Wurf wäre falsch — er machte
-   * enterProject für Nur-Lese-Besucher (R10) kaputt, und es gibt nichts
-   * abzulehnen: der Warmup ist ein Beschleuniger, kein Nutzerbefehl.
+   * Wärmt die claude-Config einer frisch geforkten VM vor (stiller
+   * Wegwerf-Turn beim Öffnen des Projekts). Wirft nie, Owner-only als
+   * Feature-Gating — Einzelheiten und Begründungen in `ConfigWarmup.prewarm`.
    */
-  async prewarm(user: UserRow, projectId: string, workspaceDir: string): Promise<void> {
-    if (!this.prewarmEnabled) return;
-    if (this.warmups.has(projectId)) return;
-    // Der Aufrufer (schema/index.ts) startet prewarm als floating promise. Eine
-    // Rejection hätte dort keinen Handler und beendete den ganzen Serverprozess
-    // — eine SQLITE_BUSY beim Öffnen EINES Projekts risse damit alle anderen
-    // Sitzungen und alle laufenden MicroVMs mit. Der Warmup ist reine
-    // Beschleunigung: scheitert er, geht es ohne ihn weiter.
-    let projectRow;
-    try {
-      projectRow = (
-        await this.db.select().from(projects).where(eq(projects.id, projectId)).limit(1)
-      )[0];
-    } catch (error) {
-      console.error(`Config-Warmup für ${projectId} nicht gestartet (DB-Fehler):`, error);
-      return;
-    }
-    // Feature-Gating (M5, s. Methodenkommentar): fremdes oder unbekanntes
-    // Projekt → STILL zurück, kein Wurf. Vorwärmen dürfte sonst jeder
-    // Transport, der den Resolver-Branch vergisst, für fremde Projekte —
-    // und belegte damit deren Ein-Turn-Daemon.
-    if (projectRow === undefined || projectRow.ownerId !== user.id) return;
-    if (projectRow.claudeSessionId != null) return;
-    const model = projectRow.agentModel;
-    // Langsame lokale Modelle NICHT vorwärmen: der minutenlange Warmup belegt
-    // den Ein-Turn-Daemon und der erste echte Prompt würde abgewiesen.
-    if (isSlowAgentModel(model)) return;
-    // Eintrag nach dem Lauf wieder entfernen: er dient nur dazu, einen ZWEITEN
-    // gleichzeitigen Warmup zu verhindern. Blieb er liegen, war prewarm für
-    // dieses Projekt dauerhaft wirkungslos — auch nach Schliessen und erneutem
-    // Öffnen mit einer frischen VM, deren Config wieder kalt ist.
-    const lauf = this.runWarmup(projectId, workspaceDir, model).finally(() => {
-      this.warmups.delete(projectId);
-    });
-    this.warmups.set(projectId, lauf);
-  }
-
-  private async runWarmup(projectId: string, workspaceDir: string, model: string): Promise<void> {
-    try {
-      const handle = this.runner.startTurn({
-        projectId,
-        prompt: 'Antworte nur mit dem Wort: bereit',
-        workspaceDir,
-        resumeSessionId: null,
-        model,
-      });
-      // Der Warmup MUSS eine Frist haben: der echte Turn wartet auf ihn
-      // (runAttempt), bevor er in seine eigene Timeout-Schleife kommt. Ohne
-      // Frist hängt ein stiller Warmup — etwa weil die Claude-API nicht
-      // antwortet — das Projekt unbegrenzt auf, und im UI steht ewig
-      // „Agent arbeitet", ohne dass je ein Fehler sichtbar wird.
-      const deadline = Date.now() + this.warmupTimeoutMs;
-      const consume = (async () => {
-        // Events konsumieren und VERWERFEN — der Warmup initialisiert nur die
-        // claude-Config in der VM, er erzeugt keine Chat-Nachrichten.
-        for await (const event of handle.events) {
-          void event;
-        }
-      })();
-      const abgelaufen = await Promise.race([
-        consume.then(() => false),
-        Bun.sleep(Math.max(0, deadline - Date.now())).then(() => true),
-      ]);
-      if (abgelaufen) {
-        console.warn(
-          `Config-Warmup für ${projectId} nach ${Math.round(this.warmupTimeoutMs / 1000)}s ` +
-            'abgebrochen — der Agent antwortet nicht. Der nächste echte Turn läuft trotzdem.',
-        );
-        handle.abort();
-      }
-    } catch (error) {
-      console.error(`Config-Warmup für ${projectId} fehlgeschlagen:`, error);
-    }
+  prewarm(user: UserRow, projectId: string, workspaceDir: string): Promise<void> {
+    return this.warmup.prewarm(user, projectId, workspaceDir);
   }
 
   /**
@@ -525,7 +434,7 @@ export class ChatService {
     state.currentHandle?.abort();
     this.bus.forget(projectId);
     this.states.delete(projectId);
-    this.warmups.delete(projectId);
+    this.warmup.forget(projectId);
   }
 
   /** Wie viele Projekte im Speicher gehalten werden (die Zahl hinter dem Leck). */
@@ -718,7 +627,7 @@ export class ChatService {
 
     // Läuft ein Config-Warmup, erst darauf warten — sonst konkurrieren zwei
     // claude-exec-Sessions in der VM (microsandbox serialisiert sie → langsam).
-    const warmup = this.warmups.get(projectId);
+    const warmup = this.warmup.pending(projectId);
     if (warmup) {
       await warmup;
     }
