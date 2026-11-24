@@ -1,5 +1,5 @@
 /**
- * Die EINE Quelle für die Ports der Repo-Skripte (dev/preflight/shutdown).
+ * Die EINE Quelle für die Ports der Repo-Skripte (dev/preflight/doctor/shutdown).
  * Vorher kannten drei Dateien dieselben Defaults getrennt — dabei ist genau
  * der Fehler passiert, den diese Datei verhindert: preflight/shutdown lasen
  * `VITE_PORT`, das im Repo nirgends gesetzt wird, während dev.ts und
@@ -29,4 +29,14 @@ export function portKonfiguration(): {
     egress: Number(process.env['MACVIBES_EGRESS_PORT'] ?? PORT_DEFAULTS.egress),
     gateway: Number(process.env['MACVIBES_PREVIEW_GATEWAY_PORT'] ?? PORT_DEFAULTS.gateway),
   };
+}
+
+/**
+ * Alle Ports einer laufenden macvibes-Instanz, in der Reihenfolge, in der
+ * `shutdown` sie beendet (Web zuerst). Preflight, Doctor und Shutdown prüfen
+ * damit DIESELBE Liste — vorher ließ der Preflight das Gateway aus.
+ */
+export function allePorts(): number[] {
+  const ports = portKonfiguration();
+  return [ports.web, ports.server, ports.egress, ports.gateway];
 }

@@ -3,6 +3,15 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 /**
+ * Das macvibes-Home (`MACVIBES_HOME`, sonst `~/macvibes`) — dieselbe Regel wie
+ * apps/server/src/config.ts. EINE Stelle für alle Repo-Skripte, statt die
+ * Auflösung in jedem Skript neu hinzuschreiben.
+ */
+export function macvibesHome(): string {
+  return process.env['MACVIBES_HOME'] ?? join(homedir(), 'macvibes');
+}
+
+/**
  * Env-Wert mit .env-Datei-Fallback — für Skripte, die dieselbe Konfiguration
  * sehen müssen wie der Server.
  *
@@ -32,8 +41,7 @@ export function envWertMitDateiFallback(
 
 /** Die beiden .env-Orte, die auch der Server sieht (Reihenfolge = Vorrang). */
 function standardEnvDateien(): string[] {
-  const home = process.env['MACVIBES_HOME'] ?? join(homedir(), 'macvibes');
-  return [join('apps', 'server', '.env'), join(home, '.env')];
+  return [join('apps', 'server', '.env'), join(macvibesHome(), '.env')];
 }
 
 /**

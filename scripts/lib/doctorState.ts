@@ -5,7 +5,7 @@
  * Prüfungen pflegen. Hier stehen die Syscalls (Bun.which, sysctl, TCP-Probe);
  * die reine Auswertung bleibt in scripts/lib/setup.ts (doctor()).
  */
-import { portKonfiguration } from './ports';
+import { allePorts } from './ports';
 import { istPortBelegt } from './prozesse';
 import type { DoctorInput, DoctorReport, DoctorStatus } from './setup';
 
@@ -34,10 +34,8 @@ async function hypervisorVerfuegbar(): Promise<boolean | null> {
  * respektieren dieselben Env-Overrides wie Server/Preflight (lib/ports).
  */
 export async function erhebeDoctorInput(): Promise<DoctorInput> {
-  const ports = portKonfiguration();
-  const zuPruefen = [ports.server, ports.egress, ports.web, ports.gateway];
   const belegtePorts: number[] = [];
-  for (const port of zuPruefen) if (await istPortBelegt(port)) belegtePorts.push(port);
+  for (const port of allePorts()) if (await istPortBelegt(port)) belegtePorts.push(port);
 
   const msbAvailable = Bun.which('msb') !== null;
   return {

@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { envWertMitDateiFallback, wertAusEnvDatei } from '../env';
+import { envWertMitDateiFallback, macvibesHome, wertAusEnvDatei } from '../env';
 
 const tempDirs: string[] = [];
+const gesichertesHome = process.env['MACVIBES_HOME'];
 
 afterEach(() => {
   while (tempDirs.length > 0) {
@@ -12,6 +13,8 @@ afterEach(() => {
     if (dir) rmSync(dir, { recursive: true, force: true });
   }
   delete process.env['MACVIBES_TEST_ENV_WERT'];
+  if (gesichertesHome === undefined) delete process.env['MACVIBES_HOME'];
+  else process.env['MACVIBES_HOME'] = gesichertesHome;
 });
 
 function envDatei(inhalt: string): string {
@@ -55,5 +58,25 @@ describe('wertAusEnvDatei', () => {
 
   test('fehlende Datei ist kein Fehler', () => {
     expect(wertAusEnvDatei('/gibt/es/nicht/.env', 'MACVIBES_X')).toBeUndefined();
+  });
+});
+
+describe('macvibesHome', () => {
+  test('MACVIBES_HOME gewinnt', () => {
+    process.env['MACVIBES_HOME'] = '/tmp/anderes-home';
+    expect(macvibesHome()).toBe('/tmp/anderes-home');
+  });
+
+  test('ohne MACVIBES_HOME: ~/macvibes', () => {
+    delete process.env['MACVIBES_HOME'];
+    expect(macvibesHome()).toBe(join(homedir(), 'macvibes'));
+  });
+});
+
+describe('envWertMitDateiFallback — Standard-Dateien', () => {
+  test('liest ohne Dateiliste auch <macvibesHome>/.env (installierte Fassung)', () => {
+    const datei = envDatei('MACVIBES_TEST_ENV_WERT=aus-home\n');
+    process.env['MACVIBES_HOME'] = join(datei, '..');
+    expect(envWertMitDateiFallback('MACVIBES_TEST_ENV_WERT')).toBe('aus-home');
   });
 });

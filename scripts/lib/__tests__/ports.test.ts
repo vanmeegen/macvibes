@@ -7,7 +7,7 @@
  * Shutdown meldete Erfolg, obwohl Vite weiterlief.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { portKonfiguration } from '../ports';
+import { allePorts, portKonfiguration } from '../ports';
 
 const ENV_NAMEN = [
   'MACVIBES_WEB_PORT',
@@ -67,5 +67,17 @@ describe('portKonfiguration', () => {
       egress: 4011,
       gateway: 4174,
     });
+  });
+});
+
+describe('allePorts', () => {
+  test('liefert Web, Server, Egress und Gateway — in der Shutdown-Reihenfolge', () => {
+    expect(allePorts()).toEqual([5173, 4000, 4010, 4173]);
+  });
+
+  test('respektiert dieselben Overrides wie portKonfiguration', () => {
+    process.env['MACVIBES_PREVIEW_GATEWAY_PORT'] = '4174';
+    process.env['MACVIBES_WEB_PORT'] = '5174';
+    expect(allePorts()).toEqual([5174, 4000, 4010, 4174]);
   });
 });

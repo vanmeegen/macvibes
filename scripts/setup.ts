@@ -23,11 +23,11 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { usernameSchema } from '@macvibes/shared';
 import { druckeDoctorReport, erhebeDoctorInput } from './lib/doctorState';
+import { macvibesHome as macvibesHomeDir } from './lib/env';
 import {
   begrenzeTreffer,
   filterModelle,
@@ -512,7 +512,7 @@ async function main(): Promise<void> {
   // Repo-Override apps/server/.env; installierte Fassung (kein .git, z. B.
   // Homebrew-libexec) → die upgrade-feste <macvibesHome>/.env. Sonst läge die
   // Konfig (inkl. Token) in libexec und wäre nach jedem `brew upgrade` weg.
-  const macvibesHome = process.env['MACVIBES_HOME'] ?? join(homedir(), 'macvibes');
+  const macvibesHome = macvibesHomeDir();
   const istDevCheckout = existsSync(join(REPO_ROOT, '.git'));
   const envPfad = envZielPfad({ istDevCheckout, repoRoot: REPO_ROOT, macvibesHome });
 
