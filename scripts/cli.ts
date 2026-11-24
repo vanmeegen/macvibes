@@ -13,7 +13,7 @@
  * Vordergrund-Gruppe (POSIX wie Windows, Muster aus dev.ts) — wichtig für die
  * langlaufenden `start`/`dev` —, und der Exit-Code des Kindes wird 1:1
  * durchgereicht. Einzige Ausnahme: `doctor` braucht keinen Prozess — seine
- * Logik ist als Bibliothek importierbar (lib/doctorState + lib/setup).
+ * Logik ist als Bibliothek importierbar (lib/doctorState + lib/doctor).
  *
  * WARUM cwd = Repo-Root: der spätere Brew-Wrapper ruft die CLI aus beliebigen
  * Verzeichnissen; setup.ts/preflight.ts schreiben bzw. lesen aber relativ
@@ -25,7 +25,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hilfeText, parseCliArgs, type CliBefehlName } from './lib/cli';
 import { druckeDoctorReport, erhebeDoctorInput } from './lib/doctorState';
-import { doctor } from './lib/setup';
+import { doctor } from './lib/doctor';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 

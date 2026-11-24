@@ -3,11 +3,11 @@
  * setup` (Schritt 1) und `macvibes doctor`. Vorher lebte das in scripts/
  * setup.ts; die Extraktion verhindert, dass CLI und Setup zwei driftende
  * Prüfungen pflegen. Hier stehen die Syscalls (Bun.which, sysctl, TCP-Probe);
- * die reine Auswertung bleibt in scripts/lib/setup.ts (doctor()).
+ * die reine Auswertung bleibt in scripts/lib/doctor.ts (doctor()).
  */
 import { allePorts } from './ports';
 import { istPortBelegt } from './prozesse';
-import type { DoctorInput, DoctorReport, DoctorStatus } from './setup';
+import type { DoctorInput, DoctorReport, DoctorStatus } from './doctor';
 
 /** Erwartete Bun-Version (CLAUDE.md: gepinnt, VM-Image + @types/bun identisch). */
 const BUN_PIN = '1.3.14';

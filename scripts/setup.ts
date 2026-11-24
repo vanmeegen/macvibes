@@ -26,6 +26,7 @@ import {
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { usernameSchema } from '@macvibes/shared';
+import { doctor } from './lib/doctor';
 import { druckeDoctorReport, erhebeDoctorInput } from './lib/doctorState';
 import { macvibesHome as macvibesHomeDir } from './lib/env';
 import {
@@ -41,7 +42,6 @@ import { erkenneAnbieterFormat, type FormatDiagnose } from './lib/providerProbe'
 import { envVarName, litellmYamlMitEintrag, modelsJsonMitEintrag } from './lib/providerWiring';
 import {
   buildEnvContent,
-  doctor,
   envWertIstUnsicher,
   envZielPfad,
   parseAnbieterWahl,
@@ -459,7 +459,7 @@ async function main(): Promise<void> {
   console.log('macvibes — geführtes First-Run-Setup\n');
 
   // 1) Doctor — Zustands-Erhebung geteilt mit `macvibes doctor`
-  // (lib/doctorState), reine Auswertung in lib/setup.
+  // (lib/doctorState), reine Auswertung in lib/doctor.
   const doctorInput = await erhebeDoctorInput();
   const msbAvailable = doctorInput.msbAvailable;
   const report = doctor(doctorInput);
