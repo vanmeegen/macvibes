@@ -15,6 +15,12 @@ export interface VmAgentEnvParams {
    * eigenen Alias herein, ohne dass diese Datei bricht.
    */
   hostAlias: string;
+  /**
+   * Übersteuerung der Zusatz-System-Anweisung (config.agent.appendSystemPrompt,
+   * MACVIBES_AGENT_APPEND_PROMPT). null/undefined = der Daemon nimmt seinen
+   * eingebauten Default (agent/appendPrompt).
+   */
+  appendSystemPrompt?: string | null | undefined;
 }
 
 /**
@@ -42,5 +48,10 @@ export function buildVmAgentEnv(params: VmAgentEnvParams): Record<string, string
     HTTP_PROXY: `http://mv:${params.proxyToken}@${params.hostAlias}:${params.egressPort}`,
     HTTPS_PROXY: `http://mv:${params.proxyToken}@${params.hostAlias}:${params.egressPort}`,
     NO_PROXY: `${params.hostAlias},localhost,127.0.0.1`,
+    // Die Env IST der Host→VM-Transport: ohne diesen Eintrag las der Daemon
+    // die Variable zwar, bekam sie aber nie.
+    ...(params.appendSystemPrompt != null
+      ? { MACVIBES_AGENT_APPEND_PROMPT: params.appendSystemPrompt }
+      : {}),
   };
 }

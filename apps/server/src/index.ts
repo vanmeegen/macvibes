@@ -281,6 +281,7 @@ const sandboxProvider = useMicrosandbox
               proxyToken: vmToken,
               egressPort,
               hostAlias: MSB_HOST_ALIAS,
+              appendSystemPrompt: config.agent.appendSystemPrompt,
             }),
             MACVIBES_AGENT_GATEWAY_URL:
               `ws://${MSB_HOST_ALIAS}:${config.port}${AGENT_GATEWAY_PATH}` +

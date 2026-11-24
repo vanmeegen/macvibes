@@ -87,9 +87,9 @@ export interface ServerConfig {
     allowHostAgent: boolean;
     /**
      * MACVIBES_AGENT_APPEND_PROMPT: überschreibt die eingebaute Zusatz-
-     * System-Anweisung des Host-Runners; null = eingebauter Default
-     * (agent/claudeRunner). Der VM-Daemon liest sie weiterhin aus seiner
-     * VM-Env — dort IST die Env der Host→VM-Transport.
+     * System-Anweisung (agent/appendPrompt); null = eingebauter Default. Gilt
+     * für beide Agent-Pfade: der Host-Runner bekommt den Wert direkt, der
+     * VM-Daemon über seine VM-Env (agent/vmAgentEnv).
      */
     appendSystemPrompt: string | null;
     /**

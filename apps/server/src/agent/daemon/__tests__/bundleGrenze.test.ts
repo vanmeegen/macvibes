@@ -58,6 +58,9 @@ const ERLAUBTE_IMPORTE: ReadonlyArray<{ muster: RegExp; grund: string }> = [
   // ihm transitiv nur, was selbst auf dieser Whitelist steht (heute: nur der
   // Typ-Import aus `../events`).
   { muster: /^\.\.\/claudeStreamJson$/, grund: 'SDK-Message-Mapping' },
+  // Eingebaute Zusatz-System-Anweisung: importfreie Textfunktion, geteilt mit
+  // dem Host-Runner, damit Dev- und VM-Pfad denselben Default haben.
+  { muster: /^\.\.\/appendPrompt$/, grund: 'geteilter Default-Prompt (importfrei)' },
   // Preview-Status-Vokabular: bewusst importfrei gehalten (s. eslint.config.js),
   // genau damit es gefahrlos ins VM-Bundle darf.
   { muster: /^\.\.\/\.\.\/preview\/[^/]+$/, grund: 'importfreies Preview-Vokabular' },

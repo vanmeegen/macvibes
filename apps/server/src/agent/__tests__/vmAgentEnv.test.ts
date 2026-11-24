@@ -56,4 +56,29 @@ describe('buildVmAgentEnv — kritische Agent-Umgebung', () => {
     expect(fremd.HTTPS_PROXY).toBe('http://mv:secret-xyz@host.anderes-backend.test:4010');
     expect(fremd.NO_PROXY).toContain('host.anderes-backend.test');
   });
+
+  test('eine konfigurierte Zusatz-Anweisung erreicht den VM-Daemon (MACVIBES_AGENT_APPEND_PROMPT)', () => {
+    // Der Daemon liest die Variable in der VM — gesetzt hat sie aber niemand:
+    // die Übersteuerung wirkte nur im Host-Runner (Dev), nie im Produktivpfad.
+    const mit = buildVmAgentEnv({
+      serverPort: 4000,
+      proxyToken: 'secret-xyz',
+      egressPort: 4010,
+      hostAlias: MSB_HOST_ALIAS,
+      appendSystemPrompt: "Handle sofort.\nKeine 'Ankündigungen'.",
+    });
+    expect(mit.MACVIBES_AGENT_APPEND_PROMPT).toBe("Handle sofort.\nKeine 'Ankündigungen'.");
+  });
+
+  test('ohne Übersteuerung bleibt die Variable weg — der Daemon nimmt dann seinen Default', () => {
+    expect('MACVIBES_AGENT_APPEND_PROMPT' in env).toBe(false);
+    const explizitNull = buildVmAgentEnv({
+      serverPort: 4000,
+      proxyToken: 'secret-xyz',
+      egressPort: 4010,
+      hostAlias: MSB_HOST_ALIAS,
+      appendSystemPrompt: null,
+    });
+    expect('MACVIBES_AGENT_APPEND_PROMPT' in explizitNull).toBe(false);
+  });
 });

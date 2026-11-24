@@ -1,6 +1,7 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { GUEST_WORKDIR, MONIT_HTTPD_PORT } from '../../core/vmContract';
 import { httpProbe } from '../../preview/httpProbe';
+import { defaultAppendSystemPrompt } from '../appendPrompt';
 import { DaemonSession } from './daemonSession';
 import type { QueryHandle } from './daemonSession';
 import { PreviewStatusReporter } from './previewStatusReporter';
@@ -17,6 +18,7 @@ import type { DaemonToHostMessage } from './protocol';
  * Env:
  * - MACVIBES_AGENT_GATEWAY_URL  ws://host.microsandbox.internal:<port>/agent?sandbox=…&token=…
  * - MACVIBES_AGENT_CWD          Arbeitsverzeichnis (Default: GUEST_WORKDIR)
+ * - MACVIBES_AGENT_APPEND_PROMPT  optionale Zusatz-System-Anweisung (Default: agent/appendPrompt)
  */
 
 const gatewayUrl = process.env['MACVIBES_AGENT_GATEWAY_URL'];
@@ -28,23 +30,11 @@ if (!gatewayUrl) {
 // Workspace-Mountpunkt nutzt — eine eigene Kopie hier driftete sonst still.
 const cwd = process.env['MACVIBES_AGENT_CWD'] ?? GUEST_WORKDIR;
 
-/**
- * Zusätzliche System-Anweisung an das Modell. Nötig für schwächere lokale
- * Modelle (z. B. qwen3.6-coder), die sonst (a) Arbeit nur ankündigen statt Tools
- * aufzurufen und (b) Dateien nach /home/user statt ins Projekt (cwd) schreiben —
- * beides macht die Live-Preview „tot". Für die Claude-API ist die Anweisung ein
- * harmloses No-Op (macht es ohnehin richtig). Über Env überschreibbar.
- */
+// Zusatz-System-Anweisung: Übersteuerung aus der VM-Env (der Host reicht
+// config.agent.appendSystemPrompt über buildVmAgentEnv herein), sonst der
+// eingebaute Default — derselbe wie im Host-Runner.
 const appendSystemPrompt =
-  process.env['MACVIBES_AGENT_APPEND_PROMPT'] ??
-  `WICHTIG (macvibes-Laufzeitumgebung): Das Projekt liegt im aktuellen ` +
-    `Arbeitsverzeichnis ${cwd}. Erstelle und bearbeite ALLE Dateien ausschließlich ` +
-    `dort mit RELATIVEN Pfaden. Verwende NIEMALS absolute Pfade wie /home/user/... ` +
-    `oder /root/... — Dateien außerhalb von ${cwd} sind für die Live-Preview unsichtbar. ` +
-    `Lies zuerst AGENTS.md im Projekt und HALTE DICH DARAN (welche Datei die App-Wurzel ` +
-    `ist, was ausgeliefert wird). Beende deinen Turn NIEMALS mit einer Ankündigung wie ` +
-    `"Jetzt mache ich X" oder "Als Nächstes …" — führe angekündigte Schritte SOFORT im ` +
-    `selben Turn aus und arbeite die Aufgabe vollständig ab, bevor du zusammenfasst.`;
+  process.env['MACVIBES_AGENT_APPEND_PROMPT'] ?? defaultAppendSystemPrompt(cwd);
 
 let socket: WebSocket | null = null;
 
