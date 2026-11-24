@@ -120,6 +120,15 @@ export async function buildTemplateBaseline(options: BuildBaselineOptions): Prom
     await stopSandbox(BUILDER_SANDBOX);
     await createSnapshot(snapshotName, BUILDER_SANDBOX);
   } finally {
+    // Erst stoppen, dann entfernen: scheitert ein Bau-Schritt, läuft die
+    // Builder-VM noch — msb entfernt keine laufende Sandbox, und sie bliebe
+    // als Waise zurück (und blockierte den nächsten Baseline-Bau). Im
+    // Erfolgsfall ist sie schon gestoppt; ein zweites Stoppen ist harmlos.
+    try {
+      await stopSandbox(BUILDER_SANDBOX);
+    } catch (error) {
+      console.error(`Builder-Sandbox konnte nicht gestoppt werden:`, error);
+    }
     try {
       await removeSandbox(BUILDER_SANDBOX);
     } catch (error) {
