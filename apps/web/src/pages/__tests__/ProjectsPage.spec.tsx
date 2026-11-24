@@ -3,8 +3,8 @@ import { runInAction } from 'mobx';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { gqlRequest } from '../../api/graphqlClient';
-import type { Project, Template } from '../../api/types';
-import { AuthStore } from '../../models/AuthStore';
+import { makeAuthStore, makeProject, makeTemplate, makeUser } from '../../__tests__/factories';
+import type { AuthStore } from '../../models/AuthStore';
 import { CreateProjectModel } from '../../models/CreateProjectModel';
 import { ProjectsStore } from '../../models/ProjectsStore';
 import { ProjectsPage } from '../ProjectsPage';
@@ -15,38 +15,12 @@ vi.mock('../../api/graphqlClient', () => ({
 
 const mockGql = vi.mocked(gqlRequest);
 
-const projects: Project[] = [
-  {
-    id: 'p1',
-    name: 'Mein Vibe-Projekt',
-    templateDir: 'react-starter',
-    owner: { id: 'u1', username: 'alice', role: 'admin', approved: true },
-    agentModel: 'claude-sonnet-5',
-    lastActivityAt: '2026-07-02T12:00:00.000Z',
-    sandboxStatus: 'stopped',
-    previewStatus: 'stopped',
-    turnActive: false,
-  },
-  {
-    id: 'p2',
-    name: 'Bobs Projekt',
-    templateDir: 'react-starter',
-    owner: { id: 'u2', username: 'bob', role: 'user', approved: true },
-    agentModel: 'claude-sonnet-5',
-    lastActivityAt: '2026-07-02T12:00:00.000Z',
-    sandboxStatus: 'stopped',
-    previewStatus: 'stopped',
-    turnActive: false,
-  },
+const projects = [
+  makeProject({ id: 'p1', name: 'Mein Vibe-Projekt' }),
+  makeProject({ id: 'p2', name: 'Bobs Projekt', owner: makeUser({ id: 'u2', username: 'bob' }) }),
 ];
 
-const templates: Template[] = [
-  {
-    name: 'React Starter',
-    description: 'Vite + React Grundgerüst',
-    dir: 'react-starter',
-  },
-];
+const templates = [makeTemplate()];
 
 describe('ProjectsPage', () => {
   beforeEach(() => {
@@ -61,16 +35,7 @@ describe('ProjectsPage', () => {
   } {
     mockGql.mockResolvedValue({ projects, templates });
 
-    const authStore = new AuthStore();
-    runInAction(() => {
-      authStore.currentUser = {
-        id: 'u1',
-        username: 'alice',
-        role,
-        approved: true,
-      };
-      authStore.initialized = true;
-    });
+    const authStore = makeAuthStore('alice', role);
     const projectsStore = new ProjectsStore(authStore);
     const createProjectModel = new CreateProjectModel(projectsStore);
 
@@ -93,16 +58,7 @@ describe('ProjectsPage', () => {
       query.includes('createProject') ? { createProject: created } : { projects, templates },
     );
 
-    const authStore = new AuthStore();
-    runInAction(() => {
-      authStore.currentUser = {
-        id: 'u1',
-        username: 'alice',
-        role: 'admin',
-        approved: true,
-      };
-      authStore.initialized = true;
-    });
+    const authStore = makeAuthStore('alice', 'admin');
     const projectsStore = new ProjectsStore(authStore);
     const createProjectModel = new CreateProjectModel(projectsStore);
     render(
@@ -180,19 +136,17 @@ describe('ProjectsPage', () => {
   });
 
   it('zeigt „arbeitet" im Status-Chip, wenn der Agent des Projekts gerade einen Turn hat', async () => {
-    const working = [{ ...projects[0]!, sandboxStatus: 'running', turnActive: true }];
+    const working = [
+      makeProject({
+        id: 'p1',
+        name: 'Mein Vibe-Projekt',
+        sandboxStatus: 'running',
+        turnActive: true,
+      }),
+    ];
     mockGql.mockResolvedValue({ projects: working, templates });
 
-    const authStore = new AuthStore();
-    runInAction(() => {
-      authStore.currentUser = {
-        id: 'u1',
-        username: 'alice',
-        role: 'user',
-        approved: true,
-      };
-      authStore.initialized = true;
-    });
+    const authStore = makeAuthStore('alice', 'user');
     const projectsStore = new ProjectsStore(authStore);
     render(
       <MemoryRouter>
@@ -277,16 +231,7 @@ describe('ProjectsPage', () => {
 
     it('„Kopieren und Anpassen": Dialog mit Namensvorschlag, Anlegen führt in den neuen Chat', async () => {
       const copied = { ...projects[0], id: 'p-kopie', name: 'Bobs Projekt Kopie' };
-      const authStore = new AuthStore();
-      runInAction(() => {
-        authStore.currentUser = {
-          id: 'u1',
-          username: 'alice',
-          role: 'user',
-          approved: true,
-        };
-        authStore.initialized = true;
-      });
+      const authStore = makeAuthStore('alice', 'user');
       const projectsStore = new ProjectsStore(authStore);
       const createProjectModel = new CreateProjectModel(projectsStore);
       mockGql.mockImplementation(async (query: string) =>

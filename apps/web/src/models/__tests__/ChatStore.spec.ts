@@ -153,6 +153,19 @@ describe('ChatStore', () => {
       expect(open[0]?.url).toContain('projekt-b');
     });
 
+    it('abonniert chatEvents mit dem Projekt als GraphQL-VARIABLE (kein Einsetzen in den Query-Text)', async () => {
+      gqlRequestMock.mockResolvedValueOnce({ chatMessages: [], turnActive: false });
+      const store = new ChatStore();
+
+      await store.connect('p"1');
+
+      const params = new URL(FakeEventSource.open()[0]?.url ?? '', 'http://x').searchParams;
+      expect(JSON.parse(params.get('variables') ?? '{}')).toEqual({ projectId: 'p"1' });
+      expect(params.get('query')).toContain('subscription ChatEvents($projectId: ID!)');
+      expect(params.get('query')).not.toContain('p"1');
+      store.disconnect();
+    });
+
     it('disconnect() entwertet einen laufenden connect() (StrictMode-Doppelmount)', async () => {
       let resolveA: (v: unknown) => void = () => {};
       gqlRequestMock.mockImplementationOnce(

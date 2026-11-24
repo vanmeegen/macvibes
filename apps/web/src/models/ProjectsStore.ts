@@ -4,6 +4,7 @@ import { gqlRequest } from '../api/graphqlClient';
 import type { AgentModelInfo, Project, Template } from '../api/types';
 import { NameDialogModel } from './NameDialogModel';
 import type { AuthStore } from './AuthStore';
+import { browserStorage, readSetting, writeSetting } from './safeStorage';
 
 export type ProjectFilter = 'mine' | 'all';
 
@@ -114,16 +115,8 @@ function mergeById<T extends { id: string }>(current: T[], incoming: T[]): T[] {
 }
 
 function readFilterFromStorage(): ProjectFilter {
-  try {
-    const stored = window.localStorage.getItem(PROJECT_FILTER_STORAGE_KEY);
-    if (stored === 'mine' || stored === 'all') {
-      return stored;
-    }
-  } catch (err) {
-    // localStorage kann z. B. im Private-Modus fehlen — Default verwenden.
-    console.error('Projektfilter konnte nicht aus localStorage gelesen werden', err);
-  }
-  return 'mine';
+  const stored = readSetting(browserStorage(), PROJECT_FILTER_STORAGE_KEY);
+  return stored === 'mine' || stored === 'all' ? stored : 'mine';
 }
 
 /**
@@ -181,11 +174,7 @@ export class ProjectsStore {
 
   setFilter(filter: ProjectFilter): void {
     this.filter = filter;
-    try {
-      window.localStorage.setItem(PROJECT_FILTER_STORAGE_KEY, filter);
-    } catch (err) {
-      console.error('Projektfilter konnte nicht in localStorage gespeichert werden', err);
-    }
+    writeSetting(browserStorage(), PROJECT_FILTER_STORAGE_KEY, filter);
   }
 
   requestDelete(id: string): void {
@@ -270,7 +259,7 @@ export class ProjectsStore {
     this.loading = true;
     this.error = null;
     try {
-      await this.fetchInto();
+      await this.fetchProjects();
     } catch (err) {
       console.error('ProjectsStore.load fehlgeschlagen', err);
       runInAction(() => {
@@ -286,7 +275,7 @@ export class ProjectsStore {
   /** Stilles Nachladen fürs Status-Polling — ohne Lade-Spinner, Fehler nur geloggt. */
   async refresh(): Promise<void> {
     try {
-      await this.fetchInto();
+      await this.fetchProjects();
     } catch (err) {
       // Bewusst KEIN this.error: das Polling läuft im Hintergrund, ein einzelner
       // Fehlschlag darf nicht die ganze Seite mit einer Fehlermeldung überziehen.
@@ -296,11 +285,9 @@ export class ProjectsStore {
 
   /**
    * Die eigentliche Abfrage — geteilt von `load` (mit Spinner und sichtbarem
-   * Fehler) und `refresh` (still). Vorher war `refresh` eine wörtliche Kopie
-   * von `load`: dieselbe Query, dieselbe Ergebniszuweisung, nur ohne die beiden
-   * Zustandsflags. Jede Feldänderung musste an zwei Stellen nachgezogen werden.
+   * Fehler) und `refresh` (still).
    */
-  private async fetchInto(): Promise<void> {
+  private async fetchProjects(): Promise<void> {
     const data = await gqlRequest<{
       projects: Project[];
       templates: Template[];

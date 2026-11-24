@@ -9,10 +9,11 @@ import {
   type SpeechSupport,
   type Transcriber,
 } from '../speech/transcriber';
+import { browserStorage, readSetting, writeSetting, type SettingsStorage } from './safeStorage';
 
 export const SPEECH_LANG_STORAGE_KEY = 'macvibes.speechLang';
 
-export type SpeechStatus = 'idle' | 'installing' | 'recording';
+type SpeechStatus = 'idle' | 'installing' | 'recording';
 
 /** Minimaler Ausschnitt des ChatStore, den das Diktat braucht (Entwurf). */
 export interface DraftTarget {
@@ -21,23 +22,16 @@ export interface DraftTarget {
 }
 
 /** Test-/Engine-Seams — Default ist die Chrome-On-Device-Erkennung. */
-export interface SpeechDeps {
+interface SpeechDeps {
   support?: () => SpeechSupport;
   availability?: (lang: SpeechLang) => Promise<SpeechAvailability>;
   install?: (lang: SpeechLang) => Promise<boolean>;
   createTranscriber?: () => Transcriber;
-  storage?: Pick<Storage, 'getItem' | 'setItem'>;
+  storage?: SettingsStorage;
 }
 
-function readStoredLang(storage: Pick<Storage, 'getItem' | 'setItem'>): SpeechLang {
-  const stored = storage.getItem(SPEECH_LANG_STORAGE_KEY);
-  return stored === 'en-US' ? 'en-US' : 'de-DE';
-}
-
-/** Zugriff auf localStorage — im SSR-/Testkontext ggf. nicht vorhanden. */
-function defaultStorage(): Pick<Storage, 'getItem' | 'setItem'> {
-  if (typeof localStorage !== 'undefined') return localStorage;
-  return { getItem: () => null, setItem: () => {} };
+function readStoredLang(storage: SettingsStorage): SpeechLang {
+  return readSetting(storage, SPEECH_LANG_STORAGE_KEY) === 'en-US' ? 'en-US' : 'de-DE';
 }
 
 /**
@@ -62,7 +56,7 @@ export class SpeechStore {
   private readonly availabilityFn: (lang: SpeechLang) => Promise<SpeechAvailability>;
   private readonly installFn: (lang: SpeechLang) => Promise<boolean>;
   private readonly createTranscriber: () => Transcriber;
-  private readonly storage: Pick<Storage, 'getItem' | 'setItem'>;
+  private readonly storage: SettingsStorage;
   /** Aktive Erkennung — bewusst nicht observable. */
   private transcriber: Transcriber | null = null;
 
@@ -74,7 +68,7 @@ export class SpeechStore {
     this.availabilityFn = deps.availability ?? chromeSpeechAvailability;
     this.installFn = deps.install ?? installChromeSpeech;
     this.createTranscriber = deps.createTranscriber ?? createChromeTranscriber;
-    this.storage = deps.storage ?? defaultStorage();
+    this.storage = deps.storage ?? browserStorage();
     this.lang = readStoredLang(this.storage);
     // draftTarget bleibt eine REFERENZ (kein deep-observable Klon) — sonst
     // schreibt setDraft in eine MobX-Kopie und der echte Entwurf bleibt leer.
@@ -198,7 +192,7 @@ export class SpeechStore {
     if (lang === this.lang) return;
     if (this.status === 'recording') this.transcriber?.stop();
     this.lang = lang;
-    this.storage.setItem(SPEECH_LANG_STORAGE_KEY, lang);
+    writeSetting(this.storage, SPEECH_LANG_STORAGE_KEY, lang);
     // Probe zurücksetzen — der nächste Klick prüft die neue Sprache.
     this.init();
   }

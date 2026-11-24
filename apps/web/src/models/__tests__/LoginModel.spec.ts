@@ -3,36 +3,34 @@ import type { AuthStore } from '../AuthStore';
 import { LoginModel } from '../LoginModel';
 
 /**
- * LoginModel war das einzige Presentation-Model ohne Spec — entgegen der
- * verbindlichen TDD-Regel des Projekts. Ausgerechnet hier hängt daran das
- * Verhalten nach einer Registrierung, die auf Freischaltung wartet: Das Modell
- * wechselt dann in den Login-Modus zurueck, ohne den Hinweistext des AuthStore
- * zu zerstören, und meldet trotzdem Erfolg.
+ * Kernfall: Nach einer Registrierung, die auf Freischaltung wartet, wechselt
+ * das Modell in den Login-Modus zurück, ohne den Hinweistext des AuthStore zu
+ * zerstören, und meldet trotzdem Erfolg.
  */
 
-interface AufrufProtokoll {
+interface CallLog {
   logins: Array<[string, string]>;
   /** [username, password] bzw. [username, password, bootstrapToken]. */
-  registrierungen: Array<[string, string] | [string, string, string]>;
-  fehlerGeleert: number;
+  registrations: Array<[string, string] | [string, string, string]>;
+  errorsCleared: number;
 }
 
 function fakeAuthStore(
-  ergebnisse: {
+  results: {
     login?: boolean;
     register?: 'loggedIn' | 'pending' | 'failed';
     pending?: boolean;
   } = {},
-): { store: AuthStore; protokoll: AufrufProtokoll } {
-  const protokoll: AufrufProtokoll = { logins: [], registrierungen: [], fehlerGeleert: 0 };
+): { store: AuthStore; calls: CallLog } {
+  const calls: CallLog = { logins: [], registrations: [], errorsCleared: 0 };
   const store = {
-    pending: ergebnisse.pending ?? false,
+    pending: results.pending ?? false,
     clearError: (): void => {
-      protokoll.fehlerGeleert += 1;
+      calls.errorsCleared += 1;
     },
     login: (username: string, password: string): Promise<boolean> => {
-      protokoll.logins.push([username, password]);
-      return Promise.resolve(ergebnisse.login ?? true);
+      calls.logins.push([username, password]);
+      return Promise.resolve(results.login ?? true);
     },
     register: (
       username: string,
@@ -41,13 +39,13 @@ function fakeAuthStore(
     ): Promise<'loggedIn' | 'pending' | 'failed'> => {
       // Nur definierte Argumente protokollieren — die Alt-Assertions ohne
       // Token bleiben so unverändert gültig.
-      protokoll.registrierungen.push(
+      calls.registrations.push(
         bootstrapToken === undefined ? [username, password] : [username, password, bootstrapToken],
       );
-      return Promise.resolve(ergebnisse.register ?? 'loggedIn');
+      return Promise.resolve(results.register ?? 'loggedIn');
     },
   } as unknown as AuthStore;
-  return { store, protokoll };
+  return { store, calls };
 }
 
 describe('LoginModel', () => {
@@ -83,24 +81,24 @@ describe('LoginModel', () => {
 
   describe('setMode', () => {
     it('wechselt den Modus und räumt die alte Fehlermeldung weg', () => {
-      const { store, protokoll } = fakeAuthStore();
+      const { store, calls } = fakeAuthStore();
       const model = new LoginModel(store);
       model.setMode('register');
       expect(model.mode).toBe('register');
-      expect(protokoll.fehlerGeleert).toBe(1);
+      expect(calls.errorsCleared).toBe(1);
     });
   });
 
   describe('submit im Login-Modus', () => {
     it('meldet mit getrimmtem Benutzernamen an und leert danach die Felder', async () => {
-      const { store, protokoll } = fakeAuthStore({ login: true });
+      const { store, calls } = fakeAuthStore({ login: true });
       const model = new LoginModel(store);
       model.setUsername('  marco  ');
       model.setPassword('passwort123');
 
       expect(await model.submit()).toBe(true);
 
-      expect(protokoll.logins).toEqual([['marco', 'passwort123']]);
+      expect(calls.logins).toEqual([['marco', 'passwort123']]);
       expect(model.username).toBe('');
       expect(model.password).toBe('');
     });
@@ -120,7 +118,7 @@ describe('LoginModel', () => {
 
   describe('submit im Registrieren-Modus', () => {
     it('erste Registrierung meldet direkt an und leert die Felder', async () => {
-      const { store, protokoll } = fakeAuthStore({ register: 'loggedIn' });
+      const { store, calls } = fakeAuthStore({ register: 'loggedIn' });
       const model = new LoginModel(store);
       model.setMode('register');
       model.setUsername(' marco ');
@@ -128,7 +126,7 @@ describe('LoginModel', () => {
 
       expect(await model.submit()).toBe(true);
 
-      expect(protokoll.registrierungen).toEqual([['marco', 'passwort123']]);
+      expect(calls.registrations).toEqual([['marco', 'passwort123']]);
       expect(model.username).toBe('');
       expect(model.mode).toBe('login');
     });
@@ -150,7 +148,7 @@ describe('LoginModel', () => {
     });
 
     it('reicht den Bootstrap-Token getrimmt an den AuthStore weiter (Erst-Admin)', async () => {
-      const { store, protokoll } = fakeAuthStore({ register: 'loggedIn' });
+      const { store, calls } = fakeAuthStore({ register: 'loggedIn' });
       const model = new LoginModel(store);
       model.setMode('register');
       model.setUsername('marco');
@@ -159,11 +157,11 @@ describe('LoginModel', () => {
 
       expect(await model.submit()).toBe(true);
 
-      expect(protokoll.registrierungen).toEqual([['marco', 'passwort123', 'boot-tok-123']]);
+      expect(calls.registrations).toEqual([['marco', 'passwort123', 'boot-tok-123']]);
     });
 
     it('leeres Token-Feld: es wird KEIN Token mitgeschickt (Normalfall aller Nutzer)', async () => {
-      const { store, protokoll } = fakeAuthStore({ register: 'pending' });
+      const { store, calls } = fakeAuthStore({ register: 'pending' });
       const model = new LoginModel(store);
       model.setMode('register');
       model.setUsername('gast');
@@ -171,7 +169,7 @@ describe('LoginModel', () => {
 
       expect(await model.submit()).toBe(true);
 
-      expect(protokoll.registrierungen).toEqual([['gast', 'passwort123']]);
+      expect(calls.registrations).toEqual([['gast', 'passwort123']]);
     });
 
     it('gescheiterte Registrierung bleibt im Registrieren-Modus', async () => {

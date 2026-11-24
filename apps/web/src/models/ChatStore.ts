@@ -38,9 +38,9 @@ const TURN_ACTIVE_QUERY = /* GraphQL */ `
   }
 `;
 
-const CHAT_EVENTS_SUBSCRIPTION = (projectId: string): string => /* GraphQL */ `
-  subscription {
-    chatEvents(projectId: ${JSON.stringify(projectId)}) {
+const CHAT_EVENTS_SUBSCRIPTION = /* GraphQL */ `
+  subscription ChatEvents($projectId: ID!) {
+    chatEvents(projectId: $projectId) {
       turnActive
       message {
         ${MESSAGE_FIELDS}
@@ -54,8 +54,16 @@ const OPTIMISTIC_PREFIX = 'optimistic-';
 
 /** Liest das Steering-Flag aus der Vite-Env (Default: aus). */
 function readSteerOnSendEnv(): boolean {
-  const viteEnv = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
-  return viteEnv?.VITE_MACVIBES_STEER_ON_SEND === 'true';
+  return import.meta.env.VITE_MACVIBES_STEER_ON_SEND === 'true';
+}
+
+/** SSE-URL der chatEvents-Subscription (GraphQL über GET, Projekt als Variable). */
+function chatEventsUrl(projectId: string): string {
+  const params = new URLSearchParams({
+    query: CHAT_EVENTS_SUBSCRIPTION,
+    variables: JSON.stringify({ projectId }),
+  });
+  return `/graphql?${params.toString()}`;
 }
 
 /**
@@ -208,8 +216,7 @@ export class ChatStore {
     }
     if (epoch !== this.connectEpoch) return;
 
-    const url = `/graphql?query=${encodeURIComponent(CHAT_EVENTS_SUBSCRIPTION(projectId))}`;
-    const eventSource = new EventSource(url);
+    const eventSource = new EventSource(chatEventsUrl(projectId));
     // GraphQL Yoga sendet benannte SSE-Events ("event: next"), nicht "message".
     eventSource.addEventListener('next', (event: MessageEvent<string>) => {
       // Nachzügler einer bereits ersetzten Verbindung ignorieren.

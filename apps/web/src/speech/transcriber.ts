@@ -58,7 +58,7 @@ export interface ChromeRecognitionErrorEvent {
   readonly error: string;
 }
 
-export interface ChromeSpeechRecognition {
+interface ChromeSpeechRecognition {
   lang: string;
   continuous: boolean;
   interimResults: boolean;
@@ -85,7 +85,7 @@ interface OnDeviceOptions {
   quality?: 'command' | 'dictation' | 'conversation';
 }
 
-export interface ChromeSpeechRecognitionCtor {
+interface ChromeSpeechRecognitionCtor {
   new (): ChromeSpeechRecognition;
   available?(
     options: OnDeviceOptions,
@@ -194,7 +194,7 @@ function speechErrorMessage(code: string): string {
 }
 
 /** Watchdog-Zeiten — im Test überschreibbar. */
-export interface TranscriberTimeouts {
+interface TranscriberTimeouts {
   /** Sprachbeginn erkannt, aber nie ein Ergebnis → Abbruch (Zombie-Erkenner). */
   resultTimeoutMs?: number;
   /** stop() ohne end-Event → abort() + erzwungenes Ende (UI nie festhängen). */
@@ -280,8 +280,9 @@ export function createChromeTranscriber(timeouts: TranscriberTimeouts = {}): Tra
           );
           try {
             rec.abort();
-          } catch {
-            // abort darf nie werfen dürfen — Ende erzwingen wir ohnehin.
+          } catch (err) {
+            // Das Ende erzwingen wir ohnehin — der Fehler wird nur protokolliert.
+            console.warn('SpeechRecognition.abort() nach Zombie-Timeout fehlgeschlagen', err);
           }
           finish();
         }, resultTimeoutMs);
@@ -308,8 +309,9 @@ export function createChromeTranscriber(timeouts: TranscriberTimeouts = {}): Tra
         stopTimer = null;
         try {
           current.rec.abort();
-        } catch {
+        } catch (err) {
           // s. o. — Ende wird so oder so erzwungen.
+          console.warn('SpeechRecognition.abort() nach stop() fehlgeschlagen', err);
         }
         current.finish();
       }, stopTimeoutMs);

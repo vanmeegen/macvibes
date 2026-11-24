@@ -1,8 +1,8 @@
 import { runInAction } from 'mobx';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { gqlRequest } from '../../api/graphqlClient';
-import type { Project, Template } from '../../api/types';
-import { AuthStore } from '../AuthStore';
+import type { Project } from '../../api/types';
+import { makeAuthStore, makeProject, makeTemplate, makeUser } from '../../__tests__/factories';
 import { PROJECT_FILTER_STORAGE_KEY, ProjectsStore } from '../ProjectsStore';
 
 vi.mock('../../api/graphqlClient', () => ({
@@ -11,37 +11,7 @@ vi.mock('../../api/graphqlClient', () => ({
 
 const mockGql = vi.mocked(gqlRequest);
 
-function makeProject(overrides: Partial<Project> & { id: string }): Project {
-  return {
-    name: `Projekt ${overrides.id}`,
-    templateDir: 'react-starter',
-    owner: { id: 'u1', username: 'alice', role: 'admin', approved: true },
-    agentModel: 'claude-sonnet-5',
-    lastActivityAt: '2026-07-02T12:00:00.000Z',
-    sandboxStatus: 'stopped',
-    previewStatus: 'stopped',
-    turnActive: false,
-    ...overrides,
-  };
-}
-
-const templates: Template[] = [
-  {
-    name: 'React Starter',
-    description: 'Vite + React Grundgerüst',
-    dir: 'react-starter',
-  },
-];
-
-function makeAuthStore(username: string | null): AuthStore {
-  const authStore = new AuthStore();
-  runInAction(() => {
-    authStore.currentUser =
-      username === null ? null : { id: 'u1', username, role: 'user', approved: true };
-    authStore.initialized = true;
-  });
-  return authStore;
-}
+const templates = [makeTemplate()];
 
 describe('ProjectsStore', () => {
   beforeEach(() => {
@@ -83,11 +53,11 @@ describe('ProjectsStore', () => {
         store.projects = [
           makeProject({
             id: 'p1',
-            owner: { id: 'u1', username: 'alice', role: 'admin', approved: true },
+            owner: makeUser({ role: 'admin' }),
           }),
           makeProject({
             id: 'p2',
-            owner: { id: 'u2', username: 'bob', role: 'user', approved: true },
+            owner: makeUser({ id: 'u2', username: 'bob' }),
           }),
         ];
       });
@@ -102,11 +72,11 @@ describe('ProjectsStore', () => {
         store.projects = [
           makeProject({
             id: 'p1',
-            owner: { id: 'u1', username: 'alice', role: 'admin', approved: true },
+            owner: makeUser({ role: 'admin' }),
           }),
           makeProject({
             id: 'p2',
-            owner: { id: 'u2', username: 'bob', role: 'user', approved: true },
+            owner: makeUser({ id: 'u2', username: 'bob' }),
           }),
         ];
       });
@@ -214,7 +184,7 @@ describe('copyProject („Kopieren und Anpassen" — für JEDEN User)', () => {
         makeProject({
           id: 'p-bob',
           name: 'Bobs Dashboard',
-          owner: { id: 'u2', username: 'bob', role: 'user', approved: true },
+          owner: makeUser({ id: 'u2', username: 'bob' }),
         }),
       ];
     });
@@ -263,7 +233,7 @@ describe('copyProject („Kopieren und Anpassen" — für JEDEN User)', () => {
 describe('canManage — Kartenmenü für Eigentümer und Admins', () => {
   const foreignProject = makeProject({
     id: 'p-bob',
-    owner: { id: 'u2', username: 'bob', role: 'user', approved: true },
+    owner: makeUser({ id: 'u2', username: 'bob' }),
   });
 
   it('erlaubt normalen Usern nur eigene Projekte', () => {

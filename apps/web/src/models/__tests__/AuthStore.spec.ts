@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { gqlRequest } from '../../api/graphqlClient';
-import type { User } from '../../api/types';
+import { makeUser } from '../../__tests__/factories';
 import { AuthStore } from '../AuthStore';
 
 vi.mock('../../api/graphqlClient', () => ({
@@ -9,13 +9,8 @@ vi.mock('../../api/graphqlClient', () => ({
 
 const mockGql = vi.mocked(gqlRequest);
 
-const admin: User = { id: 'u1', username: 'marco', role: 'admin', approved: true };
-const pending: User = {
-  id: 'u2',
-  username: 'gast',
-  role: 'user',
-  approved: false,
-};
+const admin = makeUser({ id: 'u1', username: 'marco', role: 'admin' });
+const pending = makeUser({ id: 'u2', username: 'gast', approved: false });
 
 describe('AuthStore', () => {
   beforeEach(() => {

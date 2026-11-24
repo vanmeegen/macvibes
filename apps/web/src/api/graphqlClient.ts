@@ -1,4 +1,4 @@
-export interface GraphQLResponse<T> {
+interface GraphQLResponse<T> {
   data?: T;
   errors?: ReadonlyArray<{ message: string }>;
 }
