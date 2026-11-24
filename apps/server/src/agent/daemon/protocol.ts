@@ -1,4 +1,5 @@
 import type { AgentEvent } from '../events';
+import { PREVIEW_STATUSES } from '../../preview/status';
 import type { PreviewStatus } from '../../preview/status';
 
 /**
@@ -65,17 +66,9 @@ export type DaemonToHostMessage =
    */
   | { kind: 'preview-status'; status: PreviewStatus };
 
-/** Wire-Whitelist — nichts Unbekanntes vom Netz durchreichen. */
-const PREVIEW_STATUS_VALUES: readonly PreviewStatus[] = [
-  'starting',
-  'ready',
-  'restarting',
-  'failed',
-  'stopped',
-];
-
+/** Wire-Whitelist — nichts Unbekanntes vom Netz durchreichen (Werte: preview/status). */
 function isPreviewStatus(value: unknown): value is PreviewStatus {
-  return typeof value === 'string' && (PREVIEW_STATUS_VALUES as readonly string[]).includes(value);
+  return typeof value === 'string' && (PREVIEW_STATUSES as readonly string[]).includes(value);
 }
 
 function parseJsonObject(raw: string): Record<string, unknown> | null {

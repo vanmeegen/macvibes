@@ -7,4 +7,5 @@
  * VM-Bundle eine Abhängigkeit in genau die Schicht, die den Host verwaltet —
  * hinter der Sicherheitsgrenze, auf deren anderer Seite der Daemon läuft.
  */
-export type PreviewStatus = 'starting' | 'ready' | 'restarting' | 'failed' | 'stopped';
+export const PREVIEW_STATUSES = ['starting', 'ready', 'restarting', 'failed', 'stopped'] as const;
+export type PreviewStatus = (typeof PREVIEW_STATUSES)[number];

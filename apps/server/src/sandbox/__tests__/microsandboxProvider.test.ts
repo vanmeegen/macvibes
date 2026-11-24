@@ -82,6 +82,8 @@ function providerConfig(home: string, bare: string): MicrosandboxProviderConfig 
     memoryMib: 512,
     agentDaemon: {
       bundleDir,
+      // Diese Suite vergibt keine echten Tokens — nichts zu entwerten.
+      revokeToken: () => {},
       envFor: (sandboxName) => ({
         MACVIBES_AGENT_GATEWAY_URL: `ws://host.microsandbox.internal:9/agent?sandbox=${sandboxName}&token=test`,
         MACVIBES_AGENT_CWD: '/work',

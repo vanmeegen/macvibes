@@ -356,7 +356,11 @@ export function createAnthropicProxy(config: AnthropicProxyConfig): AnthropicPro
         ...(hasBody ? { body: outgoingBody } : {}),
       } as RequestInit);
     } catch (error) {
-      // Upstream (z. B. lokaler Router) nicht erreichbar — klare 502 statt 500.
+      // Upstream (z. B. lokaler Modell-Server) nicht erreichbar — klare 502
+      // statt 500, und auch im Host-Log sichtbar (die VM sieht nur die 502).
+      console.warn(
+        `Credential-Proxy: Modell-Upstream ${route.upstreamUrl} nicht erreichbar: ${logSafe(String(error))}`,
+      );
       return new Response(
         `Modell-Upstream nicht erreichbar (${route.upstreamUrl}): ${String(error)}`,
         { status: 502 },

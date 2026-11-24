@@ -30,7 +30,7 @@ export interface AgentDaemonProviderConfig {
   /** Env für den Daemon der jeweiligen Sandbox (Gateway-URL enthält den Namen). */
   envFor: (sandboxName: string) => Record<string, string>;
   /** Entwertet das VM-Token beim Stoppen — sonst gilt es unbegrenzt weiter. */
-  revokeToken?: (sandboxName: string) => void;
+  revokeToken: (sandboxName: string) => void;
 }
 
 export interface MicrosandboxProviderConfig {
@@ -163,7 +163,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     try {
       await this.bootVm(context, name, hostPort, { workspaceDir, agentConfigDir, bunCacheDir });
     } catch (error) {
-      this.config.agentDaemon.revokeToken?.(name);
+      this.config.agentDaemon.revokeToken(name);
       this.ports.release(hostPort);
       await this.stopVm(name);
       throw error;
@@ -193,7 +193,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       stop: async () => {
         // Token SOFORT entwerten: ein aus der VM abgeflossenes Token öffnete
         // sonst Credential- und Egress-Proxy noch lange nach ihrem Ende.
-        this.config.agentDaemon.revokeToken?.(name);
+        this.config.agentDaemon.revokeToken(name);
         unsubscribeStatus();
         poller.stop();
         this.ports.release(hostPort);

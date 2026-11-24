@@ -133,6 +133,7 @@ beforeAll(async () => {
     memoryMib: 1024,
     agentDaemon: {
       bundleDir,
+      revokeToken: (sandboxName) => tokens.revoke(sandboxName),
       envFor: (sandboxName) => {
         const vmToken = tokens.mint(sandboxName);
         return {

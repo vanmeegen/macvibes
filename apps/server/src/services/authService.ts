@@ -266,6 +266,16 @@ export async function rejectUser(db: Db, userId: string): Promise<void> {
   await db.delete(users).where(eq(users.id, userId));
 }
 
+/** Gibt es schon (mindestens) einen Admin? */
+async function adminExists(db: Db): Promise<boolean> {
+  const admins = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.role, 'admin'))
+    .limit(1);
+  return admins.length > 0;
+}
+
 /**
  * Bootstrap beim Serverstart: der per Config gesetzte `adminUsername` wird — falls
  * vorhanden — zum Admin befördert und freigeschaltet. Idempotent; ohne Config-Wert
@@ -278,8 +288,7 @@ export async function ensureAdmin(db: Db, config: AuthConfig): Promise<void> {
     // H3: Ohne Bootstrap-Namen vergibt register() keine Admin-Rolle mehr. Das
     // darf den Betreiber nicht ratlos lassen — ohne Admin schaltet niemand
     // Nutzer frei, die Instanz wäre also unbenutzbar ohne erkennbaren Grund.
-    const admins = await db.select({ id: users.id }).from(users).where(eq(users.role, 'admin'));
-    if (admins.length === 0) {
+    if (!(await adminExists(db))) {
       console.warn(
         'Kein Admin vorhanden und MACVIBES_ADMIN_USERNAME ist nicht gesetzt. ' +
           'Ohne Admin kann niemand neue Nutzer freischalten. ' +
@@ -300,8 +309,7 @@ export async function ensureAdmin(db: Db, config: AuthConfig): Promise<void> {
     // sehen (existiert bereits ein Admin, ist der Bootstrap-Pfad tot und die
     // Warnung nur Rauschen).
     if (config.adminBootstrapToken == null) {
-      const admins = await db.select({ id: users.id }).from(users).where(eq(users.role, 'admin'));
-      if (admins.length === 0) {
+      if (!(await adminExists(db))) {
         console.warn(
           `SICHERHEITSHINWEIS: Noch KEIN Admin vorhanden und der Bootstrap-Name "${username}" ` +
             'ist UNGESCHÜTZT — wer sich zuerst mit diesem Namen registriert, wird Admin ' +
@@ -319,9 +327,8 @@ export async function ensureAdmin(db: Db, config: AuthConfig): Promise<void> {
   // Namen trug; da register den Namen nicht reserviert und .env.example ihn
   // verrät, konnte ein Fremder ihn vorbelegen und wurde beim nächsten
   // Neustart Admin.
-  const admins = await db.select({ id: users.id }).from(users).where(eq(users.role, 'admin'));
   const erzwungen = config.forceAdmin === true;
-  if (admins.length > 0 && !erzwungen) {
+  if ((await adminExists(db)) && !erzwungen) {
     console.warn(
       `Bootstrap-Admin "${username}" wird NICHT befördert — es gibt bereits einen Admin. ` +
         'Zum Erzwingen MACVIBES_FORCE_ADMIN=1 setzen.',

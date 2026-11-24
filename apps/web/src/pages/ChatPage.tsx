@@ -4,7 +4,7 @@ import LinearProgress from '@mui/material/LinearProgress';
 import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
 import { observer } from 'mobx-react-lite';
-import { useEffect } from 'react';
+import { useLayoutEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import type { ChatPageModel } from '../models/ChatPageModel';
 import type { ChatStore } from '../models/ChatStore';
@@ -35,7 +35,10 @@ export const ChatPage = observer(function ChatPage({
 }: ChatPageProps): JSX.Element {
   const { id } = useParams<{ id: string }>();
 
-  useEffect(() => {
+  // Layout-Effekt statt Effekt: open() setzt das Projekt des Models. Liefe es
+  // erst nach dem ersten Zeichnen, zeigte die Seite für einen Frame den
+  // Zustand „kein Projekt" (Titel „Projekt", Overlay „Sandbox gestoppt").
+  useLayoutEffect(() => {
     if (id === undefined) return;
     model.open(id);
     return () => model.close();

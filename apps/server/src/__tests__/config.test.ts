@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseEnvFile } from '@macvibes/shared/node';
 import { loadConfig, loadHomeEnvFile, resolveDbPath } from '../config';
+import { BUN_PIN } from '../../../../scripts/lib/doctorState';
 import { PORT_DEFAULTS } from '../../../../scripts/lib/ports';
 import { LITELLM_BRIDGE_URL } from '../../../../scripts/lib/setup';
 import { DEFAULT_BRIDGE_PORT } from '../../local-router/bridgePort';
@@ -316,6 +317,27 @@ describe('loadConfig zentralisiert die früher verstreuten Env-Reads (M6)', () =
       expect(new URL(url).port).toBe(DEFAULT_BRIDGE_PORT);
     } finally {
       if (gesichert !== undefined) Bun.env.MACVIBES_LITELLM_URL = gesichert;
+    }
+  });
+
+  /**
+   * Bun ist an EINE Version gepinnt (CLAUDE.md): Host-Typen, VM-Image und der
+   * Doctor müssen dieselbe nennen — sonst läuft die VM still auf einer anderen
+   * Bun-Version als der Host, gegen den getestet wird.
+   */
+  test('Bun-Pin driftet nicht: VM-Image, @types/bun und Doctor nennen dieselbe Version', () => {
+    const gesichert = Bun.env.MACVIBES_SANDBOX_IMAGE;
+    delete Bun.env.MACVIBES_SANDBOX_IMAGE;
+    try {
+      const rootManifest = JSON.parse(
+        readFileSync(join(import.meta.dir, '../../../../package.json'), 'utf8'),
+      ) as { devDependencies: Record<string, string> };
+      const pin = rootManifest.devDependencies['@types/bun'] ?? '';
+      expect(pin).toMatch(/^\d+\.\d+\.\d+$/);
+      expect(loadConfig().sandbox.image).toBe(`oven/bun:${pin}`);
+      expect(BUN_PIN).toBe(pin);
+    } finally {
+      if (gesichert !== undefined) Bun.env.MACVIBES_SANDBOX_IMAGE = gesichert;
     }
   });
 });
