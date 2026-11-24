@@ -1,5 +1,4 @@
-/** Zustände, die der Watchdog (core/processSupervisor bzw. monit) im Backend meldet. */
-export type PreviewStatus = 'starting' | 'ready' | 'restarting' | 'failed' | 'stopped';
+import type { PreviewStatus } from '../api/types';
 
 export interface PreviewView {
   /** iframe anzeigen? Nur wenn der Dev-Server läuft und der Gateway-Port da ist. */
@@ -11,15 +10,8 @@ export interface PreviewView {
   message: string;
 }
 
-/**
- * Reine Ableitung der Preview-Darstellung aus dem autoritativen Backend-Status
- * (R7). Die iframe-URL zeigt auf das **Preview-Gateway** (fester Port) mit
- * `/p/<projectId>/`, NICHT auf den dynamischen VM-Port — nur so ist die Preview
- * über Remote/VPN erreichbar (nur der Gateway-Port wird geforwardet). Das
- * Gateway routet über Referer/Cookie zur richtigen VM.
- */
 /** Protokoll-Kontext der aufrufenden Seite (HTTPS-Terminierung via Caddy). */
-export interface PreviewProtocolOptions {
+interface PreviewProtocolOptions {
   /** window.location.protocol der App-Seite ('http:' | 'https:'). */
   pageProtocol: string;
   /** HTTPS-Port des Preview-Gateways (Caddy-Terminierung) — null wenn keiner. */
@@ -31,8 +23,15 @@ function overlay(message: string, spinner = false): PreviewView {
   return { showIframe: false, url: null, spinner, message };
 }
 
+/**
+ * Reine Ableitung der Preview-Darstellung aus dem autoritativen Backend-Status
+ * (R7). Die iframe-URL zeigt auf das **Preview-Gateway** (fester Port) mit
+ * `/p/<projectId>/`, NICHT auf den dynamischen VM-Port — nur so ist die Preview
+ * über Remote/VPN erreichbar (nur der Gateway-Port wird geforwardet). Das
+ * Gateway routet über Referer/Cookie zur richtigen VM.
+ */
 export function derivePreviewView(
-  status: PreviewStatus | string,
+  status: PreviewStatus,
   host: string,
   gatewayPort: number | null,
   projectId: string | null,
@@ -63,7 +62,13 @@ export function derivePreviewView(
       return overlay('Preview wird neu gestartet …', true);
     case 'failed':
       return overlay('Preview konnte nicht gestartet werden — bitte das Projekt neu öffnen.');
-    default:
+    case 'ready':
+    case 'stopped':
+      // 'ready' landet nur hier, wenn Gateway-Port oder Projekt fehlen.
       return overlay('Preview nicht verfügbar — Sandbox gestoppt.');
   }
+  // Laufzeit-Netz: ein Status, den dieses Bundle noch nicht kennt.
+  const unknown: never = status;
+  console.warn('Unbekannter Preview-Status vom Server', unknown);
+  return overlay('Preview nicht verfügbar — Sandbox gestoppt.');
 }

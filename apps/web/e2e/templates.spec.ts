@@ -28,16 +28,22 @@ function ensureInstalled(cwd: string): void {
 
 async function waitForHttp(port: number, timeoutMs = 90_000): Promise<void> {
   const start = Date.now();
+  // Letzter Fehlschlag — landet in der Timeout-Meldung, statt verloren zu gehen.
+  let lastFailure = 'keine Antwort';
   while (Date.now() - start < timeoutMs) {
     try {
       const res = await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(2000) });
       if (res.ok) return;
-    } catch {
+      lastFailure = `HTTP ${res.status}`;
+    } catch (err) {
       // Dev-Server bootet noch.
+      lastFailure = err instanceof Error ? err.message : String(err);
     }
     await new Promise((r) => setTimeout(r, 400));
   }
-  throw new Error(`Template-Dev-Server auf Port ${port} wurde nicht erreichbar`);
+  throw new Error(
+    `Template-Dev-Server auf Port ${port} wurde nicht erreichbar (zuletzt: ${lastFailure})`,
+  );
 }
 
 function startDevServer(

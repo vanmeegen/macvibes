@@ -9,10 +9,11 @@ import {
   type SpeechSupport,
   type Transcriber,
 } from '../speech/transcriber';
+import { browserStorage, readSetting, writeSetting, type SettingsStorage } from './safeStorage';
 
 export const SPEECH_LANG_STORAGE_KEY = 'macvibes.speechLang';
 
-export type SpeechStatus = 'idle' | 'installing' | 'recording';
+type SpeechStatus = 'idle' | 'installing' | 'recording';
 
 /** Minimaler Ausschnitt des ChatStore, den das Diktat braucht (Entwurf). */
 export interface DraftTarget {
@@ -21,23 +22,16 @@ export interface DraftTarget {
 }
 
 /** Test-/Engine-Seams — Default ist die Chrome-On-Device-Erkennung. */
-export interface SpeechDeps {
+interface SpeechDeps {
   support?: () => SpeechSupport;
   availability?: (lang: SpeechLang) => Promise<SpeechAvailability>;
   install?: (lang: SpeechLang) => Promise<boolean>;
   createTranscriber?: () => Transcriber;
-  storage?: Pick<Storage, 'getItem' | 'setItem'>;
+  storage?: SettingsStorage;
 }
 
-function readStoredLang(storage: Pick<Storage, 'getItem' | 'setItem'>): SpeechLang {
-  const stored = storage.getItem(SPEECH_LANG_STORAGE_KEY);
-  return stored === 'en-US' ? 'en-US' : 'de-DE';
-}
-
-/** Zugriff auf localStorage — im SSR-/Testkontext ggf. nicht vorhanden. */
-function defaultStorage(): Pick<Storage, 'getItem' | 'setItem'> {
-  if (typeof localStorage !== 'undefined') return localStorage;
-  return { getItem: () => null, setItem: () => {} };
+function readStoredLang(storage: SettingsStorage): SpeechLang {
+  return readSetting(storage, SPEECH_LANG_STORAGE_KEY) === 'en-US' ? 'en-US' : 'de-DE';
 }
 
 /**
@@ -62,7 +56,7 @@ export class SpeechStore {
   private readonly availabilityFn: (lang: SpeechLang) => Promise<SpeechAvailability>;
   private readonly installFn: (lang: SpeechLang) => Promise<boolean>;
   private readonly createTranscriber: () => Transcriber;
-  private readonly storage: Pick<Storage, 'getItem' | 'setItem'>;
+  private readonly storage: SettingsStorage;
   /** Aktive Erkennung — bewusst nicht observable. */
   private transcriber: Transcriber | null = null;
 
@@ -74,7 +68,7 @@ export class SpeechStore {
     this.availabilityFn = deps.availability ?? chromeSpeechAvailability;
     this.installFn = deps.install ?? installChromeSpeech;
     this.createTranscriber = deps.createTranscriber ?? createChromeTranscriber;
-    this.storage = deps.storage ?? defaultStorage();
+    this.storage = deps.storage ?? browserStorage();
     this.lang = readStoredLang(this.storage);
     // draftTarget bleibt eine REFERENZ (kein deep-observable Klon) — sonst
     // schreibt setDraft in eine MobX-Kopie und der echte Entwurf bleibt leer.
@@ -97,10 +91,6 @@ export class SpeechStore {
   /**
    * Beschriftung des Mikro-Buttons. Die Verfügbarkeit schlägt den Status: wer
    * gar nicht aufnehmen kann, soll den Grund lesen, nicht „Aufnahme stoppen".
-   *
-   * Lag vorher als Funktion in ChatPage.tsx — Verzweigungslogik in einer
-   * Komponente, entgegen der verbindlichen Presentation-Model-Regel, und dort
-   * auch nicht testbar.
    */
   get tooltip(): string {
     switch (this.availability) {
@@ -120,6 +110,25 @@ export class SpeechStore {
     if (this.status === 'recording') return 'Aufnahme stoppen';
     if (this.status === 'installing') return 'Sprachpaket wird installiert …';
     return 'Diktieren — läuft komplett lokal im Browser';
+  }
+
+  get isRecording(): boolean {
+    return this.status === 'recording';
+  }
+
+  /** Aria-Label des Mikro-Buttons. */
+  get micLabel(): string {
+    return this.isRecording ? 'Aufnahme stoppen' : 'Diktieren';
+  }
+
+  /** Kürzel der Diktiersprache für den Umschalter. */
+  get langLabel(): string {
+    return this.lang === 'de-DE' ? 'DE' : 'EN';
+  }
+
+  /** Vorläufiger Erkennungstext — nur während der Aufnahme und wenn es einen gibt. */
+  get showInterim(): boolean {
+    return this.isRecording && this.interimText.length > 0;
   }
 
   /** Grundvoraussetzungen prüfen (beim Mount) — nur synchrone Checks. */
@@ -148,7 +157,9 @@ export class SpeechStore {
     }
 
     if (this.availability === 'downloadable') {
-      this.status = 'installing';
+      runInAction(() => {
+        this.status = 'installing';
+      });
       const installed = await this.installFn(this.lang);
       if (!installed) {
         runInAction(() => {
@@ -181,9 +192,14 @@ export class SpeechStore {
     if (lang === this.lang) return;
     if (this.status === 'recording') this.transcriber?.stop();
     this.lang = lang;
-    this.storage.setItem(SPEECH_LANG_STORAGE_KEY, lang);
+    writeSetting(this.storage, SPEECH_LANG_STORAGE_KEY, lang);
     // Probe zurücksetzen — der nächste Klick prüft die neue Sprache.
     this.init();
+  }
+
+  /** Wechselt zwischen Deutsch und Englisch. */
+  toggleLang(): void {
+    this.setLang(this.lang === 'de-DE' ? 'en-US' : 'de-DE');
   }
 
   private handleInterim(text: string): void {

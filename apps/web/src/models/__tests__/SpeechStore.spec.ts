@@ -253,6 +253,49 @@ describe('SpeechStore', () => {
       expect(store.status).toBe('idle');
     });
 
+    it('ein werfender Storage (Private-Modus) kippt weder Start noch Sprachwechsel', () => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const broken = {
+        getItem: (): string | null => {
+          throw new Error('SecurityError');
+        },
+        setItem: (): void => {
+          throw new Error('QuotaExceededError');
+        },
+      };
+      const store = new SpeechStore(draftTarget(), { support: () => 'unknown', storage: broken });
+      expect(store.lang).toBe('de-DE');
+
+      store.setLang('en-US');
+
+      expect(store.lang).toBe('en-US');
+    });
+
+    it('toggleLang wechselt DE ↔ EN, langLabel zeigt das Kürzel', () => {
+      const { store } = makeStore();
+      expect(store.langLabel).toBe('DE');
+      store.toggleLang();
+      expect(store.lang).toBe('en-US');
+      expect(store.langLabel).toBe('EN');
+      store.toggleLang();
+      expect(store.lang).toBe('de-DE');
+    });
+
+    it('micLabel/isRecording/showInterim folgen dem Aufnahme-Status', async () => {
+      const { store, transcriber } = makeStore();
+      store.init();
+      expect(store.isRecording).toBe(false);
+      expect(store.micLabel).toBe('Diktieren');
+
+      await store.toggle();
+      expect(store.isRecording).toBe(true);
+      expect(store.micLabel).toBe('Aufnahme stoppen');
+      expect(store.showInterim).toBe(false);
+
+      transcriber.callbacks?.onInterim('hallo we');
+      expect(store.showInterim).toBe(true);
+    });
+
     it('setLang setzt die Probe zurück — nächster Klick prüft die neue Sprache', async () => {
       const availability = vi.fn((lang: string) =>
         Promise.resolve<SpeechAvailability>(lang === 'de-DE' ? 'available' : 'downloadable'),

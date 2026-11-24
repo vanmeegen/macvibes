@@ -3,7 +3,7 @@ import { toErrorMessage } from '../api/errors';
 import { gqlRequest } from '../api/graphqlClient';
 import type { ChatMessage } from '../api/types';
 
-export interface ChatEventPayload {
+interface ChatEventPayload {
   message: ChatMessage;
   turnActive: boolean;
 }
@@ -38,9 +38,9 @@ const TURN_ACTIVE_QUERY = /* GraphQL */ `
   }
 `;
 
-const CHAT_EVENTS_SUBSCRIPTION = (projectId: string): string => /* GraphQL */ `
-  subscription {
-    chatEvents(projectId: ${JSON.stringify(projectId)}) {
+const CHAT_EVENTS_SUBSCRIPTION = /* GraphQL */ `
+  subscription ChatEvents($projectId: ID!) {
+    chatEvents(projectId: $projectId) {
       turnActive
       message {
         ${MESSAGE_FIELDS}
@@ -49,26 +49,30 @@ const CHAT_EVENTS_SUBSCRIPTION = (projectId: string): string => /* GraphQL */ `
   }
 `;
 
-/**
- * Presentation Model der Chat-Page: Verlauf, Streaming-Events (SSE via
- * GraphQL-Subscription), Eingabe-Entwurf, Turn-Status und Stop (R6).
- */
 /** Präfix der optimistischen (noch nicht serverbestätigten) User-Bubbles. */
 const OPTIMISTIC_PREFIX = 'optimistic-';
 
 /** Liest das Steering-Flag aus der Vite-Env (Default: aus). */
 function readSteerOnSendEnv(): boolean {
-  const viteEnv = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
-  return viteEnv?.VITE_MACVIBES_STEER_ON_SEND === 'true';
+  return import.meta.env.VITE_MACVIBES_STEER_ON_SEND === 'true';
 }
 
+/** SSE-URL der chatEvents-Subscription (GraphQL über GET, Projekt als Variable). */
+function chatEventsUrl(projectId: string): string {
+  const params = new URLSearchParams({
+    query: CHAT_EVENTS_SUBSCRIPTION,
+    variables: JSON.stringify({ projectId }),
+  });
+  return `/graphql?${params.toString()}`;
+}
+
+/**
+ * Chat eines Projekts: Verlauf, Streaming-Events (SSE via
+ * GraphQL-Subscription), Eingabe-Entwurf, Turn-Status und Stop (R6).
+ */
 export class ChatStore {
   messages: ChatMessage[] = [];
   turnActive = false;
-  /** Chat-Spalte ausgeblendet → Preview nimmt das ganze Fenster ein. */
-  chatCollapsed = false;
-  /** Preview-Spalte ausgeblendet → Chat nimmt das ganze Fenster ein (Fokus/Phone). */
-  previewCollapsed = false;
   error: string | null = null;
   draft = '';
   projectId: string | null = null;
@@ -118,16 +122,19 @@ export class ChatStore {
     this.draft = value;
   }
 
-  toggleChatCollapsed(): void {
-    this.chatCollapsed = !this.chatCollapsed;
-    // Wechselseitig exklusiv — nie beide Spalten gleichzeitig ausgeblendet
-    // (sonst leerer Bildschirm).
-    if (this.chatCollapsed) this.previewCollapsed = false;
+  /** Senden nur mit nicht-leerem Entwurf. */
+  get canSend(): boolean {
+    return this.draft.trim().length > 0;
   }
 
-  togglePreviewCollapsed(): void {
-    this.previewCollapsed = !this.previewCollapsed;
-    if (this.previewCollapsed) this.chatCollapsed = false;
+  /**
+   * „Agent arbeitet"-Bubble: solange ein Turn läuft und der Agent noch nichts
+   * Sichtbares streamt (danach zeigt die wachsende Nachricht selbst den Fortschritt).
+   */
+  get showWorkingIndicator(): boolean {
+    if (!this.turnActive) return false;
+    const lastRole = this.messages[this.messages.length - 1]?.role;
+    return lastRole !== 'assistant' && lastRole !== 'thinking';
   }
 
   /**
@@ -186,9 +193,6 @@ export class ChatStore {
     this.messages = [];
     this.error = null;
     this.turnActive = false;
-    // Projektwechsel: beide Spalten sichtbar starten (kein „versteckter" Chat/Preview).
-    this.chatCollapsed = false;
-    this.previewCollapsed = false;
 
     try {
       const data = await gqlRequest<{ chatMessages: ChatMessage[]; turnActive: boolean }>(
@@ -212,8 +216,7 @@ export class ChatStore {
     }
     if (epoch !== this.connectEpoch) return;
 
-    const url = `/graphql?query=${encodeURIComponent(CHAT_EVENTS_SUBSCRIPTION(projectId))}`;
-    const eventSource = new EventSource(url);
+    const eventSource = new EventSource(chatEventsUrl(projectId));
     // GraphQL Yoga sendet benannte SSE-Events ("event: next"), nicht "message".
     eventSource.addEventListener('next', (event: MessageEvent<string>) => {
       // Nachzügler einer bereits ersetzten Verbindung ignorieren.
@@ -311,10 +314,10 @@ export class ChatStore {
     if (projectId === null) return;
     // Einen laufenden Send abwarten, BEVOR StopTurn rausgeht — sonst überholt
     // stopTurn den sendMessage-Resolver serverseitig, trifft ins Leere (No-op)
-    // und der Turn läuft ungebremst durch (s. Doku an sendInFlight). Ein
-    // GESCHEITERTER Send darf den Stop weder verhindern noch werfen — dann ist
-    // der Stop gegenstandslos und der Server macht daraus ein No-op.
-    if (this.sendInFlight) await this.sendInFlight.catch(() => {});
+    // und der Turn läuft ungebremst durch (s. Doku an sendInFlight). Der
+    // Roundtrip fängt seinen Fehler selbst (send meldet ihn in `error`) und
+    // wirft nie — ein gescheiterter Send verhindert den Stop also nicht.
+    if (this.sendInFlight) await this.sendInFlight;
     try {
       await gqlRequest<{ stopTurn: boolean }>(STOP_TURN_MUTATION, { projectId });
     } catch (err) {

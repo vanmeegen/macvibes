@@ -15,8 +15,10 @@ const E2E_HOME = mkdtempSync(join(tmpdir(), 'macvibes-e2e-'));
  * kein Test einen Nutzer freischalten.
  */
 export const E2E_ADMIN_USERNAME = 'e2eadmin';
+/** Passwort aller E2E-Nutzer — Admin (globalSetup) wie frisch registrierte (fixtures). */
+export const E2E_PASSWORD = 'passwort123';
 
-export const E2E_API_PORT = 4600;
+const E2E_API_PORT = 4600;
 export const E2E_WEB_PORT = 5175;
 
 export default defineConfig({
@@ -56,9 +58,9 @@ export default defineConfig({
         MACVIBES_FAKE_DELAY_MS: '30',
         // Prozess-Provider: E2E testet die Plattform-Logik, nicht die VM.
         MACVIBES_SANDBOX: 'process',
-        // Der Vite-Proxy setzt changeOrigin, die Origin bleibt aber der
-        // Web-Port — der Server muss ihn kennen, sonst weist der CSRF-Schutz
-        // jeden Request ab (F6).
+        // Die Origin der Requests ist der Web-Port (der Vite-Proxy reicht den
+        // Host unverändert durch) — der Server muss ihn kennen, sonst weist
+        // der CSRF-Schutz jeden Request ab (F6).
         MACVIBES_WEB_PORT: String(E2E_WEB_PORT),
         // E2E registriert und meldet sich dutzendfach an — das Limit auf
         // login/register (F14) würde die Suite ausbremsen.

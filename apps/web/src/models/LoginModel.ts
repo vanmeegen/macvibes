@@ -1,4 +1,4 @@
-import { makeAutoObservable } from 'mobx';
+import { makeAutoObservable, runInAction } from 'mobx';
 import type { AuthStore } from './AuthStore';
 
 export type LoginMode = 'login' | 'register';
@@ -76,9 +76,11 @@ export class LoginModel {
     if (outcome === 'pending') {
       // Zurück in den Login-Modus, damit der Nutzer sich nach der Freischaltung
       // anmelden kann; der Hinweistext bleibt sichtbar.
-      this.password = '';
-      this.bootstrapToken = '';
-      this.mode = 'login';
+      runInAction(() => {
+        this.password = '';
+        this.bootstrapToken = '';
+        this.mode = 'login';
+      });
       return true;
     }
     return false;

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { gqlRequest } from '../../api/graphqlClient';
-import type { User } from '../../api/types';
+import { makeUser } from '../../__tests__/factories';
 import { AuthStore } from '../AuthStore';
 
 vi.mock('../../api/graphqlClient', () => ({
@@ -9,13 +9,8 @@ vi.mock('../../api/graphqlClient', () => ({
 
 const mockGql = vi.mocked(gqlRequest);
 
-const admin: User = { id: 'u1', username: 'marco', role: 'admin', approved: true };
-const pending: User = {
-  id: 'u2',
-  username: 'gast',
-  role: 'user',
-  approved: false,
-};
+const admin = makeUser({ id: 'u1', username: 'marco', role: 'admin' });
+const pending = makeUser({ id: 'u2', username: 'gast', approved: false });
 
 describe('AuthStore', () => {
   beforeEach(() => {
@@ -143,47 +138,6 @@ describe('AuthStore', () => {
     });
   });
 
-  describe('Admin: Nutzerverwaltung', () => {
-    it('loadUsers lädt die Nutzerliste', async () => {
-      mockGql.mockResolvedValueOnce({ users: [admin, pending] });
-      const store = new AuthStore();
-
-      await store.loadUsers();
-
-      expect(store.users).toEqual([admin, pending]);
-      expect(store.pendingUsers).toEqual([pending]);
-    });
-
-    it('approveUser schaltet einen Nutzer frei und aktualisiert die Liste', async () => {
-      mockGql.mockResolvedValueOnce({ users: [admin, pending] });
-      const store = new AuthStore();
-      await store.loadUsers();
-
-      mockGql.mockResolvedValueOnce({ approveUser: { ...pending, approved: true } });
-      await store.approveUser(pending.id);
-
-      expect(store.users.find((u) => u.id === pending.id)?.approved).toBe(true);
-      expect(store.pendingUsers).toEqual([]);
-      expect(mockGql).toHaveBeenLastCalledWith(expect.stringContaining('approveUser'), {
-        userId: pending.id,
-      });
-    });
-
-    it('rejectUser entfernt den Nutzer aus der Liste', async () => {
-      mockGql.mockResolvedValueOnce({ users: [admin, pending] });
-      const store = new AuthStore();
-      await store.loadUsers();
-
-      mockGql.mockResolvedValueOnce({ rejectUser: true });
-      await store.rejectUser(pending.id);
-
-      expect(store.users.find((u) => u.id === pending.id)).toBeUndefined();
-      expect(mockGql).toHaveBeenLastCalledWith(expect.stringContaining('rejectUser'), {
-        userId: pending.id,
-      });
-    });
-  });
-
   describe('logout', () => {
     it('entfernt currentUser bei Erfolg', async () => {
       mockGql.mockResolvedValueOnce({ login: admin });
@@ -195,6 +149,18 @@ describe('AuthStore', () => {
 
       expect(store.currentUser).toBeNull();
       expect(store.error).toBeNull();
+    });
+
+    it('meldet einen Fehlschlag in error — die Projektübersicht zeigt ihn an', async () => {
+      mockGql.mockResolvedValueOnce({ login: admin });
+      const store = new AuthStore();
+      await store.login('marco', 'geheim');
+
+      mockGql.mockRejectedValueOnce(new Error('Netz weg'));
+      await store.logout();
+
+      expect(store.currentUser).toEqual(admin);
+      expect(store.error).toBe('Netz weg');
     });
   });
 });

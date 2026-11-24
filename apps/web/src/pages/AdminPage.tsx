@@ -1,9 +1,8 @@
-import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import Alert from '@mui/material/Alert';
 import AppBar from '@mui/material/AppBar';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
-import IconButton from '@mui/material/IconButton';
 import Paper from '@mui/material/Paper';
 import Stack from '@mui/material/Stack';
 import Table from '@mui/material/Table';
@@ -15,11 +14,11 @@ import Toolbar from '@mui/material/Toolbar';
 import Typography from '@mui/material/Typography';
 import { observer } from 'mobx-react-lite';
 import { useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import type { AuthStore } from '../models/AuthStore';
+import type { AdminUsersStore } from '../models/AdminUsersStore';
+import { BackButton } from './components/BackButton';
 
-export interface AdminPageProps {
-  authStore: AuthStore;
+interface AdminPageProps {
+  adminUsersStore: AdminUsersStore;
 }
 
 /**
@@ -27,28 +26,20 @@ export interface AdminPageProps {
  * ablehnen. Nur für Admins erreichbar (die Route in App.tsx leitet sonst um;
  * die `users`-Query ist serverseitig admin-only abgesichert).
  */
-export const AdminPage = observer(function AdminPage({ authStore }: AdminPageProps): JSX.Element {
-  const navigate = useNavigate();
-
+export const AdminPage = observer(function AdminPage({
+  adminUsersStore,
+}: AdminPageProps): JSX.Element {
   useEffect(() => {
-    void authStore.loadUsers();
-  }, [authStore]);
+    void adminUsersStore.loadUsers();
+  }, [adminUsersStore]);
 
-  const pendingCount = authStore.pendingUsers.length;
+  const pendingCount = adminUsersStore.pendingUsers.length;
 
   return (
     <Box sx={{ minHeight: '100vh', pb: 8 }}>
       <AppBar position="sticky">
         <Toolbar>
-          <IconButton
-            edge="start"
-            aria-label="Zurück zur Projektübersicht"
-            onClick={() => navigate('/')}
-            sx={{ mr: 2 }}
-            data-testselector="admin-back-button"
-          >
-            <ArrowBackIcon />
-          </IconButton>
+          <BackButton testselector="admin-back-button" />
           <Typography variant="h5" component="h1" sx={{ flexGrow: 1 }}>
             Nutzerverwaltung
           </Typography>
@@ -63,6 +54,16 @@ export const AdminPage = observer(function AdminPage({ authStore }: AdminPagePro
       </AppBar>
 
       <Box sx={{ maxWidth: 900, mx: 'auto', px: 3, pt: 3 }}>
+        {adminUsersStore.error !== null && (
+          <Alert
+            severity="error"
+            sx={{ mb: 3 }}
+            onClose={adminUsersStore.clearError}
+            data-testselector="admin-error"
+          >
+            {adminUsersStore.error}
+          </Alert>
+        )}
         <Paper variant="outlined">
           <Table data-testselector="admin-user-table">
             <TableHead>
@@ -74,7 +75,7 @@ export const AdminPage = observer(function AdminPage({ authStore }: AdminPagePro
               </TableRow>
             </TableHead>
             <TableBody>
-              {authStore.users.map((user) => {
+              {adminUsersStore.users.map((user) => {
                 const isAdmin = user.role === 'admin';
                 return (
                   <TableRow
@@ -111,7 +112,7 @@ export const AdminPage = observer(function AdminPage({ authStore }: AdminPagePro
                           <Button
                             size="small"
                             variant="contained"
-                            onClick={() => void authStore.approveUser(user.id)}
+                            onClick={() => void adminUsersStore.approveUser(user.id)}
                             data-testselector="admin-approve"
                           >
                             Zulassen
@@ -122,7 +123,7 @@ export const AdminPage = observer(function AdminPage({ authStore }: AdminPagePro
                             size="small"
                             color="error"
                             variant="outlined"
-                            onClick={() => void authStore.rejectUser(user.id)}
+                            onClick={() => void adminUsersStore.rejectUser(user.id)}
                             data-testselector="admin-reject"
                           >
                             {user.approved ? 'Entfernen' : 'Ablehnen'}
@@ -133,7 +134,7 @@ export const AdminPage = observer(function AdminPage({ authStore }: AdminPagePro
                   </TableRow>
                 );
               })}
-              {authStore.users.length === 0 && (
+              {adminUsersStore.users.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={4}>
                     <Typography

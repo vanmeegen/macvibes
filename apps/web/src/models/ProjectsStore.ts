@@ -4,6 +4,7 @@ import { gqlRequest } from '../api/graphqlClient';
 import type { AgentModelInfo, Project, Template } from '../api/types';
 import { NameDialogModel } from './NameDialogModel';
 import type { AuthStore } from './AuthStore';
+import { browserStorage, readSetting, writeSetting } from './safeStorage';
 
 export type ProjectFilter = 'mine' | 'all';
 
@@ -114,79 +115,8 @@ function mergeById<T extends { id: string }>(current: T[], incoming: T[]): T[] {
 }
 
 function readFilterFromStorage(): ProjectFilter {
-  try {
-    const stored = window.localStorage.getItem(PROJECT_FILTER_STORAGE_KEY);
-    if (stored === 'mine' || stored === 'all') {
-      return stored;
-    }
-  } catch (err) {
-    // localStorage kann z. B. im Private-Modus fehlen — Default verwenden.
-    console.error('Projektfilter konnte nicht aus localStorage gelesen werden', err);
-  }
-  return 'mine';
-}
-
-/** Formatiert einen Server-Zeitstempel (ISO-String oder Epoch-Millis) deutsch. */
-export function formatTimestamp(value: string): string {
-  const millis = /^\d+$/.test(value) ? Number(value) : Date.parse(value);
-  if (Number.isNaN(millis)) {
-    return value;
-  }
-  return new Date(millis).toLocaleString('de-DE', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-/**
- * Text des „Agent arbeitet"-Indikators, abhängig vom Sandbox-Status: während
- * die MicroVM bootet, sieht der User WARUM noch nichts passiert (kein
- * gefühlter Hänger).
- */
-export function agentWorkingLabel(sandboxStatus: string): string {
-  switch (sandboxStatus) {
-    case 'starting':
-      return 'MicroVM startet — Workspace wird vorbereitet …';
-    case 'stopped':
-    case 'stopping':
-      return 'Sandbox wird gestartet …';
-    default:
-      return 'Agent arbeitet …';
-  }
-}
-
-/**
- * Status-Chip der Projektkarte: ein laufender Agent-Turn („arbeitet") hat
- * Vorrang vor dem Sandbox-Status — gerade langlaufende Turns (lokale Modelle,
- * Grace-Verlängerung) sind sonst von außen unsichtbar.
- */
-export function projectStatusChip(
-  sandboxStatus: string,
-  turnActive: boolean,
-): { label: string; color: 'success' | 'warning' | 'default' } {
-  if (turnActive) return { label: 'arbeitet', color: 'warning' };
-  return {
-    label: sandboxStatusLabel(sandboxStatus),
-    color: sandboxStatus === 'running' ? 'success' : 'default',
-  };
-}
-
-/** Deutsche Anzeige des Sandbox-Status. */
-function sandboxStatusLabel(status: string): string {
-  switch (status) {
-    case 'running':
-      // „bereit" statt „läuft": klare Abgrenzung zum Turn-Status „arbeitet".
-      return 'bereit';
-    case 'starting':
-      return 'startet';
-    case 'stopped':
-      return 'gestoppt';
-    default:
-      return status;
-  }
+  const stored = readSetting(browserStorage(), PROJECT_FILTER_STORAGE_KEY);
+  return stored === 'mine' || stored === 'all' ? stored : 'mine';
 }
 
 /**
@@ -244,11 +174,7 @@ export class ProjectsStore {
 
   setFilter(filter: ProjectFilter): void {
     this.filter = filter;
-    try {
-      window.localStorage.setItem(PROJECT_FILTER_STORAGE_KEY, filter);
-    } catch (err) {
-      console.error('Projektfilter konnte nicht in localStorage gespeichert werden', err);
-    }
+    writeSetting(browserStorage(), PROJECT_FILTER_STORAGE_KEY, filter);
   }
 
   requestDelete(id: string): void {
@@ -333,7 +259,7 @@ export class ProjectsStore {
     this.loading = true;
     this.error = null;
     try {
-      await this.fetchInto();
+      await this.fetchProjects();
     } catch (err) {
       console.error('ProjectsStore.load fehlgeschlagen', err);
       runInAction(() => {
@@ -349,7 +275,7 @@ export class ProjectsStore {
   /** Stilles Nachladen fürs Status-Polling — ohne Lade-Spinner, Fehler nur geloggt. */
   async refresh(): Promise<void> {
     try {
-      await this.fetchInto();
+      await this.fetchProjects();
     } catch (err) {
       // Bewusst KEIN this.error: das Polling läuft im Hintergrund, ein einzelner
       // Fehlschlag darf nicht die ganze Seite mit einer Fehlermeldung überziehen.
@@ -359,11 +285,9 @@ export class ProjectsStore {
 
   /**
    * Die eigentliche Abfrage — geteilt von `load` (mit Spinner und sichtbarem
-   * Fehler) und `refresh` (still). Vorher war `refresh` eine wörtliche Kopie
-   * von `load`: dieselbe Query, dieselbe Ergebniszuweisung, nur ohne die beiden
-   * Zustandsflags. Jede Feldänderung musste an zwei Stellen nachgezogen werden.
+   * Fehler) und `refresh` (still).
    */
-  private async fetchInto(): Promise<void> {
+  private async fetchProjects(): Promise<void> {
     const data = await gqlRequest<{
       projects: Project[];
       templates: Template[];
@@ -389,7 +313,10 @@ export class ProjectsStore {
    * sichtbar wird.
    */
   startPolling(intervalMs = 2000): void {
-    if (this.pollTimer !== null) return;
+    // Ein laufendes Polling wird ERSETZT, nicht behalten: Übersicht und
+    // Chat-Seite wollen verschiedene Intervalle, und ein stilles „läuft schon"
+    // ließe beim Seitenwechsel das alte Intervall weiterlaufen.
+    this.stopPolling();
     this.pollTimer = setInterval(() => {
       if (!document.hidden) void this.refresh();
     }, intervalMs);
@@ -417,6 +344,7 @@ export class ProjectsStore {
    * serverseitig ab.
    */
   async enterProject(id: string): Promise<void> {
+    this.error = null;
     try {
       await gqlRequest<{ enterProject: { id: string } }>(ENTER_PROJECT_MUTATION, { id });
       await this.refresh();
@@ -435,6 +363,7 @@ export class ProjectsStore {
   async setProjectModel(projectId: string, model: string): Promise<boolean> {
     const project = this.projects.find((p) => p.id === projectId);
     const previous = project?.agentModel ?? null;
+    this.error = null;
     if (project) {
       project.agentModel = model;
     }
@@ -455,6 +384,11 @@ export class ProjectsStore {
       });
       return false;
     }
+  }
+
+  /** Verwirft die Fehlermeldung — z. B. beim Betreten einer anderen Seite. */
+  clearError(): void {
+    this.error = null;
   }
 
   async deleteProject(id: string): Promise<boolean> {

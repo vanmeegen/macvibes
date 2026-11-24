@@ -3,7 +3,9 @@ import CircularProgress from '@mui/material/CircularProgress';
 import { observer } from 'mobx-react-lite';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import {
+  adminUsersStore,
   authStore,
+  chatPageModel,
   chatStore,
   createProjectModel,
   loginModel,
@@ -60,7 +62,7 @@ export const App = observer(function App(): JSX.Element {
           !loggedIn ? (
             <Navigate to="/login" replace />
           ) : authStore.isAdmin ? (
-            <AdminPage authStore={authStore} />
+            <AdminPage adminUsersStore={adminUsersStore} />
           ) : (
             <Navigate to="/" replace />
           )
@@ -71,6 +73,7 @@ export const App = observer(function App(): JSX.Element {
         element={
           loggedIn ? (
             <ChatPage
+              model={chatPageModel}
               projectsStore={projectsStore}
               chatStore={chatStore}
               speechStore={speechStore}
