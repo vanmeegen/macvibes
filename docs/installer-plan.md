@@ -71,7 +71,7 @@ Das Setup fragt den Anbieter ab statt Claude fest zu verdrahten:
   - **Lokal (oMLX)** — braucht KEINE Env: ein installiertes `omlx` wird in
     `config.ts` automatisch erkannt und als `omlx serve` gestartet
     (`detectLocalRouterCommand`), das lokale Modell ist damit ohne Zutun
-    aktiv. Nur ein abweichender Startbefehl setzt `MACVIBES_LOCAL_ROUTER_CMD`.
+    aktiv. Nur ein abweichender Startbefehl setzt `MACVIBES_LOCAL_SERVER_CMD`.
     (Im Setup heißt die Wahl `lokal`; `ollama` bleibt als Alias akzeptiert.)
   - **Eigener Anbieter (EIN Dialog statt Format-Kunde)** — der Nutzer gibt nur
     **Anzeigename, Basis-URL, Token** an (OpenRouter, OpenAI, ein eigener

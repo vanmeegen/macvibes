@@ -340,4 +340,54 @@ describe('loadConfig zentralisiert die früher verstreuten Env-Reads (M6)', () =
       if (gesichert !== undefined) Bun.env.MACVIBES_SANDBOX_IMAGE = gesichert;
     }
   });
+
+  /**
+   * `MACVIBES_LOCAL_ROUTER_*` meinte zwei verschiedene Dinge: CMD/PROBE_PATH
+   * den lokalen Modell-Server (oMLX), CONFIG/PORT die LiteLLM-Bridge. Die
+   * neuen Namen sagen, was gemeint ist; die alten gelten als Alias weiter,
+   * damit bestehende .env-Dateien nicht brechen.
+   */
+  describe('Env-Namen des lokalen Modell-Servers', () => {
+    const NAMEN = [
+      'MACVIBES_LOCAL_SERVER_CMD',
+      'MACVIBES_LOCAL_SERVER_PROBE_PATH',
+      'MACVIBES_LOCAL_ROUTER_CMD',
+      'MACVIBES_LOCAL_ROUTER_PROBE_PATH',
+    ] as const;
+    const gesichert = new Map<string, string | undefined>(NAMEN.map((n) => [n, Bun.env[n]]));
+    const leeren = (): void => {
+      for (const name of NAMEN) delete Bun.env[name];
+    };
+    afterEach(() => {
+      for (const [name, wert] of gesichert) {
+        if (wert === undefined) delete Bun.env[name];
+        else Bun.env[name] = wert;
+      }
+    });
+
+    test('die neuen Namen werden gelesen', () => {
+      leeren();
+      Bun.env.MACVIBES_LOCAL_SERVER_CMD = 'mein-server --port 8000';
+      Bun.env.MACVIBES_LOCAL_SERVER_PROBE_PATH = '/bereit';
+      const config = loadConfig();
+      expect(config.localModels.serverCommand).toBe('mein-server --port 8000');
+      expect(config.localModels.probePath).toBe('/bereit');
+    });
+
+    test('die alten Namen gelten als Alias weiter', () => {
+      leeren();
+      Bun.env.MACVIBES_LOCAL_ROUTER_CMD = 'alt-server';
+      Bun.env.MACVIBES_LOCAL_ROUTER_PROBE_PATH = '/health/liveliness';
+      const config = loadConfig();
+      expect(config.localModels.serverCommand).toBe('alt-server');
+      expect(config.localModels.probePath).toBe('/health/liveliness');
+    });
+
+    test('sind beide gesetzt, gewinnt der neue Name', () => {
+      leeren();
+      Bun.env.MACVIBES_LOCAL_SERVER_CMD = 'neu';
+      Bun.env.MACVIBES_LOCAL_ROUTER_CMD = 'alt';
+      expect(loadConfig().localModels.serverCommand).toBe('neu');
+    });
+  });
 });

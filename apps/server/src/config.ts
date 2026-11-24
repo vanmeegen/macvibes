@@ -151,13 +151,15 @@ export interface ServerConfig {
     upstreamUrl: string;
     apiKey: string;
     /**
-     * Health-Pfad relativ zur Upstream-URL (MACVIBES_LOCAL_ROUTER_PROBE_PATH).
+     * Health-Pfad relativ zur Upstream-URL (MACVIBES_LOCAL_SERVER_PROBE_PATH;
+     * alter Name MACVIBES_LOCAL_ROUTER_PROBE_PATH gilt als Alias).
      * oMLX: `/health`; eine LiteLLM-Instanz als Upstream: `/health/liveliness`.
      */
     probePath: string;
     /**
      * Startkommando für den Server (Autostart durch macvibes, nur wenn auf der
-     * URL noch nichts Gesundes antwortet). Env MACVIBES_LOCAL_ROUTER_CMD;
+     * URL noch nichts Gesundes antwortet). Env MACVIBES_LOCAL_SERVER_CMD
+     * (alter Name MACVIBES_LOCAL_ROUTER_CMD gilt als Alias);
      * Default: `omlx serve`, falls `omlx` im PATH ist. null = kein Autostart.
      */
     serverCommand: string | null;
@@ -304,6 +306,15 @@ function envNumber(name: string): number | undefined {
   return value;
 }
 
+/**
+ * Env-Wert unter seinem heutigen Namen, sonst unter dem früheren. Der neue
+ * Name gewinnt; der alte bleibt gültig, damit bestehende .env-Dateien nach
+ * einer Umbenennung weiterlaufen.
+ */
+function envWithAlias(name: string, legacyName: string): string | undefined {
+  return Bun.env[name] ?? Bun.env[legacyName];
+}
+
 /** Schalter: '1' ODER 'true' — für ALLE Flags dieselbe Regel. */
 function envFlag(name: string): boolean {
   const raw = Bun.env[name];
@@ -418,8 +429,13 @@ export function loadConfig(): ServerConfig {
     localModels: {
       upstreamUrl: Bun.env.MACVIBES_LOCAL_UPSTREAM_URL ?? 'http://localhost:8000',
       apiKey: Bun.env.MACVIBES_LOCAL_API_KEY ?? 'local',
-      probePath: Bun.env.MACVIBES_LOCAL_ROUTER_PROBE_PATH ?? '/health',
-      serverCommand: Bun.env.MACVIBES_LOCAL_ROUTER_CMD ?? detectLocalServerCommand(),
+      // Alte Namen (MACVIBES_LOCAL_ROUTER_*) gelten als Alias weiter.
+      probePath:
+        envWithAlias('MACVIBES_LOCAL_SERVER_PROBE_PATH', 'MACVIBES_LOCAL_ROUTER_PROBE_PATH') ??
+        '/health',
+      serverCommand:
+        envWithAlias('MACVIBES_LOCAL_SERVER_CMD', 'MACVIBES_LOCAL_ROUTER_CMD') ??
+        detectLocalServerCommand(),
     },
     litellm: {
       url: Bun.env.MACVIBES_LITELLM_URL ?? 'http://localhost:8787',

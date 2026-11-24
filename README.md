@@ -112,7 +112,7 @@ git clone https://github.com/vanmeegen/mac-local-coding-agent && cd mac-local-co
 Danach läuft oMLX als brew-Service (`omlx start|stop|restart`, Admin-UI
 `http://localhost:8000/admin`). macvibes prüft beim Start `GET /health`; läuft
 dort schon etwas, wird es benutzt, sonst startet macvibes `omlx serve` selbst
-und überwacht es (`MACVIBES_LOCAL_ROUTER_CMD`, Log `~/macvibes/local-router.log`).
+und überwacht es (`MACVIBES_LOCAL_SERVER_CMD`, Log `~/macvibes/local-router.log`).
 Gemessen auf einem M5 Pro 48 GB: ~31 tok/s Decode, Prefill 458 tok/s, und der
 Prefix-Cache von oMLX macht Folge-Turns mit 20–30k Token Kontext in Sekunden
 statt Minuten (`cache_read_input_tokens` ≈ 22k im zweiten Turn).
@@ -177,7 +177,7 @@ Anbieter aus ihrer Config.
   `~/macvibes/local-router-venv` an (1–2 min). Log: `~/macvibes/litellm.log`.
   Health: `http://localhost:8787/health/liveliness`.
 - **Config:** existiert `~/macvibes/litellm.yaml`, nutzt die Bridge NUR sie
-  (upgrade-fest; abweichender Pfad über `MACVIBES_LOCAL_ROUTER_CONFIG`), sonst
+  (upgrade-fest; abweichender Pfad über `MACVIBES_LITELLM_CONFIG`), sonst
   die mitgelieferte `litellm_config.yaml`.
 - **Das lokale Qwen-Modell ist auch über die Bridge erreichbar** (Alias
   `Qwen3.8-27B-oQ4e-mtp` auf oMLX' OpenAI-Endpunkt `http://localhost:8000/v1`)

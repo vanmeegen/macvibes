@@ -2,7 +2,7 @@
 export const DEFAULT_BRIDGE_PORT = '8787';
 
 export interface BridgePortOptions {
-  /** MACVIBES_LOCAL_ROUTER_PORT (ausdrücklich gewählter Port) oder undefined. */
+  /** MACVIBES_LITELLM_PORT (ausdrücklich gewählter Port; alter Name MACVIBES_LOCAL_ROUTER_PORT) oder undefined. */
   portEnv: string | undefined;
   /** MACVIBES_LITELLM_URL — die URL, unter der der Server die Bridge erwartet. */
   urlEnv: string | undefined;
@@ -27,4 +27,19 @@ export function resolveBridgePort(options: BridgePortOptions): string {
     }
   }
   return DEFAULT_BRIDGE_PORT;
+}
+
+/**
+ * Erster gesetzter, nicht-leerer Wert — für Env-Variablen, die einen neuen
+ * Namen bekommen haben und unter dem alten weiter gelten sollen.
+ */
+export function firstSetEnv(
+  env: Record<string, string | undefined>,
+  ...names: string[]
+): string | undefined {
+  for (const name of names) {
+    const value = env[name];
+    if (value !== undefined && value !== '') return value;
+  }
+  return undefined;
 }

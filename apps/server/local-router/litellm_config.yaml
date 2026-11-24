@@ -12,7 +12,7 @@
 #
 # EIGENE Änderungen gehören nicht hierher, sondern in eine Kopie unter
 # ~/macvibes/litellm.yaml (existiert sie, nutzt der Router NUR noch sie;
-# expliziter Pfad via MACVIBES_LOCAL_ROUTER_CONFIG): diese Datei liegt bei
+# expliziter Pfad via MACVIBES_LITELLM_CONFIG): diese Datei liegt bei
 # einer Installation in libexec und wird bei jedem brew upgrade ersetzt.
 
 model_list:

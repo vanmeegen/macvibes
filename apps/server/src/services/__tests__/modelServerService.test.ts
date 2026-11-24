@@ -22,7 +22,7 @@ function fakeProcess(): SupervisedProcess & { killed: boolean } {
 /** Pflichtangaben, die in diesen Tests keine Rolle spielen. */
 const BASIS: Pick<ModelServerOptions, 'label' | 'commandEnvVar' | 'impact' | 'probePath'> = {
   label: 'Lokaler Modell-Server (oMLX)',
-  commandEnvVar: 'MACVIBES_LOCAL_ROUTER_CMD',
+  commandEnvVar: 'MACVIBES_LOCAL_SERVER_CMD',
   impact: 'lokale Modelle sind nicht verfügbar, Claude-Modelle funktionieren normal',
   probePath: '/health',
 };
@@ -126,7 +126,7 @@ describe('startModelServer — macvibes startet Modell-Server selbst mit', () =>
 
   test('jede Meldung nennt den Server, um den es geht — auch bei der Bridge', async () => {
     // Vorher sprachen ALLE Meldungen vom „lokalen Modell-Router (Qwen)" und von
-    // MACVIBES_LOCAL_ROUTER_CMD — auch wenn die LiteLLM-Bridge gemeint war.
+    // MACVIBES_LOCAL_SERVER_CMD — auch wenn die LiteLLM-Bridge gemeint war.
     const meldungen: string[] = [];
     await startModelServer({
       label: 'LiteLLM-Bridge',
@@ -141,7 +141,7 @@ describe('startModelServer — macvibes startet Modell-Server selbst mit', () =>
     const text = meldungen.join(' ');
     expect(text).toContain('LiteLLM-Bridge');
     expect(text).toContain('MACVIBES_LITELLM_CMD');
-    expect(text).not.toContain('MACVIBES_LOCAL_ROUTER_CMD');
+    expect(text).not.toContain('MACVIBES_LOCAL_SERVER_CMD');
     expect(text).not.toContain('Qwen');
   });
 });

@@ -17,27 +17,28 @@
  * Homebrew-Installation in `<libexec>` und wird bei jedem `brew upgrade`
  * ersetzt — nutzereigene Router-Config gehört deshalb nach
  * `<macvibesHome>/litellm.yaml` (oder explizit via
- * MACVIBES_LOCAL_ROUTER_CONFIG). Auflösung: configPath.ts.
+ * MACVIBES_LITELLM_CONFIG; alter Name MACVIBES_LOCAL_ROUTER_CONFIG gilt weiter).
+ * Auflösung: configPath.ts.
  */
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { macvibesHomeDir } from '@macvibes/shared/node';
-import { resolveBridgePort } from './bridgePort';
+import { firstSetEnv, resolveBridgePort } from './bridgePort';
 import { resolveRouterConfigPath } from './configPath';
 
 const hier = import.meta.dir;
 const port = resolveBridgePort({
-  portEnv: process.env['MACVIBES_LOCAL_ROUTER_PORT'],
+  portEnv: firstSetEnv(process.env, 'MACVIBES_LITELLM_PORT', 'MACVIBES_LOCAL_ROUTER_PORT'),
   urlEnv: process.env['MACVIBES_LITELLM_URL'],
 });
 const macvibesHome = macvibesHomeDir();
 const venv = join(macvibesHome, 'local-router-venv');
-// Upgrade-feste Router-Config: MACVIBES_LOCAL_ROUTER_CONFIG >
+// Upgrade-feste Bridge-Config: MACVIBES_LITELLM_CONFIG >
 // <macvibesHome>/litellm.yaml > mitgelieferte Datei — Begründung in configPath.ts
 // (die mitgelieferte liegt bei einer Installation in libexec und überlebt kein
 // brew upgrade).
 const configPfad = resolveRouterConfigPath({
-  envPath: process.env['MACVIBES_LOCAL_ROUTER_CONFIG'],
+  envPath: firstSetEnv(process.env, 'MACVIBES_LITELLM_CONFIG', 'MACVIBES_LOCAL_ROUTER_CONFIG'),
   macvibesHome,
   bundledDir: hier,
 });
