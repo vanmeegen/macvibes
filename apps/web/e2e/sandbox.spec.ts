@@ -1,21 +1,15 @@
-import { expect, test } from '@playwright/test';
-import { registerNewUser, uniqueProjectName } from './fixtures';
-import { ChatPage } from './pages/chatPage';
-import { ProjectsPage } from './pages/projectsPage';
+import { createOwnProject, expect, test } from './fixtures';
 
 // R9 — Sandbox-Lebenszyklus (E2E läuft mit MACVIBES_GRACE_MS=1500)
 
 test('Sandbox startet beim Öffnen der Chat-Page und stoppt nach der Grace-Period', async ({
   page,
+  projectsPage,
+  chatPage,
 }) => {
-  await registerNewUser(page);
-  const projectsPage = new ProjectsPage(page);
-  const chatPage = new ChatPage(page);
-  const name = uniqueProjectName('Lifecycle');
-
   // Anlegen führt direkt in den Chat; das Öffnen startet die Sandbox,
   // Startfortschritt bis "running" sichtbar (R6/R9).
-  await projectsPage.createProject(name, 'pwa');
+  const name = await createOwnProject(page, 'Lifecycle');
   await expect(chatPage.sandboxStatus).toHaveAttribute('data-status', 'running', {
     timeout: 15_000,
   });

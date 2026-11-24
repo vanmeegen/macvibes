@@ -1,4 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
+import { ChatPage } from '../e2e/pages/chatPage';
+import { LoginPage } from '../e2e/pages/loginPage';
+import { ProjectsPage } from '../e2e/pages/projectsPage';
 
 /**
  * LIVE-Walkthrough gegen den LAUFENDEN Server (`bun run start`, Port 4000):
@@ -6,7 +9,8 @@ import { expect, test, type Page } from '@playwright/test';
  * von `bun run ci` — Start: `bun run e2e:live` (in apps/web).
  *
  * Voraussetzungen:
- * - Server läuft (Port 4000) mit msb + Credentials (apps/server/.env).
+ * - Server läuft (Default Port 4000, sonst MACVIBES_BASE_URL) mit msb +
+ *   Credentials (apps/server/.env).
  * - Ein freigeschalteter Nutzer, dessen Zugangsdaten aus der Umgebung kommen:
  *   MACVIBES_LIVE_USER / MACVIBES_LIVE_PASS. Bewusst OHNE Default (F15) — ein
  *   Passwort im Repo wäre auf der laufenden Instanz sofort gültig.
@@ -14,11 +18,27 @@ import { expect, test, type Page } from '@playwright/test';
  * Prüft die Dinge, die das normale E2E (Fake-Agent, Prozess-Provider)
  * prinzipbedingt nicht kann: echter Claude-Kontext über Stop hinweg,
  * VM-Preview durchs Gateway, Trennung zweier echter Projekte.
+ *
+ * Nutzt die Page-Objects der normalen E2E-Suite, aber NICHT deren fixtures.ts:
+ * die zieht playwright.config.ts mit, das beim Laden eine isolierte
+ * Testumgebung anlegt.
  */
 const USER = process.env.MACVIBES_LIVE_USER ?? '';
 const PASS = process.env.MACVIBES_LIVE_PASS ?? '';
 
-test.beforeAll(() => {
+const SHOTS = 'test-results/live';
+const STAMP = Date.now().toString(36);
+const PWA = `walk-pwa-${STAMP}`;
+const FULL = `walk-full-${STAMP}`;
+
+/** Preview-URL: Gateway-Port mit `/p/<projectId>/` — nie der dynamische VM-Port. */
+const GATEWAY_URL = /^https?:\/\/[^/]+:\d+\/p\/[^/]+\/$/;
+
+async function shot(page: Page, name: string): Promise<void> {
+  await page.screenshot({ path: `${SHOTS}/${name}.png` });
+}
+
+test.beforeAll(async ({ request, baseURL }) => {
   if (USER === '' || PASS === '') {
     throw new Error(
       'MACVIBES_LIVE_USER und MACVIBES_LIVE_PASS müssen gesetzt sein — der ' +
@@ -26,116 +46,84 @@ test.beforeAll(() => {
         'Default-Zugangsdaten im Repo (F15).',
     );
   }
-});
-const SHOTS = 'test-results/live';
-const STAMP = Date.now().toString(36);
-const PWA = `walk-pwa-${STAMP}`;
-const FULL = `walk-full-${STAMP}`;
-
-async function shot(page: Page, name: string): Promise<void> {
-  await page.screenshot({ path: `${SHOTS}/${name}.png` });
-}
-
-async function createProject(page: Page, name: string, templateDir: string): Promise<void> {
-  await page.getByTestId('new-project-fab').click();
-  await page.getByTestId('new-project-name').fill(name);
-  await page.getByTestId(`template-option-${templateDir}`).check();
-  await page.getByTestId('new-project-submit').click();
-  await page.waitForURL('**/projects/**');
-}
-
-async function deleteProject(page: Page, name: string): Promise<void> {
-  const card = page
-    .locator('[data-testselector^="project-card-"]:not([data-testselector^="project-card-link-"])')
-    .filter({ hasText: name });
-  // Löschen sitzt im Kebab-Menü der Karte; das Menü rendert in einem Portal.
-  await card.locator('[data-testselector^="project-menu-"]').click();
-  await page.locator('[data-testselector^="project-delete-"]').click();
-  await page.getByTestId('delete-confirm').click();
-  await expect(card).toHaveCount(0);
-}
-
-async function sendChat(page: Page, text: string): Promise<void> {
-  await page.getByTestId('chat-input').fill(text);
-  await page.getByTestId('chat-send').click();
-}
-
-const assistant = (page: Page) =>
-  page.locator('[data-testselector="chat-message"][data-role="assistant"]');
-
-test.beforeAll(async ({ request }) => {
-  const up = await request.get('http://localhost:4000/').catch(() => null);
-  test.skip(up === null, 'Kein laufender Server auf :4000 — e2e:live übersprungen.');
+  // Fehlschlag = kein Server; der Grund steht in der Skip-Meldung.
+  const up = await request.get('/').catch((err: unknown) => {
+    console.warn(`Live-Server ${baseURL ?? ''} nicht erreichbar`, err);
+    return null;
+  });
+  test.skip(up === null, `Kein laufender Server auf ${baseURL ?? ''} — e2e:live übersprungen.`);
 });
 
 test('Live-Walkthrough: Login → pwa+fullstack → Claude-Turn → Stop+Kontext → Trennung → Gateway-Preview', async ({
   page,
 }) => {
+  const loginPage = new LoginPage(page);
+  const projectsPage = new ProjectsPage(page);
+  const chatPage = new ChatPage(page);
+  const assistant = chatPage.messagesByRole('assistant');
+
+  /** Löscht ein Projekt über das Kartenmenü und wartet, bis die Karte weg ist. */
+  const deleteProject = async (name: string): Promise<void> => {
+    await projectsPage.deleteProject(name);
+    await expect(projectsPage.cardByName(name)).toHaveCount(0);
+  };
+
   // ── 1. Login ──
   await page.goto('/');
-  await page.getByTestId('login-username').fill(USER);
-  await page.getByTestId('login-password').fill(PASS);
+  await loginPage.usernameInput.fill(USER);
+  await loginPage.passwordInput.fill(PASS);
   await shot(page, '01-login');
-  await page.getByTestId('login-submit').click();
-  await expect(page.getByTestId('new-project-fab')).toBeVisible({ timeout: 15_000 });
+  await loginPage.submitButton.click();
+  await expect(projectsPage.newProjectFab).toBeVisible({ timeout: 15_000 });
   await shot(page, '02-projekte');
 
   // ── 2. pwa-Projekt anlegen → Chat, VM bootet, Preview über das GATEWAY ──
-  await createProject(page, PWA, 'pwa');
-  await expect(page.getByTestId('chat-sandbox-status')).toHaveAttribute('data-status', 'running', {
+  await projectsPage.createProject(PWA, 'pwa');
+  await expect(chatPage.sandboxStatus).toHaveAttribute('data-status', 'running', {
     timeout: 90_000,
   });
-  const iframe = page.getByTestId('chat-preview');
-  await expect(iframe).toBeVisible({ timeout: 120_000 });
-  const src = await iframe.getAttribute('src');
-  expect(src).toMatch(/^http:\/\/localhost:\d+\/p\/[^/]+\/$/); // Gateway-URL!
+  await expect(chatPage.previewIframe).toBeVisible({ timeout: 120_000 });
+  expect(await chatPage.previewIframe.getAttribute('src')).toMatch(GATEWAY_URL);
   // Der Inhalt IM iframe rendert wirklich (Assets durchs Gateway geladen).
-  await expect(
-    page.frameLocator('[data-testselector="chat-preview"]').locator('body'),
-  ).toContainText(/Deine App|Erstellt mit/i, { timeout: 60_000 });
+  await expect(chatPage.previewBody).toContainText(/Deine App|Erstellt mit/i, { timeout: 60_000 });
   await shot(page, '03-pwa-preview-gateway');
 
   // ── 3. Echter Claude-Turn (Kontext setzen) ──
-  await sendChat(page, 'Merke dir das Codewort BLAUWAL. Antworte nur mit: ok');
-  await expect(assistant(page).last()).toContainText(/ok/i, { timeout: 240_000 });
+  await chatPage.send('Merke dir das Codewort BLAUWAL. Antworte nur mit: ok');
+  await expect(assistant.last()).toContainText(/ok/i, { timeout: 240_000 });
   await shot(page, '04-claude-antwortet');
 
   // ── 4. Langer Turn → STOP-Button → Folge-Turn mit Kontext ──
-  await sendChat(page, 'Zähle langsam von 1 bis 40, jede Zahl mit einem ganzen Satz Erklärung.');
-  await expect(page.getByTestId('chat-stop')).toBeVisible({ timeout: 60_000 });
-  await page.getByTestId('chat-stop').click();
-  await expect(page.getByTestId('chat-stop')).not.toBeVisible({ timeout: 30_000 });
+  await chatPage.send('Zähle langsam von 1 bis 40, jede Zahl mit einem ganzen Satz Erklärung.');
+  await expect(chatPage.stopButton).toBeVisible({ timeout: 60_000 });
+  await chatPage.stopButton.click();
+  await expect(chatPage.stopButton).not.toBeVisible({ timeout: 30_000 });
   await shot(page, '05-nach-stop');
-  await sendChat(page, 'Zusatzinfo: es ist ein Tier. Welches Codewort? Antworte nur damit.');
-  await expect(assistant(page).last()).toContainText(/BLAUWAL/i, { timeout: 240_000 });
+  await chatPage.send('Zusatzinfo: es ist ein Tier. Welches Codewort? Antworte nur damit.');
+  await expect(assistant.last()).toContainText(/BLAUWAL/i, { timeout: 240_000 });
   await shot(page, '06-kontext-nach-stop');
 
   // ── 5. Zweites Projekt (fullstack) — Trennung: nichts vom pwa-Chat sichtbar ──
-  await page.getByTestId('chat-back-button').click();
-  await createProject(page, FULL, 'fullstack');
-  await expect(page.getByTestId('chat-sandbox-status')).toHaveAttribute('data-status', 'running', {
+  await chatPage.backButton.click();
+  await projectsPage.createProject(FULL, 'fullstack');
+  await expect(chatPage.sandboxStatus).toHaveAttribute('data-status', 'running', {
     timeout: 90_000,
   });
   await page.waitForTimeout(2500); // Zeit für etwaige Leak-Events
   await expect(page.getByText('BLAUWAL')).toHaveCount(0);
-  await expect(assistant(page)).toHaveCount(0);
-  await expect(page.getByTestId('chat-preview')).toBeVisible({ timeout: 120_000 });
-  await expect(
-    page.frameLocator('[data-testselector="chat-preview"]').locator('body'),
-  ).toContainText(/Notizen/i, { timeout: 90_000 });
+  await expect(assistant).toHaveCount(0);
+  await expect(chatPage.previewIframe).toBeVisible({ timeout: 120_000 });
+  await expect(chatPage.previewBody).toContainText(/Notizen/i, { timeout: 90_000 });
   await shot(page, '07-fullstack-getrennt');
 
   // ── 6. Zurück zum pwa-Projekt: Verlauf unvermischt da ──
-  await page.getByTestId('chat-back-button').click();
-  await page
-    .locator('[data-testselector^="project-card-"]:not([data-testselector^="project-card-link-"])')
-    .filter({ hasText: PWA })
-    .click();
-  await expect(assistant(page).last()).toContainText(/BLAUWAL/i, { timeout: 30_000 });
+  await chatPage.backButton.click();
+  await projectsPage.openProject(PWA);
+  await expect(assistant.last()).toContainText(/BLAUWAL/i, { timeout: 30_000 });
   await shot(page, '08-pwa-verlauf-intakt');
 
   // ── 7. Aufräumen: beide Testprojekte löschen ──
-  await page.getByTestId('chat-back-button').click();
-  await deleteProject(page, PWA);
-  await deleteProject(page, FULL);
+  await chatPage.backButton.click();
+  await deleteProject(PWA);
+  await deleteProject(FULL);
 });

@@ -45,7 +45,7 @@ export class ProjectsPage {
     return this.allCards.filter({ hasText: name });
   }
 
-  /** Kebab-Menü (Umbenennen/Löschen) — nur auf eigenen Karten vorhanden. */
+  /** Kebab-Menü jeder Karte (Kopieren immer; Umbenennen/Löschen nur mit Verwaltungsrecht). */
   menuButtonIn(card: Locator): Locator {
     return card.locator('[data-testselector^="project-menu-"]');
   }
@@ -61,6 +61,14 @@ export class ProjectsPage {
 
   get deleteMenuItem(): Locator {
     return this.page.locator('[data-testselector^="project-delete-"]');
+  }
+
+  get copyNameInput(): Locator {
+    return this.page.getByTestId('copy-project-name');
+  }
+
+  get copyConfirmButton(): Locator {
+    return this.page.getByTestId('copy-confirm');
   }
 
   get renameNameInput(): Locator {
@@ -87,7 +95,11 @@ export class ProjectsPage {
     await this.newProjectFab.click();
   }
 
-  private async fillCreateForm(name: string, templateDir: string): Promise<void> {
+  /**
+   * Füllt den Anlegen-Dialog aus und schickt ihn ab — ohne auf den Wechsel in
+   * den Chat zu warten (für Tests, die einen Dialog-Fehler erwarten).
+   */
+  async submitCreateForm(name: string, templateDir: string): Promise<void> {
     await this.openCreateDialog();
     await this.nameInput.fill(name);
     await this.templateOption(templateDir).check();
@@ -100,13 +112,8 @@ export class ProjectsPage {
    * anschließendes goto() zuverlässig die aktualisierte Liste zeigt.
    */
   async createProject(name: string, templateDir: string): Promise<void> {
-    await this.fillCreateForm(name, templateDir);
+    await this.submitCreateForm(name, templateDir);
     await this.page.waitForURL('**/projects/**');
-  }
-
-  /** Versucht anzulegen, erwartet aber einen Dialog-Fehler (kein Seitenwechsel). */
-  async createProjectExpectingError(name: string, templateDir: string): Promise<void> {
-    await this.fillCreateForm(name, templateDir);
   }
 
   async deleteProject(name: string): Promise<void> {
@@ -126,8 +133,8 @@ export class ProjectsPage {
   async copyProject(sourceName: string, newName: string): Promise<void> {
     await this.menuButtonIn(this.cardByName(sourceName)).click();
     await this.copyMenuItem.click();
-    await this.page.getByTestId('copy-project-name').fill(newName);
-    await this.page.getByTestId('copy-confirm').click();
+    await this.copyNameInput.fill(newName);
+    await this.copyConfirmButton.click();
   }
 
   async openProject(name: string): Promise<void> {

@@ -1,36 +1,19 @@
-import { expect, test, type Page } from '@playwright/test';
-import { registerNewUser, uniqueProjectName } from './fixtures';
-import { ChatPage } from './pages/chatPage';
-import { ProjectsPage } from './pages/projectsPage';
+import type { Page } from '@playwright/test';
+import { createOwnProject, expect, openAsVisitor, test } from './fixtures';
 
 // R6-Shell (Phase A) & R10 — Read-only für fremde Projekte
 
-test('eigenes Projekt öffnet die Chat-Page mit Eingabebereich', async ({ page }) => {
-  await registerNewUser(page);
-  const projectsPage = new ProjectsPage(page);
-  const chatPage = new ChatPage(page);
-  const name = uniqueProjectName('Chat Projekt');
-
-  await projectsPage.createProject(name, 'pwa');
+test('eigenes Projekt öffnet die Chat-Page mit Eingabebereich', async ({ page, chatPage }) => {
+  await createOwnProject(page, 'Chat Projekt');
 
   await expect(chatPage.backButton).toBeVisible();
   await expect(chatPage.chatInput).toBeVisible();
   await expect(chatPage.readonlyHint).not.toBeVisible();
 });
 
-test('fremdes Projekt ist read-only (Hinweis statt Eingabefeld)', async ({ page }) => {
-  const projectsPage = new ProjectsPage(page);
-  const chatPage = new ChatPage(page);
-
-  await registerNewUser(page);
-  const name = uniqueProjectName('Fremder Chat');
-  await projectsPage.createProject(name, 'pwa');
-  await projectsPage.goto(); // Anlegen führt in den Chat — zurück zur Liste zum Abmelden.
-  await projectsPage.logout();
-
-  await registerNewUser(page);
-  await projectsPage.filterAll.click();
-  await projectsPage.openProject(name);
+test('fremdes Projekt ist read-only (Hinweis statt Eingabefeld)', async ({ page, chatPage }) => {
+  const name = await createOwnProject(page, 'Fremder Chat');
+  await openAsVisitor(page, name);
 
   await expect(chatPage.readonlyHint).toBeVisible();
   await expect(chatPage.chatInput).toHaveCount(0);
@@ -40,13 +23,9 @@ test('fremdes Projekt ist read-only (Hinweis statt Eingabefeld)', async ({ page 
 
 test('Nachricht senden: Antwort streamt in den Verlauf und übersteht einen Reload', async ({
   page,
+  chatPage,
 }) => {
-  await registerNewUser(page);
-  const projectsPage = new ProjectsPage(page);
-  const chatPage = new ChatPage(page);
-  const name = uniqueProjectName('Echo Chat');
-
-  await projectsPage.createProject(name, 'pwa');
+  await createOwnProject(page, 'Echo Chat');
 
   await chatPage.send('Hallo Sandbox');
   await expect(chatPage.messagesByRole('user').last()).toContainText('Hallo Sandbox');
@@ -60,13 +39,8 @@ test('Nachricht senden: Antwort streamt in den Verlauf und übersteht einen Relo
   await expect(chatPage.messagesByRole('assistant').last()).toContainText('Echo: Hallo Sandbox');
 });
 
-test('Stop-Button bricht einen laufenden Turn ab', async ({ page }) => {
-  await registerNewUser(page);
-  const projectsPage = new ProjectsPage(page);
-  const chatPage = new ChatPage(page);
-  const name = uniqueProjectName('Stopp Test');
-
-  await projectsPage.createProject(name, 'pwa');
+test('Stop-Button bricht einen laufenden Turn ab', async ({ page, chatPage }) => {
+  await createOwnProject(page, 'Stopp Test');
 
   await chatPage.send('Bitte LANGSAM arbeiten');
   await expect(chatPage.stopButton).toBeVisible({ timeout: 15_000 });
@@ -86,17 +60,13 @@ test('Stop-Button bricht einen laufenden Turn ab', async ({ page }) => {
 
 test('Nachricht während eines Turns wird EINGEREIHT (kein Abbruch) und danach beantwortet', async ({
   page,
+  chatPage,
 }) => {
   // Neues Verhalten: ein schnelles „weiter" killt den laufenden Turn NICHT mehr
   // (bei langsamen lokalen Modellen brach das den Turn vor dem ersten Tool-Call
   // ab). Die neue Nachricht läuft als NÄCHSTER Turn; expliziter Abbruch bleibt
   // dem Stop-Button vorbehalten (Opt-in: VITE_MACVIBES_STEER_ON_SEND=true).
-  await registerNewUser(page);
-  const projectsPage = new ProjectsPage(page);
-  const chatPage = new ChatPage(page);
-  const name = uniqueProjectName('Steering');
-
-  await projectsPage.createProject(name, 'pwa');
+  await createOwnProject(page, 'Steering');
 
   await chatPage.send('LANGSAM alte Aufgabe');
   await expect(chatPage.stopButton).toBeVisible({ timeout: 15_000 });
@@ -114,23 +84,13 @@ test('Nachricht während eines Turns wird EINGEREIHT (kein Abbruch) und danach b
   await expect(chatPage.messagesByRole('system')).toHaveCount(0);
 });
 
-test('Nur-Lese-Besucher sieht den Chat-Verlauf', async ({ page }) => {
-  const projectsPage = new ProjectsPage(page);
-  const chatPage = new ChatPage(page);
-
-  await registerNewUser(page);
-  const name = uniqueProjectName('Zuschauer Chat');
-  await projectsPage.createProject(name, 'pwa');
+test('Nur-Lese-Besucher sieht den Chat-Verlauf', async ({ page, chatPage }) => {
+  const name = await createOwnProject(page, 'Zuschauer Chat');
   await chatPage.send('Hallo Publikum');
   await expect(chatPage.messagesByRole('assistant').last()).toContainText('Echo: Hallo Publikum', {
     timeout: 15_000,
   });
-  await chatPage.backButton.click();
-  await projectsPage.logout();
-
-  await registerNewUser(page);
-  await projectsPage.filterAll.click();
-  await projectsPage.openProject(name);
+  await openAsVisitor(page, name);
 
   await expect(chatPage.readonlyHint).toBeVisible();
   await expect(chatPage.messagesByRole('user').last()).toContainText('Hallo Publikum');
@@ -139,13 +99,11 @@ test('Nur-Lese-Besucher sieht den Chat-Verlauf', async ({ page }) => {
 
 // Modellwahl pro Chat (Dropdown in der Toolbar)
 
-test('Modellwahl: Default ist Sonnet 5, Wechsel persistiert über Reload', async ({ page }) => {
-  await registerNewUser(page);
-  const projectsPage = new ProjectsPage(page);
-  const chatPage = new ChatPage(page);
-  const name = uniqueProjectName('Modellwahl');
-
-  await projectsPage.createProject(name, 'pwa');
+test('Modellwahl: Default ist Sonnet 5, Wechsel persistiert über Reload', async ({
+  page,
+  chatPage,
+}) => {
+  await createOwnProject(page, 'Modellwahl');
 
   // Neue Chats starten mit Claude Sonnet 5.
   await expect(chatPage.modelSelect).toContainText('Claude Sonnet 5');
@@ -214,14 +172,9 @@ async function installFakeSpeechRecognition(page: Page): Promise<void> {
   });
 }
 
-test('Diktat: Mikro-Button schreibt erkannten Text ins Eingabefeld', async ({ page }) => {
+test('Diktat: Mikro-Button schreibt erkannten Text ins Eingabefeld', async ({ page, chatPage }) => {
   await installFakeSpeechRecognition(page);
-  await registerNewUser(page);
-  const projectsPage = new ProjectsPage(page);
-  const chatPage = new ChatPage(page);
-  const name = uniqueProjectName('Diktat');
-
-  await projectsPage.createProject(name, 'pwa');
+  await createOwnProject(page, 'Diktat');
 
   await expect(chatPage.micButton).toBeEnabled();
   await chatPage.micButton.click();
@@ -235,14 +188,9 @@ test('Diktat: Mikro-Button schreibt erkannten Text ins Eingabefeld', async ({ pa
   await expect(chatPage.micButton).toHaveAttribute('data-status', 'idle');
 });
 
-test('Diktat: DE/EN-Umschalter wechselt die Erkennungssprache', async ({ page }) => {
+test('Diktat: DE/EN-Umschalter wechselt die Erkennungssprache', async ({ page, chatPage }) => {
   await installFakeSpeechRecognition(page);
-  await registerNewUser(page);
-  const projectsPage = new ProjectsPage(page);
-  const chatPage = new ChatPage(page);
-  const name = uniqueProjectName('Diktat Sprache');
-
-  await projectsPage.createProject(name, 'pwa');
+  await createOwnProject(page, 'Diktat Sprache');
 
   await expect(chatPage.micLang).toContainText('DE');
   await chatPage.micLang.click();
@@ -252,7 +200,10 @@ test('Diktat: DE/EN-Umschalter wechselt die Erkennungssprache', async ({ page })
   await expect(chatPage.chatInput).toHaveValue('Build a pomodoro app');
 });
 
-test('Diktat: ohne Browser-Unterstützung ist der Mikro-Button deaktiviert', async ({ page }) => {
+test('Diktat: ohne Browser-Unterstützung ist der Mikro-Button deaktiviert', async ({
+  page,
+  chatPage,
+}) => {
   // Beide Konstruktoren entfernen — simuliert Nicht-Chromium/alte Browser.
   await page.addInitScript(() => {
     Object.defineProperty(globalThis, 'SpeechRecognition', {
@@ -264,31 +215,16 @@ test('Diktat: ohne Browser-Unterstützung ist der Mikro-Button deaktiviert', asy
       configurable: true,
     });
   });
-  await registerNewUser(page);
-  const projectsPage = new ProjectsPage(page);
-  const chatPage = new ChatPage(page);
-  const name = uniqueProjectName('Diktat Unsupported');
-
-  await projectsPage.createProject(name, 'pwa');
+  await createOwnProject(page, 'Diktat Unsupported');
 
   await expect(chatPage.micButton).toBeVisible();
   await expect(chatPage.micButton).toBeDisabled();
   await expect(chatPage.micLang).toHaveCount(0);
 });
 
-test('Modellwahl: fremdes Projekt zeigt KEIN Dropdown (nur Owner)', async ({ page }) => {
-  const projectsPage = new ProjectsPage(page);
-  const chatPage = new ChatPage(page);
-
-  await registerNewUser(page);
-  const name = uniqueProjectName('Fremdes Modell');
-  await projectsPage.createProject(name, 'pwa');
-  await projectsPage.goto();
-  await projectsPage.logout();
-
-  await registerNewUser(page);
-  await projectsPage.filterAll.click();
-  await projectsPage.openProject(name);
+test('Modellwahl: fremdes Projekt zeigt KEIN Dropdown (nur Owner)', async ({ page, chatPage }) => {
+  const name = await createOwnProject(page, 'Fremdes Modell');
+  await openAsVisitor(page, name);
 
   await expect(chatPage.readonlyHint).toBeVisible();
   await expect(chatPage.modelSelect).toHaveCount(0);

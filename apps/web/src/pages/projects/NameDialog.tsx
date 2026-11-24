@@ -16,7 +16,7 @@ import type { ProjectsStore } from '../../models/ProjectsStore';
  * Kopieren und Umbenennen. `testPrefix` bildet die Testselektoren
  * (`<prefix>-project-name`, `-project-error`, `-cancel`, `-confirm`).
  */
-export const NameDialog = observer(function NameDialog({
+const NameDialog = observer(function NameDialog({
   dialog,
   open,
   title,

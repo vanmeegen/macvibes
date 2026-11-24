@@ -1,21 +1,26 @@
-import { expect, test } from '@playwright/test';
-import { getAdminCredentials, registerNewUser, uniqueProjectName } from './fixtures';
-import { LoginPage } from './pages/loginPage';
-import { ProjectsPage } from './pages/projectsPage';
+import {
+  ADMIN_CREDENTIALS,
+  createOwnProject,
+  expect,
+  registerNewUser,
+  test,
+  uniqueProjectName,
+} from './fixtures';
 
 // R1 — Projekt anlegen, R2 — Übersicht & Öffnen, R3 — Templates
 
-test('bietet die Templates aus templates.json zur Auswahl an', async ({ page }) => {
+test('bietet die Templates aus templates.json zur Auswahl an', async ({ page, projectsPage }) => {
   await registerNewUser(page);
-  const projectsPage = new ProjectsPage(page);
   await projectsPage.openCreateDialog();
   await expect(projectsPage.templateOption('pwa')).toBeVisible();
   await expect(projectsPage.templateOption('fullstack')).toBeVisible();
 });
 
-test('legt ein Projekt aus einem Template an und zeigt es in der Liste', async ({ page }) => {
+test('legt ein Projekt aus einem Template an und zeigt es in der Liste', async ({
+  page,
+  projectsPage,
+}) => {
   const username = await registerNewUser(page);
-  const projectsPage = new ProjectsPage(page);
   const name = uniqueProjectName('Mein Dashboard');
 
   await projectsPage.createProject(name, 'pwa');
@@ -27,25 +32,23 @@ test('legt ein Projekt aus einem Template an und zeigt es in der Liste', async (
   await expect(card).toContainText(username);
 });
 
-test('lehnt doppelte Projektnamen desselben Users verständlich ab', async ({ page }) => {
-  await registerNewUser(page);
-  const projectsPage = new ProjectsPage(page);
-  const name = uniqueProjectName('Doppelt');
-
-  await projectsPage.createProject(name, 'pwa');
+test('lehnt doppelte Projektnamen desselben Users verständlich ab', async ({
+  page,
+  projectsPage,
+}) => {
+  const name = await createOwnProject(page, 'Doppelt');
   await projectsPage.goto();
   await expect(projectsPage.cardByName(name)).toBeVisible();
 
   // Zweite Anlage mit gleichem Namen: Dialog-Fehler, kein Wechsel in den Chat.
-  await projectsPage.createProjectExpectingError(name, 'pwa');
+  await projectsPage.submitCreateForm(name, 'pwa');
   await expect(projectsPage.dialogError).toBeVisible();
 });
 
 test('Filter: „Nur meine" ist Default; fremde Karten nur mit „Kopieren und Anpassen"', async ({
   page,
+  projectsPage,
 }) => {
-  const projectsPage = new ProjectsPage(page);
-
   const ownerName = await registerNewUser(page);
   const foreignProject = uniqueProjectName('Fremdes Projekt');
   await projectsPage.createProject(foreignProject, 'pwa');
@@ -71,9 +74,8 @@ test('Filter: „Nur meine" ist Default; fremde Karten nur mit „Kopieren und A
 
 test('„Kopieren und Anpassen": fremdes Projekt forken, Fork gehört einem selbst', async ({
   page,
+  projectsPage,
 }) => {
-  const projectsPage = new ProjectsPage(page);
-
   // User A legt ein Projekt an.
   await registerNewUser(page);
   const original = uniqueProjectName('Original');
@@ -98,9 +100,8 @@ test('„Kopieren und Anpassen": fremdes Projekt forken, Fork gehört einem selb
   await expect(projectsPage.renameMenuItem).toBeVisible();
 });
 
-test('benennt ein eigenes Projekt über das Kartenmenü um', async ({ page }) => {
+test('benennt ein eigenes Projekt über das Kartenmenü um', async ({ page, projectsPage }) => {
   await registerNewUser(page);
-  const projectsPage = new ProjectsPage(page);
   const name = uniqueProjectName('Alter Name');
   const newName = uniqueProjectName('Neuer Name');
 
@@ -114,10 +115,13 @@ test('benennt ein eigenes Projekt über das Kartenmenü um', async ({ page }) =>
   await expect(projectsPage.cardByName(name)).not.toBeVisible();
 });
 
-test('Admin kann fremde Projekte umbenennen und löschen', async ({ page }) => {
+test('Admin kann fremde Projekte umbenennen und löschen', async ({
+  page,
+  loginPage,
+  projectsPage,
+}) => {
   // Normaler User legt ein Projekt an …
   await registerNewUser(page);
-  const projectsPage = new ProjectsPage(page);
   const name = uniqueProjectName('Fremd');
   const newName = uniqueProjectName('Vom Admin');
   await projectsPage.createProject(name, 'pwa');
@@ -125,10 +129,8 @@ test('Admin kann fremde Projekte umbenennen und löschen', async ({ page }) => {
   await projectsPage.logout();
 
   // … der Admin sieht es unter „Alle" mit Kartenmenü und darf beides.
-  const { username, password } = await getAdminCredentials();
-  const loginPage = new LoginPage(page);
   await loginPage.goto();
-  await loginPage.login(username, password);
+  await loginPage.login(ADMIN_CREDENTIALS.username, ADMIN_CREDENTIALS.password);
   await expect(projectsPage.newProjectFab).toBeVisible();
   await projectsPage.filterAll.click();
   await expect(projectsPage.cardByName(name)).toBeVisible();
@@ -140,12 +142,8 @@ test('Admin kann fremde Projekte umbenennen und löschen', async ({ page }) => {
   await expect(projectsPage.cardByName(newName)).not.toBeVisible();
 });
 
-test('löscht ein eigenes Projekt nach Bestätigung', async ({ page }) => {
-  await registerNewUser(page);
-  const projectsPage = new ProjectsPage(page);
-  const name = uniqueProjectName('Wegwerf');
-
-  await projectsPage.createProject(name, 'pwa');
+test('löscht ein eigenes Projekt nach Bestätigung', async ({ page, projectsPage }) => {
+  const name = await createOwnProject(page, 'Wegwerf');
   await projectsPage.goto();
   await expect(projectsPage.cardByName(name)).toBeVisible();
 

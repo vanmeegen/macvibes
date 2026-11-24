@@ -1,22 +1,15 @@
-import { expect, test } from '@playwright/test';
-import { registerNewUser, uniqueProjectName } from './fixtures';
-import { ProjectsPage } from './pages/projectsPage';
+import { createOwnProject, expect, test } from './fixtures';
 
 // Responsives Layout: auf schmalen Screens (Phone/gefaltet) muss der Preview
 // sichtbar sein (vertikal gestapelt) und per Toggle ein-/ausblendbar.
-// Screenshots landen im Playwright-Output des Tests (testInfo.outputPath) —
-// vorher stand hier ein hartkodierter Mac-Scratchpad-Pfad, der auf jedem
-// anderen Rechner brach.
+// Screenshots landen im Playwright-Output des Tests (testInfo.outputPath).
 test('Preview ist auf Phone-Breite sichtbar, vertikal gestapelt und toggelbar', async ({
   page,
+  chatPage,
 }, testInfo) => {
-  await registerNewUser(page);
-  const projectsPage = new ProjectsPage(page);
-  await projectsPage.createProject(uniqueProjectName('Responsive'), 'pwa');
+  await createOwnProject(page, 'Responsive');
 
-  const chatColumn = page.getByTestId('chat-column');
-  const previewColumn = page.getByTestId('preview-column');
-  const previewToggle = page.getByTestId('chat-preview-toggle');
+  const { chatColumn, previewColumn, previewToggle } = chatPage;
 
   // ── Phone-Breite (z. B. OnePlus Open Cover / Portrait) ──
   await page.setViewportSize({ width: 390, height: 844 });

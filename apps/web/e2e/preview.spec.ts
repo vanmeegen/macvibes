@@ -1,20 +1,17 @@
-import { expect, test } from '@playwright/test';
-import { registerNewUser, uniqueProjectName } from './fixtures';
-import { ChatPage } from './pages/chatPage';
-import { ProjectsPage } from './pages/projectsPage';
+import { createOwnProject, expect, openAsVisitor, test } from './fixtures';
 
 // R7 — Live-Preview: Dev-Server läuft in der Sandbox, iframe zeigt darauf.
 
-test('Preview: Dev-Server der Sandbox wird im iframe erreichbar', async ({ page, request }) => {
+test('Preview: Dev-Server der Sandbox wird im iframe erreichbar', async ({
+  page,
+  request,
+  chatPage,
+}) => {
   test.setTimeout(180_000);
-  await registerNewUser(page);
-  const projectsPage = new ProjectsPage(page);
-  const name = uniqueProjectName('Preview Test');
-
-  await projectsPage.createProject(name, 'pwa');
+  await createOwnProject(page, 'Preview Test');
 
   // Erst „startet…"-Zustand oder direkt ready — nie ein Browser-Fehlerbild.
-  const iframe = page.getByTestId('chat-preview');
+  const iframe = chatPage.previewIframe;
   await expect(iframe).toBeVisible({ timeout: 120_000 });
 
   // Neu: die iframe-URL zeigt aufs Preview-Gateway (fester Port) mit /p/<id>/,
@@ -41,35 +38,24 @@ test('Preview: Dev-Server der Sandbox wird im iframe erreichbar', async ({ page,
   // Und die Seite RENDERT im iframe: erst damit laufen die root-absoluten
   // Asset-Requests (/@vite/client, /_bun/…) über die Referer-Routing-Logik
   // des Gateways — genau die Bug-Klasse „Preview bleibt schwarz".
-  await expect(
-    page.frameLocator('[data-testselector="chat-preview"]').locator('body'),
-  ).toContainText(/Deine App/i, { timeout: 60_000 });
+  await expect(chatPage.previewBody).toContainText(/Deine App/i, { timeout: 60_000 });
 });
 
 test('Fremdes Projekt: Öffnen startet die Sandbox, Preview wird sichtbar (R10)', async ({
   page,
+  chatPage,
 }) => {
   test.setTimeout(180_000);
-  const projectsPage = new ProjectsPage(page);
-  const chatPage = new ChatPage(page);
 
-  await registerNewUser(page);
-  const name = uniqueProjectName('Preview Fremd');
-  await projectsPage.createProject(name, 'pwa');
-  await projectsPage.goto(); // Anlegen führt in den Chat — zurück zur Liste zum Abmelden.
-  await projectsPage.logout();
+  const name = await createOwnProject(page, 'Preview Fremd');
 
-  // Grace-Period (E2E: 1,5 s) abwarten, damit die Sandbox des Owners sicher
-  // gestoppt ist — der Besucher muss sie selbst hochfahren.
-  await page.waitForTimeout(3_000);
-
-  // Nur-Lese-Besucher: Chat bleibt gesperrt, aber die Sandbox bootet,
-  // damit die Live-Preview betrachtet werden kann (R10).
-  await registerNewUser(page);
-  await projectsPage.filterAll.click();
-  await projectsPage.openProject(name);
+  // Nur-Lese-Besucher: Chat bleibt gesperrt, aber die Sandbox bootet, damit die
+  // Live-Preview betrachtet werden kann (R10). Vorher die Grace-Period (E2E:
+  // 1,5 s) abwarten, damit die Sandbox des Owners sicher gestoppt ist — der
+  // Besucher muss sie selbst hochfahren.
+  await openAsVisitor(page, name, { waitAfterLogoutMs: 3_000 });
 
   await expect(chatPage.readonlyHint).toBeVisible();
-  await expect(page.getByTestId('chat-preview')).toBeVisible({ timeout: 120_000 });
-  await expect(page.getByTestId('chat-preview-unavailable')).toHaveCount(0);
+  await expect(chatPage.previewIframe).toBeVisible({ timeout: 120_000 });
+  await expect(chatPage.previewUnavailable).toHaveCount(0);
 });
