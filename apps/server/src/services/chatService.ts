@@ -4,6 +4,7 @@ import type { AgentEvent } from '../agent/events';
 import type { AgentRunner, TurnHandle } from '../agent/runner';
 import type { Db } from '../db/client';
 import { chatMessages, projects, type ChatMessageRow, type UserRow } from '../db/schema';
+import { ChatEventBus, type ChatEventPayload } from './chat/chatEventBus';
 import { getProject, getProjectOwned } from './projectsService';
 
 /**
@@ -13,11 +14,7 @@ import { getProject, getProjectOwned } from './projectsService';
  */
 export const MAX_MESSAGE_CHARS = 200_000;
 
-export interface ChatEventPayload {
-  message: ChatMessageRow;
-  /** Läuft für dieses Projekt gerade (oder gleich, Queue) ein Agent-Turn? */
-  turnActive: boolean;
-}
+export type { ChatEventPayload } from './chat/chatEventBus';
 
 export interface ChatHooks {
   /** Für den Idle-Timer der Sandbox (R9). */
@@ -83,7 +80,6 @@ interface ProjectChatState {
    * turnId gepinnt ist, kann er keine später gestartete Nachricht treffen.
    */
   abortActiveTurnId: string | null;
-  subscribers: Set<(payload: ChatEventPayload) => void>;
 }
 
 export interface ChatServiceOptions {
@@ -133,6 +129,7 @@ export interface ChatServiceOptions {
 
 export class ChatService {
   private readonly states = new Map<string, ProjectChatState>();
+  private readonly bus = new ChatEventBus();
   /** Laufende Config-Warmups pro Projekt (siehe prewarm). */
   private readonly warmups = new Map<string, Promise<void>>();
   private readonly idleTimeoutMs: number;
@@ -188,7 +185,6 @@ export class ChatService {
         currentHandle: null,
         activeTurnId: null,
         abortActiveTurnId: null,
-        subscribers: new Set(),
       };
       this.states.set(projectId, state);
     }
@@ -535,7 +531,7 @@ export class ChatService {
     if (state === undefined) return;
     state.queue.length = 0;
     state.currentHandle?.abort();
-    state.subscribers.clear();
+    this.bus.forget(projectId);
     this.states.delete(projectId);
     this.warmups.delete(projectId);
   }
@@ -547,63 +543,13 @@ export class ChatService {
 
   /** Live-Stream aller Chat-Events eines Projekts (auch für Nur-Lese-Besucher, R10). */
   subscribe(projectId: string): AsyncIterableIterator<ChatEventPayload> {
-    const state = this.state(projectId);
-    const buffer: ChatEventPayload[] = [];
-    let notify: (() => void) | null = null;
-    let closed = false;
-
-    const push = (payload: ChatEventPayload): void => {
-      // Neuester Stand gewinnt: liegt der letzte noch ungelesene Eintrag zur
-      // SELBEN Zeile vor (Streaming), wird er ersetzt statt ein weiterer
-      // Voll-Schnappschuss angehängt. Ein langsamer Abonnent hält so pro Zeile
-      // einen Stand statt einer wachsenden Reihe; Clients upserten per ID.
-      const letzter = buffer[buffer.length - 1];
-      if (letzter !== undefined && letzter.message.id === payload.message.id) {
-        buffer[buffer.length - 1] = payload;
-      } else {
-        buffer.push(payload);
-      }
-      notify?.();
-    };
-    state.subscribers.add(push);
-
-    const iterator: AsyncIterableIterator<ChatEventPayload> = {
-      [Symbol.asyncIterator]() {
-        return this;
-      },
-      next: async (): Promise<IteratorResult<ChatEventPayload>> => {
-        while (buffer.length === 0 && !closed) {
-          await new Promise<void>((resolve) => {
-            notify = resolve;
-          });
-          notify = null;
-        }
-        const value = buffer.shift();
-        if (value !== undefined) {
-          return { value, done: false };
-        }
-        return { value: undefined, done: true };
-      },
-      return: async (): Promise<IteratorResult<ChatEventPayload>> => {
-        closed = true;
-        state.subscribers.delete(push);
-        notify?.();
-        return { value: undefined, done: true };
-      },
-    };
-    return iterator;
+    // Der Projekt-Zustand entsteht wie bisher schon beim Abonnieren (lazy).
+    this.state(projectId);
+    return this.bus.subscribe(projectId);
   }
 
   private publish(projectId: string, message: ChatMessageRow, turnActive: boolean): void {
-    // Bewusst states.get statt state(): ein noch auslaufender Turn eines
-    // GELÖSCHTEN Projekts (forget() hat den State entfernt) darf hier keinen
-    // frischen, leeren State neu anlegen — sonst kehrt das gerade behobene Leck
-    // zurück. Ohne State gibt es keine Subscriber, an die zu senden wäre.
-    const state = this.states.get(projectId);
-    if (!state) return;
-    for (const subscriber of state.subscribers) {
-      subscriber({ message, turnActive });
-    }
+    this.bus.publish(projectId, message, turnActive);
   }
 
   /**
