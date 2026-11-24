@@ -12,7 +12,7 @@ import {
   type ChatEventPayload,
   type ChatServiceOptions,
 } from '../chatService';
-import { createTestDb, createUser, waitFor } from './testUtils';
+import { createTestDb, createUser, waitFor } from '../../testing/testUtils';
 
 async function createProjectRow(db: Db, owner: UserRow, id = 'projekt-1'): Promise<string> {
   await db.insert(projects).values({

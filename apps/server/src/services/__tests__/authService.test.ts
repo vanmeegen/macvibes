@@ -14,7 +14,7 @@ import {
   sessionKey,
 } from '../authService';
 import { DomainError } from '../../core/errors';
-import { createTestDb, TEST_AUTH_CONFIG } from './testUtils';
+import { createTestDb, TEST_AUTH_CONFIG } from '../../testing/testUtils';
 
 const CONFIG = TEST_AUTH_CONFIG;
 

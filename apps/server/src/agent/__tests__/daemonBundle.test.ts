@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, readFileSync } from 'node:fs';
 import { buildDaemonBundle } from '../daemonBundle';
-import { createTempDir, removeDir } from '../../services/__tests__/testUtils';
+import { createTempDir, removeDir } from '../../testing/testUtils';
 
 const tempDirs: string[] = [];
 

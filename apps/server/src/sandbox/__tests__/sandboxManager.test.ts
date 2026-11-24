@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import type { PreviewStatus } from '../../preview/status';
 import type { SandboxContext, SandboxHandle, SandboxProvider } from '../provider';
 import { SandboxManager, viewerKey } from '../sandboxManager';
-import { waitFor } from '../../services/__tests__/testUtils';
+import { waitFor } from '../../testing/testUtils';
 
 function ctx(projectId: string): SandboxContext {
   return {

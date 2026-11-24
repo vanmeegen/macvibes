@@ -5,7 +5,7 @@ import { createDb, type Db } from '../../db/client';
 import { SandboxManager } from '../../sandbox/sandboxManager';
 import type { SandboxContext, SandboxHandle, SandboxProvider } from '../../sandbox/provider';
 import { ChatService } from '../../services/chatService';
-import { createTestDb } from '../../services/__tests__/testUtils';
+import { createTestDb } from '../../testing/testUtils';
 import { createAppYoga } from '../createAppYoga';
 
 const HOST = 'mac.local:4000';

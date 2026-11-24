@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { createProjectBranch, ensureBareRepo, listBranches } from '../../core/gitService';
 import { mirrorToGitHub, startMirrorScheduler } from '../mirrorService';
-import { createTempDir, createTemplatesFixture, removeDir } from './testUtils';
+import { createTempDir, createTemplatesFixture, removeDir } from '../../testing/testUtils';
 
 const tempDirs: string[] = [];
 

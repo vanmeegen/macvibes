@@ -11,9 +11,7 @@
   "scripts": {
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "build": "tsc --noEmit",
-    "test": "bun test",
-    "test:ci": "bun test"
+    "test": "bun test"
   },
   "dependencies": {
     "zod": "^4.3.6"

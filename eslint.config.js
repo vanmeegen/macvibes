@@ -35,7 +35,10 @@ import boundaries from 'eslint-plugin-boundaries';
 const serverElements = [
   // Reihenfolge zählt: spezifischere Muster zuerst, sonst schluckt ein
   // Ordner-Muster die Dateien. Tests werden eigenständig klassifiziert (s. u.).
-  { type: 'test', partialMatch: false, pattern: ['**/__tests__/**'] },
+  // `src/testing/` sind die geteilten Test-Hilfen (DB, Temp-Verzeichnisse,
+  // Fixtures) — bewusst außerhalb jeder Schicht, weil Tests ALLER Schichten
+  // sie nutzen (vorher lagen sie unter services/__tests__).
+  { type: 'test', partialMatch: false, pattern: ['**/__tests__/**', '**/src/testing/**'] },
   // Composition Root: verdrahtet alle Schichten, darf deshalb alles.
   // devHotReload gehört zur Composition Root: es räumt beim `bun --hot`-Reload
   // genau die Ressourcen ab bzw. übergibt sie, die index.ts verdrahtet — dafür
@@ -74,24 +77,28 @@ const serverRules = [
   // Die frühere Kante → db wurde bewusst gestrichen: sie war im Importgraphen
   // tot, und eine Basisschicht, die Persistenz kennt, wäre auch im Zielbild
   // ein Rückschritt. Jede ungenutzte Erlaubnis ist ein Loch im Gate — bei
-  // echtem Bedarf hier begründet wieder eintragen.
-  { from: 'core', allow: ['preview', 'base-file'] },
+  // echtem Bedarf hier begründet wieder eintragen. Dasselbe gilt für
+  // `base-file` (config/logSafe): außer agent (logSafe im Gateway) liest es
+  // keine Schicht unterhalb von schema/http — die Erlaubnis ist dort gestrichen.
+  { from: 'core', allow: ['preview'] },
   // preview ist das geteilte Status-Vokabular zwischen Host und VM-Daemon
   // (wird ins VM-Bundle gebündelt) — es darf GAR NICHTS importieren.
   { from: 'preview', allow: [] },
   // db kapselt Drizzle/SQLite und kennt keine höheren Schichten.
-  { from: 'db', allow: ['base-file'] },
+  { from: 'db', allow: [] },
   // sandbox (VM-/Prozess-Provider) und agent (Runner/Daemon/Gateway) sind
   // Geschwister über core: beide bauen auf Basisschicht + Status-Vokabular,
   // keiner kennt services, schema oder http — und einander auch nicht.
-  { from: 'sandbox', allow: ['core', 'preview', 'db', 'base-file'] },
-  { from: 'agent', allow: ['core', 'preview', 'db', 'base-file'] },
+  // Persistenz (db) kennt keiner von beiden: die Kante war im Importgraphen
+  // tot und ist gestrichen.
+  { from: 'sandbox', allow: ['core', 'preview'] },
+  { from: 'agent', allow: ['core', 'preview', 'base-file'] },
   // services orchestrieren Fachlichkeit über agent und persistieren in db.
   // Sie kennen weder GraphQL (schema) noch HTTP. Die frühere Kante → sandbox
   // wurde bewusst gestrichen: kein Service importiert sandbox mehr — die
   // Sandbox-Orchestrierung liegt heute in schema (chatEvents-Subscription).
   // Bei echtem Bedarf hier begründet wieder eintragen.
-  { from: 'services', allow: ['core', 'agent', 'db', 'base-file'] },
+  { from: 'services', allow: ['core', 'agent', 'db'] },
   // schema (GraphQL-Resolver):
   // → services/db/core: Fachlogik, Persistenz-Typen, DomainError.
   // → agent: Modellkatalog (agentModel) für die Modellwahl im UI.

@@ -19,7 +19,7 @@ import {
   createTestDb,
   createUser,
   removeDir,
-} from './testUtils';
+} from '../../testing/testUtils';
 
 const tempDirs: string[] = [];
 

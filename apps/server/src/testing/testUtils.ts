@@ -1,10 +1,10 @@
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createDb, type Db } from '../../db/client';
-import { runMigrations } from '../../db/migrate';
-import { approveUser, register, type AuthConfig } from '../authService';
-import type { UserRow } from '../../db/schema';
+import { createDb, type Db } from '../db/client';
+import { runMigrations } from '../db/migrate';
+import { approveUser, register, type AuthConfig } from '../services/authService';
+import type { UserRow } from '../db/schema';
 
 export const TEST_AUTH_CONFIG: AuthConfig = {
   sessionTtlMs: 3 * 24 * 60 * 60 * 1000,
@@ -83,9 +83,10 @@ export async function createTemplatesFixture(templateDir = 'pwa'): Promise<strin
 }
 
 /**
- * Legt einen freigeschalteten Testnutzer an. Der erste User wird ohnehin
- * Admin+approved; jeder weitere ist zunächst pending — für Tests, die einen
- * benutzbaren Owner brauchen, schalten wir ihn direkt frei.
+ * Legt einen freigeschalteten Testnutzer an. Nur der Bootstrap-Admin
+ * (TEST_AUTH_CONFIG.adminUsername) ist sofort approved; jeder andere ist
+ * zunächst pending — für Tests, die einen benutzbaren Owner brauchen,
+ * schalten wir ihn direkt frei.
  */
 export async function createUser(db: Db, username = 'marco'): Promise<UserRow> {
   const result = await register(db, TEST_AUTH_CONFIG, {

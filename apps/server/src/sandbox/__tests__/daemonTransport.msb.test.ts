@@ -11,11 +11,7 @@ import { buildVmAgentEnv } from '../../agent/vmAgentEnv';
 import { createAnthropicProxy } from '../../http/anthropicProxy';
 import { startEgressProxy } from '../../http/egressProxy';
 import type { EgressProxyHandle } from '../../http/egressProxy';
-import {
-  createTempDir,
-  createTemplatesFixture,
-  removeDir,
-} from '../../services/__tests__/testUtils';
+import { createTempDir, createTemplatesFixture, removeDir } from '../../testing/testUtils';
 import { createProjectBranch, ensureBareRepo } from '../../core/gitService';
 import { GUEST_WORKDIR } from '../../core/vmContract';
 import { workspaceDirFor } from '../../core/workspaceService';

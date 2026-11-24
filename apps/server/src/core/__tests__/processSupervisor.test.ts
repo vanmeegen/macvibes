@@ -5,7 +5,7 @@ import {
   type ProcessSupervisorDeps,
   type SupervisedProcess,
 } from '../processSupervisor';
-import { waitFor } from '../../services/__tests__/testUtils';
+import { waitFor } from '../../testing/testUtils';
 
 /** Steuerbarer Fake-Prozess: exited lässt sich von außen auflösen (= Crash). */
 function fakeProcess(): SupervisedProcess & { crash: (code?: number) => void; killed: boolean } {

@@ -3,11 +3,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'n
 import { join } from 'node:path';
 import { buildDaemonBundle } from '../../agent/daemonBundle';
 import { baselineExists, buildTemplateBaseline } from '../baselineService';
-import {
-  createTempDir,
-  createTemplatesFixture,
-  removeDir,
-} from '../../services/__tests__/testUtils';
+import { createTempDir, createTemplatesFixture, removeDir } from '../../testing/testUtils';
 import { createProjectBranch, ensureBareRepo } from '../../core/gitService';
 import { workspaceDirFor } from '../../core/workspaceService';
 import { AGENT_CONFIG_GUEST_DIR } from '../../core/vmContract';

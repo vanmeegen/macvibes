@@ -4,11 +4,7 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createProjectBranch, ensureBareRepo } from '../gitService';
 import { bunCacheDirFor, ensureWorkspace, gitDirFor, workspaceDirFor } from '../workspaceService';
-import {
-  createTempDir,
-  createTemplatesFixture,
-  removeDir,
-} from '../../services/__tests__/testUtils';
+import { createTempDir, createTemplatesFixture, removeDir } from '../../testing/testUtils';
 
 const tempDirs: string[] = [];
 

@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { projects } from '../../db/schema';
 import { DomainError } from '../../core/errors';
 import { setProjectAgentModel } from '../projectsService';
-import { createTestDb, createUser } from './testUtils';
+import { createTestDb, createUser } from '../../testing/testUtils';
 
 async function setup() {
   const db = createTestDb();

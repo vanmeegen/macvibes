@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { PreviewStatusPoller } from '../previewStatusPoller';
 import type { PreviewStatus } from '../provider';
-import { waitFor } from '../../services/__tests__/testUtils';
+import { waitFor } from '../../testing/testUtils';
 
 describe('PreviewStatusPoller', () => {
   test('startet als starting und übernimmt den gepollten Status', async () => {

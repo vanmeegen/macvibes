@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { PreviewStatus } from '../../../sandbox/provider';
 import { PreviewStatusReporter } from '../previewStatusReporter';
-import { waitFor } from '../../../services/__tests__/testUtils';
+import { waitFor } from '../../../testing/testUtils';
 
 function monitText(devserverStatus: string): string {
   return [

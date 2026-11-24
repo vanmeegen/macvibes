@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { sql } from 'drizzle-orm';
 import { supportsPosixModes } from '../../core/fsCapabilities';
 import { createDb } from '../client';
-import { createTempDir, removeDir } from '../../services/__tests__/testUtils';
+import { createTempDir, removeDir } from '../../testing/testUtils';
 
 const tempDirs: string[] = [];
 

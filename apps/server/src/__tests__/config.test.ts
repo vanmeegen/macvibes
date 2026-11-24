@@ -5,7 +5,7 @@ import { loadConfig, loadHomeEnvFile, parseEnvFile, resolveDbPath } from '../con
 import { PORT_DEFAULTS } from '../../../../scripts/lib/ports';
 import { LITELLM_BRIDGE_URL } from '../../../../scripts/lib/setup';
 import { DEFAULT_BRIDGE_PORT } from '../../local-router/bridgePort';
-import { createTempDir, removeDir } from '../services/__tests__/testUtils';
+import { createTempDir, removeDir } from '../testing/testUtils';
 
 const tempDirs: string[] = [];
 const savedEnv = { DB_PATH: Bun.env.DB_PATH };

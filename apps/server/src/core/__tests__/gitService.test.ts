@@ -12,11 +12,7 @@ import {
   runGit,
   runGitInRepo,
 } from '../gitService';
-import {
-  createTempDir,
-  createTemplatesFixture,
-  removeDir,
-} from '../../services/__tests__/testUtils';
+import { createTempDir, createTemplatesFixture, removeDir } from '../../testing/testUtils';
 
 const tempDirs: string[] = [];
 

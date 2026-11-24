@@ -22,7 +22,7 @@ import {
   createTestDb,
   createUser,
   removeDir,
-} from './testUtils';
+} from '../../testing/testUtils';
 
 /**
  * Stufe 1: Der Helfer bündelt die zuvor an DREI Stellen (chatEvents,

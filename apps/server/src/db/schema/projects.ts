@@ -41,4 +41,3 @@ export const projects = sqliteTable(
 );
 
 export type ProjectRow = typeof projects.$inferSelect;
-export type NewProjectRow = typeof projects.$inferInsert;

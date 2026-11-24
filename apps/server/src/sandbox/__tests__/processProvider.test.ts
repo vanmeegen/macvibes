@@ -2,11 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import {
-  createTempDir,
-  createTemplatesFixture,
-  removeDir,
-} from '../../services/__tests__/testUtils';
+import { createTempDir, createTemplatesFixture, removeDir } from '../../testing/testUtils';
 import { createProjectBranch, ensureBareRepo } from '../../core/gitService';
 import { workspaceDirFor } from '../../core/workspaceService';
 import { ProcessSandboxProvider } from '../processProvider';
