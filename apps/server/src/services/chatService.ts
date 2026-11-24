@@ -1,19 +1,14 @@
-import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { DEFAULT_AGENT_MODEL, agentTimeoutsFor, isSlowAgentModel } from '../agent/agentModel';
 import type { AgentEvent } from '../agent/events';
 import type { AgentRunner, TurnHandle } from '../agent/runner';
 import type { Db } from '../db/client';
-import { chatMessages, projects, type ChatMessageRow, type UserRow } from '../db/schema';
+import { projects, type ChatMessageRow, type UserRow } from '../db/schema';
 import { ChatEventBus, type ChatEventPayload } from './chat/chatEventBus';
+import { ChatMessageStore, MAX_MESSAGE_CHARS } from './chat/chatMessageStore';
 import { getProject, getProjectOwned } from './projectsService';
 
-/**
- * Obergrenze pro Chat-Zeile (F16). Jedes Delta schreibt die komplette Zeile
- * per UPDATE und broadcastet sie an alle Abonnenten — ohne Deckel wächst das
- * unbegrenzt, im Missbrauchsfall bis zur Sättigung von Speicher und Platte.
- */
-export const MAX_MESSAGE_CHARS = 200_000;
-
+export { MAX_MESSAGE_CHARS };
 export type { ChatEventPayload } from './chat/chatEventBus';
 
 export interface ChatHooks {
@@ -130,6 +125,7 @@ export interface ChatServiceOptions {
 export class ChatService {
   private readonly states = new Map<string, ProjectChatState>();
   private readonly bus = new ChatEventBus();
+  private readonly store: ChatMessageStore;
   /** Laufende Config-Warmups pro Projekt (siehe prewarm). */
   private readonly warmups = new Map<string, Promise<void>>();
   private readonly idleTimeoutMs: number;
@@ -151,6 +147,7 @@ export class ChatService {
     private readonly hooks: ChatHooks = {},
     options: ChatServiceOptions = {},
   ) {
+    this.store = new ChatMessageStore(db);
     this.idleTimeoutMs = options.agentIdleTimeoutMs ?? 180_000;
     // Nie länger warten als der Idle-Timeout — der Start-Timeout ist die UNTERE Schranke.
     this.firstEventTimeoutMs = Math.min(
@@ -192,11 +189,7 @@ export class ChatService {
   }
 
   async listMessages(projectId: string): Promise<ChatMessageRow[]> {
-    return this.db
-      .select()
-      .from(chatMessages)
-      .where(eq(chatMessages.projectId, projectId))
-      .orderBy(sql`rowid`, asc(chatMessages.createdAt));
+    return this.store.list(projectId);
   }
 
   /**
@@ -417,11 +410,11 @@ export class ChatService {
     // Früher Guard nur als billiger Kurzschluss — er allein genügt NICHT.
     if (this.isTurnActive(projectId)) return false;
     // Feature-Gating (s. o.): fremdes oder unbekanntes Projekt → still false.
-    // VOR listMessages und VOR dem lazy state() — kein DB-Lesen der Historie
+    // VOR dem Lesen der letzten Zeile und VOR dem lazy state() — kein DB-Lesen der Historie
     // und kein liegenbleibender State-Eintrag für fremde Projekte.
     const project = await getProject(this.db, projectId);
     if (project === null || project.ownerId !== user.id) return false;
-    const history = await this.listMessages(projectId);
+    const lastRow = await this.store.last(projectId);
     // Re-Check NACH dem await (check-then-act-Race): zwei gleichzeitige
     // enterProject-Aufrufe des Owners (zwei Tabs; im Dev-Modus der React-
     // StrictMode-Doppel-Effekt) passieren sonst BEIDE den Guard oben, warten
@@ -432,7 +425,6 @@ export class ChatService {
     // synchron vor dem ersten await) sofort sichtbar, der zweite sieht hier
     // isTurnActive === true.
     if (this.isTurnActive(projectId)) return false;
-    const lastRow = history[history.length - 1];
     if (lastRow === undefined || lastRow.role !== 'user') return false;
     const state = this.state(projectId);
     state.queue.push({ turnId: lastRow.turnId, prompt: lastRow.content, workspaceDir });
@@ -562,39 +554,13 @@ export class ChatService {
     });
   }
 
-  /**
-   * Sichert die Agent-Session samt Modell am Projekt (R9). Das Modell gehört
-   * dazu: ein späterer Modellwechsel darf diese Session NICHT fortsetzen
-   * (--resume + anderes --model hängt).
-   */
-  private async saveSession(projectId: string, sessionId: string, model: string): Promise<void> {
-    await this.db
-      .update(projects)
-      .set({ claudeSessionId: sessionId, claudeSessionModel: model })
-      .where(eq(projects.id, projectId));
-  }
-
   private async insertMessage(
     projectId: string,
     turnId: string,
     role: ChatMessageRow['role'],
     content: string,
   ): Promise<ChatMessageRow> {
-    // Zweiter Riegel gegen zu lange Inhalte: MAX_MESSAGE_CHARS griff nur im
-    // Append-Pfad (appendDelta), nicht hier. Damit kam jede Nicht-Delta-Quelle
-    // — insbesondere tool-use/error aus der untrusted VM — am Deckel vorbei.
-    // Die Protokoll-Schicht begrenzt die Felder schon; das hier ist die
-    // Absicherung an der Senke, damit kein künftiger Pfad sie umgeht.
-    const gekuerzt =
-      content.length > MAX_MESSAGE_CHARS ? `${content.slice(0, MAX_MESSAGE_CHARS)}…` : content;
-    const inserted = await this.db
-      .insert(chatMessages)
-      .values({ id: crypto.randomUUID(), projectId, turnId, role, content: gekuerzt })
-      .returning();
-    const row = inserted[0];
-    if (!row) {
-      throw new Error('Chat-Insert lieferte keine Zeile zurück');
-    }
+    const row = await this.store.insert(projectId, turnId, role, content);
     this.publish(projectId, row, this.isTurnActive(projectId));
     return row;
   }
@@ -709,48 +675,6 @@ export class ChatService {
   }
 
   /**
-   * Stellt dem Prompt den bisherigen Gesprächsverlauf voran, falls es einen gibt
-   * (nur user/assistant, gekappt). Nur nötig, wenn OHNE `--resume` gestartet wird
-   * — sonst würde der Agent den Kontext der Konversation nicht kennen.
-   */
-  private async withHistoryContext(
-    projectId: string,
-    currentTurnId: string,
-    prompt: string,
-  ): Promise<string> {
-    // Nur user/assistant-Zeilen laden — und das Filtern schon in die DB legen,
-    // NICHT erst danach. Sonst füllt ein tool-lastiger Turn die geholten Zeilen
-    // mit `tool`/`system`/`error` und nach dem Filter bleibt fast nichts (im
-    // schlimmsten Fall nichts) übrig: der Agent startete dann ohne Resume UND
-    // ohne Kontext und beantwortete ein „weiter" gedächtnislos.
-    const convo = (
-      await this.db
-        .select()
-        .from(chatMessages)
-        .where(
-          and(
-            eq(chatMessages.projectId, projectId),
-            ne(chatMessages.turnId, currentTurnId),
-            inArray(chatMessages.role, ['user', 'assistant']),
-          ),
-        )
-        .orderBy(desc(sql`rowid`))
-        .limit(30)
-    ).reverse();
-    if (convo.length === 0) return prompt;
-    const MAX_CHARS = 8_000;
-    let verlauf = convo
-      .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
-      .join('\n\n');
-    if (verlauf.length > MAX_CHARS) verlauf = `…\n\n${verlauf.slice(-MAX_CHARS)}`;
-    return (
-      'Bisheriger Gesprächsverlauf dieses Projekts (der Sitzungskontext wurde ' +
-      'nach einem Abbruch neu aufgebaut; der aktuelle Stand des Codes liegt in ' +
-      `den Dateien im Workspace):\n\n${verlauf}\n\n---\n\nAktuelle Aufgabe:\n${prompt}`
-    );
-  }
-
-  /**
    * Ein einzelner Anlauf eines Turns: Runner starten, Events verarbeiten,
    * Watchdog fahren.
    *
@@ -832,7 +756,7 @@ export class ChatService {
     // Agent gedächtnislos. Mit Resume trägt --resume den Kontext, dann nicht.
     const prompt = canResume
       ? turn.prompt
-      : await this.withHistoryContext(projectId, turn.turnId, turn.prompt);
+      : await this.store.withHistoryContext(projectId, turn.turnId, turn.prompt);
     const rohHandle = this.runner.startTurn({
       projectId,
       prompt,
@@ -912,10 +836,7 @@ export class ChatService {
         const rows = [...offeneDeltas.values()];
         offeneDeltas.clear();
         for (const row of rows) {
-          await this.db
-            .update(chatMessages)
-            .set({ content: row.content })
-            .where(eq(chatMessages.id, row.id));
+          await this.store.updateContent(row.id, row.content);
           this.publish(projectId, row, true);
         }
       });
@@ -1035,7 +956,7 @@ export class ChatService {
           // Session-ID früh sichern — überlebt auch einen abgebrochenen Turn (R9).
           // Modell mitschreiben: ein späterer Modellwechsel darf diese Session
           // NICHT fortsetzen (--resume + anderes --model hängt).
-          await this.saveSession(projectId, event.sessionId, model);
+          await this.store.saveSession(projectId, event.sessionId, model);
           break;
         case 'api-retry':
           // Sichtbar machen (R6) — aber nur einmal pro Turn, kein Retry-Spam.
@@ -1061,7 +982,7 @@ export class ChatService {
         case 'turn-completed':
           completed = true;
           if (event.sessionId !== null) {
-            await this.saveSession(projectId, event.sessionId, model);
+            await this.store.saveSession(projectId, event.sessionId, model);
           }
           break;
       }
