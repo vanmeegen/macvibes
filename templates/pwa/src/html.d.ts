@@ -3,3 +3,6 @@ declare module '*.html' {
   const bundle: HTMLBundle;
   export default bundle;
 }
+
+// Stylesheets werden nur wegen ihrer Wirkung importiert (Bun bündelt sie).
+declare module '*.css';
