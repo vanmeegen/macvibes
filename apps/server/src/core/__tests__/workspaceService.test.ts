@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { createProjectBranch, ensureBareRepo } from '../gitService';
+import { createProjectBranch, ensureBareRepo, runGit } from '../gitService';
 import { bunCacheDirFor, ensureWorkspace, gitDirFor, workspaceDirFor } from '../workspaceService';
 import { createTempDir, createTemplatesFixture, trackTempDirs } from '../../testing/testUtils';
 
@@ -60,6 +60,42 @@ describe('ensureWorkspace (R9 Volume-Persistenz)', () => {
     const again = await ensureWorkspace(params);
     expect(again).toBe(dir);
     expect(existsSync(join(dir, 'lokale-arbeit.txt'))).toBe(true);
+  });
+});
+
+/**
+ * Der Klon aus dem lokalen Bare-Repo darf NICHT dessen Objektordner Datei für
+ * Datei kopieren (gits Abkürzung für lokale Pfade): schreibt währenddessen ein
+ * anderes Projekt ins Bare-Repo (Auto-Commit, Projekt anlegen), bricht der Klon
+ * mit „failed to copy file … No such file or directory" ab — in der Live-Suite
+ * getroffen, per Dauerschleife nachgestellt (2 von 120 Klonen, mit --no-local
+ * 0 von 120). Über den regulären Transport kommt nur der eigene Branch an;
+ * genau das ist hier beobachtbar.
+ */
+describe('ensureWorkspace — Klon über den regulären Transport', () => {
+  test('das gitDir enthält nur die Objekte des eigenen Branches', async () => {
+    const { home, bare } = await setup();
+    const fremd = await createTemplatesFixture();
+    tempDirs.push(fremd);
+    await writeFile(
+      join(fremd, 'pwa', 'nur-im-fremden-projekt.txt'),
+      'gehört einem anderen Projekt',
+    );
+    await createProjectBranch(bare, 'anna/geheim', join(fremd, 'pwa'));
+    const fremderCommit = (await runGit(['rev-parse', 'refs/heads/anna/geheim'], bare)).trim();
+
+    await ensureWorkspace({
+      macvibesHome: home,
+      bareRepoPath: bare,
+      projectId: 'projekt-1',
+      branchName: 'marco/dashboard',
+    });
+
+    const gitDir = gitDirFor(home, 'projekt-1');
+    const eigenerCommit = (await runGit(['--git-dir', gitDir, 'rev-parse', 'HEAD'])).trim();
+    expect(eigenerCommit).not.toBe(fremderCommit);
+    // `cat-file -e` endet mit Fehler, wenn das Objekt fehlt.
+    await expect(runGit(['--git-dir', gitDir, 'cat-file', '-e', fremderCommit])).rejects.toThrow();
   });
 });
 
