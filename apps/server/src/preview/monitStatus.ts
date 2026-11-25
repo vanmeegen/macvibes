@@ -8,7 +8,7 @@ import type { PreviewStatus } from './status';
 export function previewStatusFromMonitText(text: string, service = 'devserver'): PreviewStatus {
   // monit färbt die Ausgabe mit ANSI-Codes ein (auch über HTTP) — erst strippen,
   // sonst matchen weder Abschnittstitel noch Statuswerte (Live-Befund 2026-07-06).
-  // eslint-disable-next-line no-control-regex
+  // oxlint-disable-next-line no-control-regex
   const status = serviceStatusLine(text.replace(/\u001b?\[[0-9;]*m/g, ''), service);
   if (status === null) return 'starting';
 

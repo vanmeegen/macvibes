@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { buildVmAgentEnv, buildVmDaemonEnv } from '../vmAgentEnv';
 import { AGENT_CONFIG_GUEST_DIR, PROXY_TOKEN_HEADER } from '../../core/vmContract';
-// Test darf über Schichtgrenzen greifen (s. eslint.config.js): hier wird die
+// Test darf über Schichtgrenzen greifen (s. oxlint.config.ts): hier wird die
 // PRODUKTIONS-Verdrahtung gepinnt — msb-Alias injiziert wie in index.ts.
 import { MSB_HOST_ALIAS } from '../../sandbox/microsandboxProvider';
 

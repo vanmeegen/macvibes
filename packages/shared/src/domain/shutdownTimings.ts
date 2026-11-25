@@ -28,7 +28,7 @@
  *
  * Warum in `packages/shared`: Das Top-Level-`scripts/` darf bewusst NICHT aus
  * `apps/server/src/**` importieren (Composition-Root-Trennung, Architektur-Gate
- * in `eslint.config.js`). Gemeinsamer Code lebt deshalb hier.
+ * in `oxlint.config.ts`). Gemeinsamer Code lebt deshalb hier.
  */
 
 /** Default für MACVIBES_MAX_SANDBOXES — von config.ts und scripts/ geteilt. */

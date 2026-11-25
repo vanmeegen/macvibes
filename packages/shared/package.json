@@ -10,7 +10,7 @@
     "./node": "./src/node/index.ts"
   },
   "scripts": {
-    "lint": "eslint .",
+    "lint": "oxlint --deny-warnings",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },

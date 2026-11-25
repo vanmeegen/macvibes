@@ -23,9 +23,9 @@ leichtgewichtig, komplett lokal, alles TypeScript auf Bun.
 | Sprache   | TypeScript, strict (ES2022, `noUncheckedIndexedAccess` & Co.) |
 | Backend   | `Bun.serve` + GraphQL Yoga + Pothos                           |
 | Datenbank | `bun:sqlite` + Drizzle ORM (Migrationen: drizzle-kit)         |
-| Frontend  | React 18 + MobX + MUI v5, gebaut mit Vite                     |
+| Frontend  | React 19 + MobX + MUI v9, gebaut mit Vite                     |
 | Tests     | `bun test` (Server/Shared), Vitest (Web), Playwright (E2E)    |
-| Qualität  | ESLint 9 (flat config), Prettier, Husky + lint-staged         |
+| Qualität  | oxlint, Prettier, Husky + lint-staged                         |
 | Sandbox   | microsandbox (self-hosted MicroVMs)                           |
 
 ## Struktur

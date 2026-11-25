@@ -7,7 +7,7 @@
     "dev": "bun --hot run src/index.ts",
     "start": "bun run src/index.ts",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint .",
+    "lint": "oxlint --deny-warnings",
     "test": "bun test",
     "db:generate": "drizzle-kit generate",
     "baselines": "bun scripts/buildBaselines.ts"

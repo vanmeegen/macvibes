@@ -198,7 +198,7 @@ export function mergeProviderEnv(choices: ProviderChoice[]): Record<string, stri
  *            `'\''` wird wörtlich gelesen, nicht zusammengesetzt).
  *   - Steuerzeichen: würden die Zeile zerreißen / sind in .env-Werten unsinnig.
  */
-// eslint-disable-next-line no-control-regex -- Steuerzeichen \x00–\x1f bewusst abgelehnt.
+// oxlint-disable-next-line no-control-regex -- Steuerzeichen \x00–\x1f bewusst abgelehnt.
 const ENV_UNSICHER = /['\\$\x00-\x1f]/;
 
 /**

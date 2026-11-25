@@ -34,8 +34,8 @@ Bun-Workspaces-Monorepo:
 
   Die Schichtung (core/preview/db als Basis, darüber sandbox+agent, dann
   services, schema, http) erzwingt ein **Architektur-Gate** im Lint
-  (`eslint-plugin-boundaries`, Regelmatrix mit Begründungen in
-  `eslint.config.js`): Schichtverletzungen brechen `bun run ci`.
+  (oxlint mit `eslint-plugin-boundaries` als JS-Plugin, Regelmatrix mit
+  Begründungen in `oxlint.config.ts`): Schichtverletzungen brechen `bun run ci`.
 
   **Sandbox-/Preview-Schnittstelle (sauber gekapselt):** PID 1 der MicroVM ist
   ein **In-VM-Supervisor** (`tini -s` als Reaper + `monit`, Konfiguration aus

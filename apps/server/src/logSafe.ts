@@ -25,7 +25,7 @@ export function logSafe(value: string | null | undefined): string {
   if (value === null) return '<null>';
   if (value === undefined) return '<undefined>';
 
-  // eslint-disable-next-line no-control-regex -- genau diese Zeichen sind das Ziel
+  // oxlint-disable-next-line no-control-regex -- genau diese Zeichen sind das Ziel
   const escaped = value.replace(/[\x00-\x1f\x7f]/g, (ch) => {
     const known = ESCAPES.get(ch);
     if (known !== undefined) return known;

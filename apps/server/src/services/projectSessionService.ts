@@ -18,7 +18,7 @@ import type { ChatService } from './chatService';
  * Transport.
  *
  * ── Architektur-Gate (services → sandbox ist TOT) ─────────────────────────
- * Die Kante services → sandbox wurde in eslint.config.js bewusst gestrichen.
+ * Die Kante services → sandbox wurde in oxlint.config.ts bewusst gestrichen.
  * Dieser Service hält sie tot: Statt den konkreten SandboxManager (aus
  * sandbox/) zu importieren, beschreibt er über `SandboxLifecycle` nur, WAS er
  * vom Manager braucht (Dependency Inversion). Auch der Sandbox-Startkontext

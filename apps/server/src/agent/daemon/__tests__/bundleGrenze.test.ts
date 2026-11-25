@@ -27,7 +27,7 @@ import { fileURLToPath } from 'node:url';
  * DEREN Importe gegen dieselbe Whitelist. Vorher garantierte die Begründung
  * eines Eintrags („host-frei") nichts: ein Import von `db/` in
  * `sdkMessageMapping.ts` blieb unsichtbar — die Datei liegt außerhalb des
- * Daemon-Ordners und wurde nie gescannt, eslint erlaubt agent→db, und
+ * Daemon-Ordners und wurde nie gescannt, das Lint-Gate erlaubt agent→db, und
  * `Bun.build` hätte den Host-Code kommentarlos ins VM-Bundle inlined. Jeder
  * künftige Whitelist-Eintrag ist damit automatisch mitgeprüft — ohne dass
  * jemand daran denken muss, hier einen Pin nachzuziehen.
@@ -61,7 +61,7 @@ const ERLAUBTE_IMPORTE: ReadonlyArray<{ muster: RegExp; grund: string }> = [
   // Eingebaute Zusatz-System-Anweisung: importfreie Textfunktion, geteilt mit
   // dem Host-Runner, damit Dev- und VM-Pfad denselben Default haben.
   { muster: /^\.\.\/appendPrompt$/, grund: 'geteilter Default-Prompt (importfrei)' },
-  // Preview-Status-Vokabular: bewusst importfrei gehalten (s. eslint.config.js),
+  // Preview-Status-Vokabular: bewusst importfrei gehalten (s. oxlint.config.ts),
   // genau damit es gefahrlos ins VM-Bundle darf.
   { muster: /^\.\.\/\.\.\/preview\/[^/]+$/, grund: 'importfreies Preview-Vokabular' },
   // Host↔VM-Vertragskonstanten (GUEST_WORKDIR, MONIT_HTTPD_PORT, …): genau
@@ -93,7 +93,7 @@ function quellDateien(verzeichnis: string): string[] {
  */
 function importe(quelle: string): string[] {
   // Fail-CLOSED gegen Syntax, die dieser Parser nicht versteht: Doppelquotes
-  // und Template-Literale wären für die Regex unsichtbar, eslint-boundaries
+  // und Template-Literale wären für die Regex unsichtbar, das boundaries-Gate
   // erlaubt agent→db, und `bun run ci` fuhr lange ohne format:check — ein
   // `from "../../db/schema"` wäre so still ins VM-Bundle gerutscht. Lieber
   // laut scheitern und den Stil erzwingen, als eine stumme Umgehung dulden.
