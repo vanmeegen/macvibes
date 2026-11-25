@@ -591,3 +591,40 @@ describe('Status-Polling pausiert im versteckten Tab', () => {
     expect(mockGql).not.toHaveBeenCalled();
   });
 });
+
+describe('Lade-Fehler heilt sich mit dem nächsten erfolgreichen Abruf', () => {
+  it('ein Fehler aus load() verschwindet, sobald das Polling wieder Daten bekommt', async () => {
+    // Vorher klebte das Banner dauerhaft: refresh() ließ `error` unangetastet,
+    // auch wenn die Daten längst wieder kamen.
+    const store = new ProjectsStore(makeAuthStore('alice'));
+    mockGql.mockRejectedValueOnce(new Error('Server kurz weg'));
+    await store.load();
+    expect(store.error).not.toBeNull();
+
+    mockGql.mockResolvedValueOnce({
+      projects: [],
+      templates: [],
+      agentModels: [],
+      previewGatewayPort: 4173,
+      previewGatewayHttpsPort: null,
+    });
+    await store.refresh();
+    expect(store.error).toBeNull();
+  });
+
+  it('ein Fehler einer Nutzeraktion bleibt stehen, bis der Nutzer ihn sieht', async () => {
+    const store = new ProjectsStore(makeAuthStore('alice'));
+    mockGql.mockRejectedValueOnce(new Error('Löschen verboten'));
+    await store.deleteProject('p1');
+    const fehler = store.error;
+    mockGql.mockResolvedValueOnce({
+      projects: [],
+      templates: [],
+      agentModels: [],
+      previewGatewayPort: 4173,
+      previewGatewayHttpsPort: null,
+    });
+    await store.refresh();
+    expect(store.error).toBe(fehler);
+  });
+});

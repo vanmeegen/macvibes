@@ -254,16 +254,24 @@ export class ProjectsStore {
     return this.deleteProject(id);
   }
 
+  /**
+   * Stammt `error` aus dem Laden oder Betreten (nicht aus einer Nutzeraktion)?
+   * Dann löscht ihn der nächste erfolgreiche Abruf.
+   */
+  private fehlerHeiltVonSelbst = false;
+
   /** Lädt Projekte und Templates in einem Request. */
   async load(): Promise<void> {
     this.loading = true;
     this.error = null;
+    this.fehlerHeiltVonSelbst = false;
     try {
       await this.fetchProjects();
     } catch (err) {
       console.error('ProjectsStore.load fehlgeschlagen', err);
       runInAction(() => {
         this.error = toErrorMessage(err);
+        this.fehlerHeiltVonSelbst = true;
       });
     } finally {
       runInAction(() => {
@@ -276,6 +284,15 @@ export class ProjectsStore {
   async refresh(): Promise<void> {
     try {
       await this.fetchProjects();
+      // Ein Fehler aus einem früheren Laden/Betreten ist mit frischen Daten
+      // überholt — ohne das klebte das Banner, bis die Seite neu geladen wird.
+      if (this.fehlerHeiltVonSelbst) {
+        runInAction(() => {
+          this.error = null;
+          this.fehlerHeiltVonSelbst = false;
+          this.fehlerHeiltVonSelbst = false;
+        });
+      }
     } catch (err) {
       // Bewusst KEIN this.error: das Polling läuft im Hintergrund, ein einzelner
       // Fehlschlag darf nicht die ganze Seite mit einer Fehlermeldung überziehen.
@@ -351,15 +368,19 @@ export class ProjectsStore {
    * ihr Ende — auch bei Reload, Crash oder Netzabriss — meldet den Betrachter
    * serverseitig ab.
    */
-  async enterProject(id: string): Promise<void> {
+  async enterProject(id: string, nochRelevant: () => boolean = () => true): Promise<void> {
     this.error = null;
+    this.fehlerHeiltVonSelbst = false;
     try {
       await gqlRequest<{ enterProject: { id: string } }>(ENTER_PROJECT_MUTATION, { id });
       await this.refresh();
     } catch (err) {
       console.error('ProjectsStore.enterProject fehlgeschlagen', err);
+      // Die Seite ist inzwischen verlassen: der Fehler gehört nirgends mehr hin.
+      if (!nochRelevant()) return;
       runInAction(() => {
         this.error = toErrorMessage(err);
+        this.fehlerHeiltVonSelbst = true;
       });
     }
   }
@@ -372,6 +393,7 @@ export class ProjectsStore {
     const project = this.projects.find((p) => p.id === projectId);
     const previous = project?.agentModel ?? null;
     this.error = null;
+    this.fehlerHeiltVonSelbst = false;
     if (project) {
       project.agentModel = model;
     }
@@ -397,10 +419,12 @@ export class ProjectsStore {
   /** Verwirft die Fehlermeldung — z. B. beim Betreten einer anderen Seite. */
   clearError(): void {
     this.error = null;
+    this.fehlerHeiltVonSelbst = false;
   }
 
   async deleteProject(id: string): Promise<boolean> {
     this.error = null;
+    this.fehlerHeiltVonSelbst = false;
     try {
       await gqlRequest<{ deleteProject: boolean }>(DELETE_PROJECT_MUTATION, { id });
       runInAction(() => {

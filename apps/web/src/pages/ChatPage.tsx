@@ -99,9 +99,9 @@ export const ChatPage = observer(function ChatPage({
               <Alert severity="info" data-testselector="chat-readonly-hint">
                 Nur-Lese-Modus — Projekt von {project.owner.username}
               </Alert>
-            ) : (
+            ) : project !== null ? (
               <ChatComposer chatStore={chatStore} speechStore={speechStore} />
-            )}
+            ) : null}
           </Box>
         </Paper>
 

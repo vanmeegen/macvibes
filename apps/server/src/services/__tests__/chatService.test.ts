@@ -2403,3 +2403,77 @@ describe('Fehlzeile nach einem Hänger nennt die richtige Ursache', () => {
     expect(await fehlzeile(undefined)).toContain('Claude-API');
   });
 });
+
+/**
+ * B1 (Server-Seite): Zwei Stellen, an denen der Turn-Status, den der Client
+ * sieht, vom echten abwich.
+ */
+describe('Turn-Status für den Client', () => {
+  test('eine Zeile aus dem Turn-Ende-Hook meldet KEINEN laufenden Turn mehr', async () => {
+    // Der Auto-Commit läuft nach dem Turn-Ende in der Pump-Schleife. Postete
+    // er eine Fehlzeile, trug sie turnActive:true — die Anzeige sprang für bis
+    // zu 5 s zurück auf „Agent arbeitet".
+    const db = createTestDb();
+    const owner = await createUser(db, 'marco');
+    const projectId = await createProjectRow(db, owner);
+    const imHook: { belegt: boolean | null } = { belegt: null };
+    const service: ChatService = new ChatService(
+      db,
+      new FakeAgentRunner(1),
+      {
+        onTurnEnd: async (id) => {
+          imHook.belegt = service.isBusy(id);
+          await service.postMessage(id, 'error', 'Auto-Commit fehlgeschlagen');
+        },
+      },
+      { prewarmEnabled: false },
+    );
+    const payloads: ChatEventPayload[] = [];
+    const subscription = service.subscribe(projectId);
+    void (async () => {
+      for await (const payload of subscription) payloads.push(payload);
+    })();
+
+    await service.sendMessage(owner, sendInput(projectId, 'hallo'));
+    await waitFor(() => payloads.some((p) => p.message.content.includes('Auto-Commit')));
+
+    expect(payloads.at(-1)?.turnActive).toBe(false);
+    // Für die Sandbox bleibt das Projekt während des Hooks belegt — Grace und
+    // Verdrängung dürfen den Auto-Commit nicht unterbrechen.
+    expect(imHook.belegt).toBe(true);
+    await waitFor(() => !service.isBusy(projectId));
+  });
+
+  test('ein wiederaufgenommener Turn wird sofort als laufend gemeldet', async () => {
+    // Nach einem Server-Neustart nimmt enterProject die unbeantwortete
+    // Nachricht wieder auf. Ohne Ereignis blieb der Turn unsichtbar (kein
+    // Indikator, kein Stopp), bis der Agent sein erstes Ereignis schickte.
+    let freigeben: () => void = () => {};
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          await new Promise<void>((r) => {
+            freigeben = r;
+          });
+          yield { type: 'turn-completed', sessionId: 's' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { owner, service, projectId } = await setupChat(runner, { prewarmEnabled: false });
+    // Unbeantwortete Nutzerzeile wie nach einem Absturz mitten im Turn.
+    await service.postMessage(projectId, 'user', 'unbeantwortet');
+    const payloads: ChatEventPayload[] = [];
+    const subscription = service.subscribe(projectId);
+    void (async () => {
+      for await (const payload of subscription) payloads.push(payload);
+    })();
+
+    expect(await service.resumeUnansweredTurn(owner, projectId, '/tmp/ws')).toBe(true);
+    await waitFor(() => payloads.length >= 1);
+    expect(payloads[0]?.message.content).toBe('unbeantwortet');
+    expect(payloads[0]?.turnActive).toBe(true);
+    freigeben();
+    await waitFor(() => !service.isTurnActive(projectId));
+  });
+});

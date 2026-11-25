@@ -94,8 +94,10 @@ export class ChatPageModel {
       () => this.project?.id ?? null,
       (projectId) => {
         if (projectId === null) {
-          // Projekt (noch) nicht in der Liste oder inzwischen gelöscht.
-          this.chatStore.disconnect();
+          // Projekt (noch) nicht in der Liste oder inzwischen gelöscht. `reset`
+          // statt `disconnect`: sonst blieben „Agent arbeitet" und der
+          // Stopp-Knopf eines gelöschten Projekts stehen.
+          this.chatStore.reset();
           return;
         }
         // Eager-Start der Sandbox (Preview lädt, bevor die Subscription steht)
@@ -104,7 +106,9 @@ export class ChatPageModel {
         // Verlassen (H11): der Betrachter-Refcount hängt an der chatEvents-
         // Subscription — ihr Ende sieht der Server auch bei Reload, Crash und
         // Netzabriss, eine Mutation nicht.
-        void this.projectsStore.enterProject(projectId);
+        // Ein Fehler, der erst eintrifft, wenn die Seite schon verlassen ist,
+        // gehört nicht in die Übersicht.
+        void this.projectsStore.enterProject(projectId, () => this.routeProjectId === projectId);
         // Chat-Historie + Live-Stream (alle angemeldeten Besucher, R10).
         void this.chatStore.connect(projectId);
       },

@@ -284,3 +284,66 @@ describe('ChatPageModel', () => {
     });
   });
 });
+
+/**
+ * B1/B11 (Härtung 2026-11): Zustände, die ein Projekt überleben, das es nicht
+ * mehr gibt oder das schon verlassen ist.
+ */
+describe('Projekt verschwindet oder wird verlassen', () => {
+  beforeEach(() => {
+    mockGql.mockReset();
+    FakeEventSource.instances = [];
+    vi.stubGlobal('EventSource', FakeEventSource);
+  });
+
+  it('wird das offene Projekt gelöscht, verschwinden Turn-Anzeige und Zeilen', async () => {
+    serveProjects([makeProject({ id: 'p1', owner: alice })]);
+    const { model, projectsStore, chatStore } = makeModel({
+      projects: [makeProject({ id: 'p1', owner: alice })],
+    });
+    model.open('p1');
+    await settle();
+    runInAction(() => {
+      chatStore.turnActive = true;
+    });
+
+    // Ein anderer Tab (oder ein Admin) löscht das Projekt; der Poll liefert es nicht mehr.
+    runInAction(() => {
+      projectsStore.projects = [];
+    });
+    await settle();
+
+    expect(chatStore.turnActive).toBe(false);
+    expect(chatStore.projectId).toBeNull();
+  });
+
+  it('ein Fehler beim Betreten, der erst nach dem Verlassen der Seite eintrifft, landet nicht in der Übersicht', async () => {
+    let ablehnen: (error: Error) => void = () => {};
+    mockGql.mockImplementation(async (query: string) => {
+      if (query.includes('EnterProject')) {
+        return new Promise((_resolve, reject) => {
+          ablehnen = reject;
+        });
+      }
+      if (query.includes('ChatState')) return { chatMessages: [], turnActive: false };
+      return {
+        projects: [makeProject({ id: 'p1', owner: alice })],
+        templates: [],
+        agentModels: [],
+        previewGatewayPort: 4173,
+        previewGatewayHttpsPort: null,
+      };
+    });
+    const { model, projectsStore } = makeModel({
+      projects: [makeProject({ id: 'p1', owner: alice })],
+    });
+    model.open('p1');
+    await settle();
+    model.close();
+
+    ablehnen(new Error('Sandbox-Start fehlgeschlagen'));
+    await settle();
+
+    expect(projectsStore.error).toBeNull();
+  });
+});
