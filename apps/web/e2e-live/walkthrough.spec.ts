@@ -89,7 +89,10 @@ test('Live-Walkthrough: Login → pwa+fullstack → Claude-Turn → Stop+Kontext
   await shot(page, '03-pwa-preview-gateway');
 
   // ── 3. Echter Claude-Turn (Kontext setzen) ──
-  await chatPage.send('Merke dir das Codewort BLAUWAL. Antworte nur mit: ok');
+  // Bewusst eine alltägliche Angabe statt „Merke dir das Codewort …": die
+  // frühere Fassung las sich wie ein untergeschobenes Geheimnis, und Claude
+  // verweigerte die Rückfrage gelegentlich als Prompt-Injection-Versuch.
+  await chatPage.send('Für später: Mein Lieblingstier ist der Blauwal. Antworte nur mit: ok');
   await expect(assistant.last()).toContainText(/ok/i, { timeout: 240_000 });
   await shot(page, '04-claude-antwortet');
 
@@ -99,7 +102,7 @@ test('Live-Walkthrough: Login → pwa+fullstack → Claude-Turn → Stop+Kontext
   await chatPage.stopButton.click();
   await expect(chatPage.stopButton).not.toBeVisible({ timeout: 30_000 });
   await shot(page, '05-nach-stop');
-  await chatPage.send('Zusatzinfo: es ist ein Tier. Welches Codewort? Antworte nur damit.');
+  await chatPage.send('Welches Lieblingstier hatte ich genannt? Antworte nur mit dem Tiernamen.');
   await expect(assistant.last()).toContainText(/BLAUWAL/i, { timeout: 240_000 });
   await shot(page, '06-kontext-nach-stop');
 
