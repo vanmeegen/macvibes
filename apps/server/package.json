@@ -20,10 +20,17 @@
     "drizzle-orm": "^0.45.4",
     "graphql": "^17.1.0",
     "graphql-yoga": "^6.1.1",
-    "microsandbox": "0.6.8",
+    "microsandbox": "0.8.2",
     "tree-kill": "^1.2.2"
   },
   "devDependencies": {
     "drizzle-kit": "^0.31.11"
+  },
+  "optionalDependencies": {
+    "@superradcompany/microsandbox-darwin-arm64": "0.8.2",
+    "@superradcompany/microsandbox-linux-arm64-gnu": "0.8.2",
+    "@superradcompany/microsandbox-linux-x64-gnu": "0.8.2",
+    "@superradcompany/microsandbox-win32-arm64-msvc": "0.8.2",
+    "@superradcompany/microsandbox-win32-x64-msvc": "0.8.2"
   }
 }

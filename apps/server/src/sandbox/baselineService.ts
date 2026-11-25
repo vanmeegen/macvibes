@@ -67,7 +67,11 @@ export async function buildTemplateBaseline(options: BuildBaselineOptions): Prom
     previewHostPort: 0,
     previewGuestPort: 0,
     mounts: [{ host: templatePath, guest: '/src', readonly: true }],
-    command: ['/bin/sleep', 'infinity'],
+    // PID 1 muss auf SIGTERM hören: seit microsandbox 0.7 wartet das Stoppen
+    // auf ein geordnetes Ende, und ein nacktes `sleep` als PID 1 ignoriert das
+    // Signal — die VM müsste dann hart beendet werden, kurz bevor ihre Platte
+    // eingefroren wird.
+    command: ['/bin/sh', '-c', "trap 'exit 0' TERM; while :; do sleep 1; done"],
     // Wie vorher (CLI ohne --net-rule): der Bau braucht apt und das
     // npm-Registry. Die VM läuft ohne Agent und nur während des Baus.
     network: 'unrestricted',
@@ -103,6 +107,11 @@ export async function buildTemplateBaseline(options: BuildBaselineOptions): Prom
       script:
         'mkdir -p /baseline/work && cp -r /src/. /baseline/work && rm -rf /baseline/work/node_modules && ' +
         'cd /baseline/work && bun install --silent && mkdir -p node_modules',
+    },
+    {
+      // Alles auf die Platte, bevor die VM stoppt und eingefroren wird.
+      beschreibung: 'Platte synchronisieren',
+      script: 'sync',
     },
   ];
 

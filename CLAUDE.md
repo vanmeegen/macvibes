@@ -154,6 +154,18 @@ bun run start              # Produktion: Web bauen + Server (liefert dist aus, L
   NICHT upgraden ohne Test aller Sandbox-/Agent-Pfade (CI, E2E, Echt-VM-Test,
   Live-Suite). Der Sprung von 1.3.14 hat z. B. das Socket-Verhalten nach
   einem Close geändert (ECONNRESET beim Nachschreiben).
+- **microsandbox ist auf 0.8.2 gepinnt** — npm-Paket, die Plattform-Pakete
+  (`@superradcompany/microsandbox-*`, stehen als `optionalDependencies` in
+  `apps/server/package.json`, weil 0.8.x sie nicht mehr selbst mitbringt) UND
+  die Laufzeit unter `~/.microsandbox` gehören zusammen: eine vollständige
+  Laufzeit im Home gewinnt gegen die aus `node_modules`, auch wenn sie älter
+  ist. Ein Upgrade migriert die Datenbank unter `~/.microsandbox` unumkehrbar
+  — vorher das Verzeichnis sichern. Proben nie gegen eine KOPIE des Homes
+  ohne die Pfade in deren `db/msb.db` umzuschreiben: die Datenbank merkt sich
+  absolute Pfade der Snapshots und löscht sonst im Original.
+- Ein macvibes-Snapshot ist seit 0.8 eine **Snapshot-Gruppe** gleichen Namens
+  mit genau einem Stand. Baselines aus 0.6.x (Einzelstände ohne Gruppe)
+  starten weiter, bis `bun run baselines` sie ersetzt.
 - `msb` muss installiert sein (`brew install superradcompany/tap/microsandbox`).
   Ohne `msb` fällt der Server automatisch auf den Prozess-Provider zurück
   (kein VM-Isolat — nur Dev). Erzwingen: `MACVIBES_SANDBOX=microsandbox|process`.
