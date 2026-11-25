@@ -61,7 +61,7 @@ export const ProjectsPage = observer(function ProjectsPage({
           <Typography variant="h5" component="h1" color="primary" sx={{ flexGrow: 1 }}>
             macvibes
           </Typography>
-          <Stack direction="row" spacing={2} alignItems="center">
+          <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
             <Typography variant="body2" color="text.secondary" data-testselector="current-username">
               {authStore.currentUser?.username ?? ''}
             </Typography>
@@ -90,7 +90,10 @@ export const ProjectsPage = observer(function ProjectsPage({
       </AppBar>
 
       <Box sx={{ maxWidth: 1200, mx: 'auto', px: 3, pt: 3 }}>
-        <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 3 }}>
+        <Stack
+          direction="row"
+          sx={{ alignItems: 'center', justifyContent: 'space-between', mb: 3 }}
+        >
           <Typography variant="h3" component="h2">
             Projekte
           </Typography>
@@ -132,12 +135,12 @@ export const ProjectsPage = observer(function ProjectsPage({
         ) : (
           <Grid container spacing={3}>
             {projectsStore.visibleProjects.map((project) => (
-              <Grid item xs={12} sm={6} md={4} key={project.id}>
+              <Grid size={{ xs: 12, sm: 6, md: 4 }} key={project.id}>
                 <ProjectCard project={project} projectsStore={projectsStore} />
               </Grid>
             ))}
             {projectsStore.visibleProjects.length === 0 && !projectsStore.loading && (
-              <Grid item xs={12}>
+              <Grid size={12}>
                 <Typography
                   variant="body1"
                   color="text.secondary"

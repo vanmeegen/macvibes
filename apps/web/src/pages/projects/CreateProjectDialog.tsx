@@ -56,7 +56,7 @@ export const CreateProjectDialog = observer(function CreateProjectDialog({
               }
             }}
             autoFocus
-            inputProps={{ 'data-testselector': 'new-project-name' }}
+            slotProps={{ htmlInput: { 'data-testselector': 'new-project-name' } }}
           />
           <Box>
             <Typography variant="subtitle2" sx={{ mb: 1 }}>
@@ -72,11 +72,11 @@ export const CreateProjectDialog = observer(function CreateProjectDialog({
                   value={template.dir}
                   control={
                     <Radio
-                      inputProps={
-                        {
+                      slotProps={{
+                        input: {
                           'data-testselector': `template-option-${template.dir}`,
-                        } as React.InputHTMLAttributes<HTMLInputElement>
-                      }
+                        } as React.InputHTMLAttributes<HTMLInputElement>,
+                      }}
                     />
                   }
                   label={

@@ -55,7 +55,7 @@ export const PreviewPane = observer(function PreviewPane({
           data-testselector="chat-preview-unavailable"
           data-status={model.project?.previewStatus ?? 'stopped'}
         >
-          <Stack spacing={2} alignItems="center">
+          <Stack spacing={2} sx={{ alignItems: 'center' }}>
             {preview.spinner && <LinearProgress sx={{ width: 160 }} />}
             <Typography variant="body1" color="text.secondary">
               {preview.message}

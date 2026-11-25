@@ -60,7 +60,7 @@ const NameDialog = observer(function NameDialog({
               }
             }}
             autoFocus
-            inputProps={{ 'data-testselector': `${testPrefix}-project-name` }}
+            slotProps={{ htmlInput: { 'data-testselector': `${testPrefix}-project-name` } }}
           />
         </Stack>
       </DialogContent>

@@ -48,11 +48,13 @@ export const ChatToolbar = observer(function ChatToolbar({
             }}
             sx={{ mr: 2, minWidth: 200, display: { xs: 'none', sm: 'block' } }}
             // Testselektor auf dem SICHTBAREN Select-Element (klickbar in E2E);
-            // inputProps landet beim MUI-Select nur auf dem versteckten Input.
-            SelectProps={{
-              SelectDisplayProps: {
-                'data-testselector': 'chat-model-select',
-              } as React.HTMLAttributes<HTMLDivElement>,
+            // slotProps.htmlInput landet beim MUI-Select nur auf dem versteckten Input.
+            slotProps={{
+              select: {
+                SelectDisplayProps: {
+                  'data-testselector': 'chat-model-select',
+                } as React.HTMLAttributes<HTMLDivElement>,
+              },
             }}
           >
             {projectsStore.agentModels.map((m) => (

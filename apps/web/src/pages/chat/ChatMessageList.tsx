@@ -51,7 +51,7 @@ export const ChatMessageList = observer(function ChatMessageList({
             data-testselector="chat-working"
           >
             <Paper variant="outlined" sx={{ px: 2, py: 1 }}>
-              <Stack direction="row" spacing={1.5} alignItems="center">
+              <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center' }}>
                 <CircularProgress size={14} />
                 <Typography variant="body2" color="text.secondary">
                   {model.workingLabel}

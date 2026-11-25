@@ -108,7 +108,7 @@ export const AdminPage = observer(function AdminPage({
                       )}
                     </TableCell>
                     <TableCell align="right">
-                      <Stack direction="row" spacing={1} justifyContent="flex-end">
+                      <Stack direction="row" spacing={1} sx={{ justifyContent: 'flex-end' }}>
                         {!user.approved && (
                           <Button
                             size="small"

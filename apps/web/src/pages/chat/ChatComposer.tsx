@@ -36,7 +36,7 @@ export const ChatComposer = observer(function ChatComposer({
 }): JSX.Element {
   return (
     <>
-      <Stack direction="row" spacing={1} alignItems="center">
+      <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
         <TextField
           placeholder="Nachricht an den Agenten …"
           size="small"
@@ -51,7 +51,7 @@ export const ChatComposer = observer(function ChatComposer({
               void chatStore.send();
             }
           }}
-          inputProps={{ 'data-testselector': 'chat-input' }}
+          slotProps={{ htmlInput: { 'data-testselector': 'chat-input' } }}
         />
         {/* Diktat: lokale Erkennung im Browser (Chrome On-Device). */}
         <Tooltip title={speechStore.tooltip}>

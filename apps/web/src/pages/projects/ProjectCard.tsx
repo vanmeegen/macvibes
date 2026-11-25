@@ -53,7 +53,11 @@ export const ProjectCard = observer(function ProjectCard({
       >
         <CardContent>
           <Stack spacing={1}>
-            <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+            <Stack
+              direction="row"
+              spacing={1}
+              sx={{ alignItems: 'center', justifyContent: 'space-between' }}
+            >
               <Typography variant="h5" component="h2" noWrap>
                 {project.name}
               </Typography>
