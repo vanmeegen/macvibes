@@ -4,7 +4,7 @@ import { spawnShellCommand } from '../core/exec';
 import { ensureWorkspace } from '../core/workspaceService';
 import { httpProbe } from '../preview/httpProbe';
 import { ProcessSupervisor, type SupervisedProcess } from '../core/processSupervisor';
-import { findFreePort } from './portService';
+import { PortAllocator } from './portService';
 import type { PreviewStatus, SandboxContext, SandboxHandle, SandboxProvider } from './provider';
 
 export interface ProcessProviderConfig {
@@ -23,6 +23,14 @@ export interface ProcessProviderConfig {
  * bei Absturz neu — gleiches Verhalten wie in der MicroVM.
  */
 export class ProcessSandboxProvider implements SandboxProvider {
+  /**
+   * Reserviert Vorschau-Ports über die ganze Lebensdauer einer Sandbox: zwischen
+   * der Prüfung „frei?" und dem Lauschen des Dev-Servers liegen Sekunden
+   * (bun install, Start). Ohne Reservierung bekam ein zweites Projekt desselben
+   * Templates in dieser Zeit denselben Port.
+   */
+  private readonly ports = new PortAllocator();
+
   constructor(private readonly config: ProcessProviderConfig) {}
 
   async start(context: SandboxContext): Promise<SandboxHandle> {
@@ -33,7 +41,20 @@ export class ProcessSandboxProvider implements SandboxProvider {
       branchName: context.branchName,
     });
 
-    const port = await findFreePort(context.previewPort);
+    const port = await this.ports.allocate(context.previewPort);
+    try {
+      return await this.starteMitPort(context, workspaceDir, port);
+    } catch (error) {
+      this.ports.release(port);
+      throw error;
+    }
+  }
+
+  private async starteMitPort(
+    context: SandboxContext,
+    workspaceDir: string,
+    port: number,
+  ): Promise<SandboxHandle> {
     // Delta-Install bei jedem Start (ADR 0002, Parität zur MicroVM): bei
     // vollständigem node_modules ein No-Op, sonst heilt er fehlende Pakete
     // aus bun.lock (z. B. ein bun add einer früheren Session).
@@ -75,7 +96,12 @@ export class ProcessSandboxProvider implements SandboxProvider {
       previewHostPort: port,
       previewStatus: (): PreviewStatus => supervisor.getStatus(),
       stop: async () => {
-        await supervisor.stop();
+        try {
+          await supervisor.stop();
+        } finally {
+          // Erst NACH dem Stopp freigeben: vorher hält der Dev-Server den Port.
+          this.ports.release(port);
+        }
       },
     };
   }

@@ -111,3 +111,69 @@ describe('ProcessSandboxProvider Preview (R7)', () => {
     expect(reachable).toBe(false);
   });
 });
+
+/**
+ * B9: Der Prozess-Provider prüfte nur, ob der Wunsch-Port frei ist, reservierte
+ * ihn aber nicht. Zwischen Prüfung und dem Lauschen des Dev-Servers liegen
+ * Sekunden (bun install, Start) — ein zweites Projekt desselben Templates bekam
+ * denselben Port, sein Dev-Server scheiterte, und seine Probe traf den Server
+ * des ersten: die Vorschau zeigte das fremde Projekt.
+ */
+describe('ProcessSandboxProvider — zwei Projekte bekommen nie denselben Port', () => {
+  test('gleichzeitige Starts mit demselben Wunsch-Port', async () => {
+    const home = await createTempDir('macvibes-home-');
+    tempDirs.push(home);
+    const templates = await createTemplatesFixture();
+    tempDirs.push(templates);
+    const bare = join(home, 'macvibes-apps.git');
+    await ensureBareRepo(bare);
+    await createProjectBranch(bare, 'marco/a', join(templates, 'pwa'));
+    await createProjectBranch(bare, 'marco/b', join(templates, 'pwa'));
+
+    const provider = new ProcessSandboxProvider({ macvibesHome: home, bareRepoPath: bare });
+    const start = (id: string, branch: string): Promise<SandboxHandle> =>
+      provider.start({
+        projectId: id,
+        branchName: branch,
+        workspaceDir: workspaceDirFor(home, id),
+        templateDir: 'pwa',
+        devCommand: 'bun server.ts',
+        previewPort: 5197,
+      });
+    const [a, b] = await Promise.all([start('p-a', 'marco/a'), start('p-b', 'marco/b')]);
+    try {
+      expect(a.previewHostPort).not.toBe(b.previewHostPort);
+      // Beide Vorschauen antworten — keine teilt sich den Server der anderen.
+      await waitForHttp(`http://localhost:${a.previewHostPort}/`);
+      await waitForHttp(`http://localhost:${b.previewHostPort}/`);
+    } finally {
+      await a.stop();
+      await b.stop();
+    }
+  }, 30_000);
+
+  test('nach dem Stopp ist der Port wieder vergebbar', async () => {
+    const home = await createTempDir('macvibes-home-');
+    tempDirs.push(home);
+    const templates = await createTemplatesFixture();
+    tempDirs.push(templates);
+    const bare = join(home, 'macvibes-apps.git');
+    await ensureBareRepo(bare);
+    await createProjectBranch(bare, 'marco/a', join(templates, 'pwa'));
+    const provider = new ProcessSandboxProvider({ macvibesHome: home, bareRepoPath: bare });
+    const kontext = {
+      projectId: 'p-a',
+      branchName: 'marco/a',
+      workspaceDir: workspaceDirFor(home, 'p-a'),
+      templateDir: 'pwa',
+      devCommand: 'bun server.ts',
+      previewPort: 5196,
+    };
+    const erste = await provider.start(kontext);
+    await erste.stop();
+    await Bun.sleep(200);
+    const zweite = await provider.start(kontext);
+    activeHandle = zweite;
+    expect(zweite.previewHostPort).toBe(5196);
+  }, 30_000);
+});
