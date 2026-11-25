@@ -181,7 +181,7 @@ müsste ein äquivalentes Host-Gateway-Mapping stellen.
    kaputte `.bin`-Shims, `bun install` mit `EPERM` (#11250). Wir stehen mit
    `linker = "hoisted"` (`bunfig.toml`) zufällig auf der sicheren Seite.
    **Developer Mode** einplanen (Symlinks brauchen sonst Admin-Rechte).
-   Der 1.3.14-Pin (CLAUDE.md) gilt unverändert; unter Windows via scoop/winget
+   Der Bun-Pin (CLAUDE.md) gilt unverändert; unter Windows via scoop/winget
    statt `brew pin` dokumentieren.
 3. **Keine CI.** Kein `.github/workflows`. Die Matrix (`macos-latest` +
    `windows-latest`) wäre die erste Investition, noch vor dem Port — sonst

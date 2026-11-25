@@ -10,7 +10,7 @@ import { istPortBelegt } from './prozesse';
 import type { DoctorInput, DoctorReport, DoctorStatus } from './doctor';
 
 /** Erwartete Bun-Version (CLAUDE.md: gepinnt, VM-Image + @types/bun identisch). */
-export const BUN_PIN = '1.3.14';
+export const BUN_PIN = '1.4.5';
 
 /** Hypervisor-Check: auf macOS via sysctl kern.hv_support; sonst nicht geprüft. */
 async function hypervisorVerfuegbar(): Promise<boolean | null> {

@@ -9,7 +9,7 @@
 export interface DoctorInput {
   /** Laufende Bun-Version (Bun.version) oder null, wenn bun fehlt. */
   bunVersion: string | null;
-  /** Erwarteter Pin (CLAUDE.md: 1.3.14). */
+  /** Erwarteter Pin (CLAUDE.md: 1.4.5). */
   bunPin: string;
   gitAvailable: boolean;
   msbAvailable: boolean;

@@ -148,10 +148,12 @@ bun run start              # Produktion: Web bauen + Server (liefert dist aus, L
 
 ## Sandbox / VM (microsandbox)
 
-- **Bun ist auf 1.3.14 gepinnt** (Host via `brew pin bun`, VM-Image
-  `oven/bun:1.3.14` in `config.ts`, `@types/bun` exakt in allen Manifesten):
-  das nächste große Bun ist ein Rust-Rewrite — NICHT upgraden ohne intensiven
-  Test aller Sandbox-/Agent-Pfade.
+- **Bun ist auf 1.4.5 gepinnt** (Host via `brew pin bun`, VM-Image
+  `oven/bun:1.4.5` in `config.ts`, `@types/bun` exakt in allen Manifesten,
+  `BUN_PIN` in `scripts/lib/doctorState.ts`, `.github/workflows/ci.yml`):
+  NICHT upgraden ohne Test aller Sandbox-/Agent-Pfade (CI, E2E, Echt-VM-Test,
+  Live-Suite). Der Sprung von 1.3.14 hat z. B. das Socket-Verhalten nach
+  einem Close geändert (ECONNRESET beim Nachschreiben).
 - `msb` muss installiert sein (`brew install superradcompany/tap/microsandbox`).
   Ohne `msb` fällt der Server automatisch auf den Prozess-Provider zurück
   (kein VM-Isolat — nur Dev). Erzwingen: `MACVIBES_SANDBOX=microsandbox|process`.
@@ -198,7 +200,7 @@ Mechanismen statt `process.platform`-Weichen** (`bun exec` + `tree-kill` in
 `core/exec.ts`, Feature-Detection in `packages/shared/src/node/fsCapabilities.ts`) — bitte
 beibehalten. Wichtig:
 
-- **Bun-Pin 1.3.14** unter Windows via winget/scoop (kein brew).
+- **Bun-Pin 1.4.5** unter Windows via winget/scoop (kein brew).
 - **MicroVMs (Stufe 2) noch nicht produktiv:** der Baseline-Bau scheitert
   unter Windows an msb-Bug #1218 (`cp` auf ro-Mounts meldet EACCES beim
   close; Fix upstream gemerged, noch in keinem Release ≤ 0.6.8). Die

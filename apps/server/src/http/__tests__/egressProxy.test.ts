@@ -905,7 +905,9 @@ describe('EgressProxy — Header-Bombe ist terminal (Defekt 4)', () => {
           // > 32 KiB gueltige Kopfzeilen OHNE abschliessende Leerzeile.
           client.write(`CONNECT example.com:443 HTTP/1.1\r\n${fuellzeilen(33_000)}`);
         });
+        let endeErreicht = false;
         client.on('end', () => {
+          endeErreicht = true;
           // Der Proxy hat seine Schreibseite beendet (Grenze ueberschritten).
           // Jetzt weitere Chunks nachschieben und den Kopf mit der Leerzeile
           // "vervollstaendigen": wuerde state.buf weiter konkateniert, waere
@@ -917,7 +919,10 @@ describe('EgressProxy — Header-Bombe ist terminal (Defekt 4)', () => {
             resolve(true);
           }, 150);
         });
-        client.on('error', () => resolve(false));
+        // Ab Bun 1.4 quittiert der bereits geschlossene Proxy-Socket das
+        // Nachschieben mit ECONNRESET. Nach dem Ende ist das kein Fehlschlag:
+        // die Bytes kamen dann gar nicht erst an.
+        client.on('error', () => resolve(endeErreicht));
         setTimeout(() => {
           client.destroy();
           resolve(false);

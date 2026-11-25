@@ -38,7 +38,7 @@ Läuft **nach** dem Voll-Install (Deps sind da) beim ersten Start. Leitregel:
 **Setup endet immer in einem lauffähigen, nicht ausgesperrten Zustand** — nie
 halb konfiguriert.
 
-1. **Doctor** — prüft `bun` (Pin 1.3.14), `git`, `msb` + Hypervisor (HVF auf
+1. **Doctor** — prüft `bun` (Pin 1.4.5), `git`, `msb` + Hypervisor (HVF auf
    Apple Silicon), freie Ports (4000/4010/4173, Web 5173). Fehlt etwas: klare,
    umsetzbare Meldung (welcher `brew install …`), kein stiller Abbruch.
 2. **Modell-Anbieter wählen** (siehe unten) — Claude als Default, optional

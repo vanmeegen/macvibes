@@ -386,7 +386,7 @@ export function loadConfig(): ServerConfig {
           : 'auto',
       // Bun-Version bewusst gepinnt (kein "latest"-Tag): das nächste große Bun
       // ist ein Rust-Rewrite — Upgrade nur nach intensivem Test aller Sandbox-Pfade.
-      image: Bun.env.MACVIBES_SANDBOX_IMAGE ?? 'oven/bun:1.3.14',
+      image: Bun.env.MACVIBES_SANDBOX_IMAGE ?? 'oven/bun:1.4.5',
       cpus: envNumber('MACVIBES_SANDBOX_CPUS') ?? 4,
       memoryMib: envNumber('MACVIBES_SANDBOX_MEMORY_MIB') ?? 4096,
       previewGatewayPort: envNumber('MACVIBES_PREVIEW_GATEWAY_PORT') ?? 4173,

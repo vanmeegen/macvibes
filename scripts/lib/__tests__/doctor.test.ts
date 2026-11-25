@@ -7,8 +7,8 @@ import { doctor, type DoctorInput } from '../doctor';
 
 describe('doctor — reine Auswertung injizierter Prüf-Ergebnisse', () => {
   const gesund: DoctorInput = {
-    bunVersion: '1.3.14',
-    bunPin: '1.3.14',
+    bunVersion: '1.4.5',
+    bunPin: '1.4.5',
     gitAvailable: true,
     msbAvailable: true,
     hypervisorAvailable: true,
@@ -30,7 +30,7 @@ describe('doctor — reine Auswertung injizierter Prüf-Ergebnisse', () => {
     expect(report.hatFehler).toBe(true);
   });
 
-  test('abweichende bun-Version warnt (Pin 1.3.14), blockiert aber nicht', () => {
+  test('abweichende bun-Version warnt (Pin 1.4.5), blockiert aber nicht', () => {
     const report = doctor({ ...gesund, bunVersion: '1.4.0' });
     const bun = report.checks.find((c) => c.id === 'bun');
     expect(bun?.status).toBe('warn');

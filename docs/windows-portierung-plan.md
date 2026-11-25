@@ -114,7 +114,7 @@ auf dem Mac ändert sich nichts. Schützt Windows-Checkouts vor
 
 `.github/workflows/ci.yml` (Remote `github.com/vanmeegen/macvibes` existiert):
 
-- Matrix `macos-latest` + `windows-latest`; Bun **exakt 1.3.14**
+- Matrix `macos-latest` + `windows-latest`; Bun **exakt 1.4.5**
   (`oven-sh/setup-bun`, Pin aus CLAUDE.md), `bun install --frozen-lockfile`,
   `bun run ci`.
 - Mac-Leg: Pflicht ab Tag 1. Windows-Leg: `continue-on-error: true`, bis

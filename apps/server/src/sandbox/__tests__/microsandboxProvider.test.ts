@@ -52,7 +52,7 @@ beforeAll(async () => {
       await buildTemplateBaseline({
         templatesDir: templates,
         templateDir: FIXTURE_TEMPLATE_DIR,
-        image: 'oven/bun:1.3.14',
+        image: 'oven/bun:1.4.5',
       });
     } finally {
       await removeDir(templates);

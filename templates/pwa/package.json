@@ -18,7 +18,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
-    "@types/bun": "1.3.14",
+    "@types/bun": "1.4.5",
     "@types/react": "^19.3.2",
     "@types/react-dom": "^19.3.0",
     "typescript": "^6.0.3"
