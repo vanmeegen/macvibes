@@ -1,13 +1,16 @@
-import { describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { SandboxNotFoundError } from 'microsandbox';
 import {
   buildSandboxConfig,
   isSandboxNotFound,
-  isSnapshotNotFound,
   msbAvailable,
+  readSandboxConfig,
   removeSandbox,
   snapshotExists,
+  startSandbox,
   stopSandbox,
   waitForSandboxReady,
 } from '../msbClient';
@@ -36,24 +39,12 @@ describe('Fehlerklassifikation', () => {
     // Genau der Fall, der die Baseline-Meldung vorher verfälscht hat.
     const schema = new Error('runtime error: database schema is newer than this msb binary');
     expect(isSandboxNotFound(schema)).toBe(false);
-    expect(isSnapshotNotFound(schema)).toBe(false);
     expect(isSandboxNotFound(new Error('permission denied'))).toBe(false);
-    expect(isSnapshotNotFound(new Error('permission denied'))).toBe(false);
-  });
-
-  test('erkennt einen fehlenden Snapshot an der Kennung im Text', () => {
-    // Das SDK typisiert Snapshot-Fehler (noch) nicht: Snapshot.get wirft ein
-    // generiches Error mit code=GenericFailure und der Kennung im Text.
-    // Empirisch geprüft gegen microsandbox 0.6.8.
-    expect(isSnapshotNotFound(new Error('[SnapshotNotFound] snapshot not found: gibtsnicht'))).toBe(
-      true,
-    );
   });
 
   test('verträgt Nicht-Fehler ohne zu werfen', () => {
     for (const wert of [null, undefined, 'text', 42, {}]) {
       expect(isSandboxNotFound(wert)).toBe(false);
-      expect(isSnapshotNotFound(wert)).toBe(false);
     }
   });
 });
@@ -118,78 +109,72 @@ describe('waitForSandboxReady', () => {
  * Konfiguration, die die CLI mit `--net-rule 'allow@public,allow@172.16.0.0/12'`
  * erzeugt hat (per configJson ausgelesen und verglichen).
  */
-describe.skipIf(!pwaSnapshotDa)(
-  'Startkonfiguration (Übersetzung der bisherigen CLI-Aufrufe)',
-  () => {
-    // tmpdir() statt '/private/tmp': muss auf JEDER Plattform real existieren,
-    // weil bauBuilder die Mount-Quelle mit realpathSync auflöst.
-    const spec = {
-      name: 'macvibes-test',
-      snapshot: 'macvibes-tpl-pwa',
-      workdir: '/work',
-      cpus: 2,
-      memoryMib: 1024,
-      previewHostPort: 43210,
-      previewGuestPort: 5173,
-      mounts: [
-        { host: tmpdir(), guest: '/work' },
-        { host: tmpdir(), guest: '/etc/macvibes', readonly: true },
-      ],
-      command: ['/bin/sh', '-c', 'echo hallo'],
-    };
+describe.skipIf(!available)('Startkonfiguration (Übersetzung der bisherigen CLI-Aufrufe)', () => {
+  // tmpdir() statt '/private/tmp': muss auf JEDER Plattform real existieren,
+  // weil bauBuilder die Mount-Quelle mit realpathSync auflöst.
+  const spec = {
+    name: 'macvibes-test',
+    image: 'oven/bun:1.4.5',
+    workdir: '/work',
+    cpus: 2,
+    memoryMib: 1024,
+    previewHostPort: 43210,
+    previewGuestPort: 5173,
+    mounts: [
+      { host: tmpdir(), guest: '/work' },
+      { host: tmpdir(), guest: '/etc/macvibes', readonly: true },
+    ],
+    command: ['/bin/sh', '-c', 'echo hallo'],
+  };
 
-    test('sperrt Egress per Default und erlaubt nur öffentlich + Host-Gateway', async () => {
-      const cfg = JSON.parse(JSON.stringify(await buildSandboxConfig(spec)));
-      const policy = cfg.network.policy;
-      expect(policy.defaultEgress).toBe('deny');
-      expect(policy.defaultIngress).toBe('allow');
-      expect(policy.rules).toHaveLength(3);
-      // DNS zum Host — fehlte in der alten CLI-Regel, wodurch Namensauflösung in
-      // Projekt-VMs unmöglich war (nachgemessen). Öffnet nur Port 53, kein LAN.
-      expect(policy.rules[0].destination).toEqual({ group: 'host' });
-      expect(policy.rules[0].ports).toEqual([{ start: 53, end: 53 }]);
-      expect(policy.rules[0].action).toBe('allow');
-      expect(policy.rules[1].destination).toEqual({ group: 'public' });
-      expect(policy.rules[1].action).toBe('allow');
-      expect(policy.rules[2].destination).toEqual({ cidr: '172.16.0.0/12' });
-      expect(policy.rules[2].action).toBe('allow');
-    });
+  test('sperrt Egress per Default und erlaubt nur öffentlich + Host-Gateway', async () => {
+    const cfg = JSON.parse(JSON.stringify(await buildSandboxConfig(spec)));
+    const policy = cfg.network.policy;
+    expect(policy.defaultEgress).toBe('deny');
+    expect(policy.defaultIngress).toBe('allow');
+    expect(policy.rules).toHaveLength(3);
+    // DNS zum Host — fehlte in der alten CLI-Regel, wodurch Namensauflösung in
+    // Projekt-VMs unmöglich war (nachgemessen). Öffnet nur Port 53, kein LAN.
+    expect(policy.rules[0].destination).toEqual({ group: 'host' });
+    expect(policy.rules[0].ports).toEqual([{ start: 53, end: 53 }]);
+    expect(policy.rules[0].action).toBe('allow');
+    expect(policy.rules[1].destination).toEqual({ group: 'public' });
+    expect(policy.rules[1].action).toBe('allow');
+    expect(policy.rules[2].destination).toEqual({ cidr: '172.16.0.0/12' });
+    expect(policy.rules[2].action).toBe('allow');
+  });
 
-    test('bindet den Preview-Port ausschließlich ans Loopback (H1)', async () => {
-      const cfg = JSON.parse(JSON.stringify(await buildSandboxConfig(spec)));
-      // Der Port MUSS im selben network()-Aufruf gesetzt werden wie die Policy —
-      // sonst ersetzt der spätere Aufruf die Netzkonfiguration und die Bindung
-      // verschwindet stillschweigend (ports: []), die Preview wäre tot.
-      const ports = cfg.network.ports;
-      expect(ports).toHaveLength(1);
-      expect(ports[0].hostBind).toBe('127.0.0.1');
-      expect(ports[0].hostPort).toBe(43210);
-      expect(ports[0].guestPort).toBe(5173);
-    });
+  test('bindet den Preview-Port ausschließlich ans Loopback (H1)', async () => {
+    const cfg = JSON.parse(JSON.stringify(await buildSandboxConfig(spec)));
+    // Der Port MUSS im selben network()-Aufruf gesetzt werden wie die Policy —
+    // sonst ersetzt der spätere Aufruf die Netzkonfiguration und die Bindung
+    // verschwindet stillschweigend (ports: []), die Preview wäre tot.
+    const ports = cfg.network.ports;
+    expect(ports).toHaveLength(1);
+    expect(ports[0].hostBind).toBe('127.0.0.1');
+    expect(ports[0].hostPort).toBe(43210);
+    expect(ports[0].guestPort).toBe(5173);
+  });
 
-    test('übernimmt Nur-Lese-Mounts als solche', async () => {
-      const cfg = JSON.parse(JSON.stringify(await buildSandboxConfig(spec)));
-      const nurLesend = cfg.mounts.filter(
-        (m: { options: { readonly: boolean } }) => m.options.readonly,
-      );
-      expect(nurLesend).toHaveLength(1);
-      expect(nurLesend[0].guest).toBe('/etc/macvibes');
-      expect(cfg.mounts).toHaveLength(2);
-    });
+  test('übernimmt Nur-Lese-Mounts als solche', async () => {
+    const cfg = JSON.parse(JSON.stringify(await buildSandboxConfig(spec)));
+    const nurLesend = cfg.mounts.filter(
+      (m: { options: { readonly: boolean } }) => m.options.readonly,
+    );
+    expect(nurLesend).toHaveLength(1);
+    expect(nurLesend[0].guest).toBe('/etc/macvibes');
+    expect(cfg.mounts).toHaveLength(2);
+  });
 
-    test('übernimmt Snapshot, Arbeitsverzeichnis und Ressourcen', async () => {
-      const cfg = JSON.parse(JSON.stringify(await buildSandboxConfig(spec)));
-      // Der Snapshot-Name steht nicht mehr im gebauten Config — er ist zum
-      // Image des Snapshots aufgelöst. Dass er angewandt wurde, zeigt genau das:
-      // ohne fromSnapshot hätte der Builder ein explizites Image gebraucht.
-      expect(cfg.image.Oci.reference).toContain('oven/bun');
-      expect(cfg.runtime.workdir).toBe('/work');
-      expect(cfg.resources.cpus).toBe(2);
-      expect(cfg.resources.memoryMib).toBe(1024);
-      expect(cfg.init).toEqual({ cmd: '/bin/sh', args: ['-c', 'echo hallo'], env: [] });
-    });
-  },
-);
+  test('übernimmt Image, Arbeitsverzeichnis und Ressourcen', async () => {
+    const cfg = JSON.parse(JSON.stringify(await buildSandboxConfig(spec)));
+    expect(cfg.image.Oci.reference).toContain('oven/bun');
+    expect(cfg.runtime.workdir).toBe('/work');
+    expect(cfg.resources.cpus).toBe(2);
+    expect(cfg.resources.memoryMib).toBe(1024);
+    expect(cfg.init).toEqual({ cmd: '/bin/sh', args: ['-c', 'echo hallo'], env: [] });
+  });
+});
 
 /**
  * Regressionsschutz für die Egress-Grenze. Sie ist der Kern von Restrisiko 2
@@ -198,10 +183,10 @@ describe.skipIf(!pwaSnapshotDa)(
  * das Agent-Gateway und alles im LAN. Der Default MUSS deshalb die gehärtete
  * Policy sein, und die Ausnahme muss man ausdrücklich hinschreiben.
  */
-describe.skipIf(!pwaSnapshotDa)('Egress-Grenze ist der Default', () => {
+describe.skipIf(!available)('Egress-Grenze ist der Default', () => {
   const basis = {
     name: 'macvibes-x',
-    snapshot: 'macvibes-tpl-pwa',
+    image: 'oven/bun:1.4.5',
     workdir: '/work',
     cpus: 1,
     memoryMib: 512,
@@ -233,5 +218,104 @@ describe.skipIf(!pwaSnapshotDa)('Egress-Grenze ist der Default', () => {
       JSON.stringify(await buildSandboxConfig({ ...basis, previewHostPort: 0 })),
     );
     expect(cfg.network.ports).toHaveLength(0);
+  });
+});
+
+/**
+ * Snapshot-Starts (alle Projekt-VMs) laufen seit microsandbox 0.7 über einen
+ * eigenen Restore-Builder mit eigenen Methoden für Policy, Port und Mounts —
+ * und der gibt seine Konfiguration nicht vorab heraus. Die sicherheitskritischen
+ * Teile werden deshalb an einer echt gestarteten VM abgelesen.
+ */
+describe.skipIf(!pwaSnapshotDa)('Snapshot-Start (gegen die echte Laufzeit)', () => {
+  const name = 'macvibes-test-restore';
+  // Eigenes Verzeichnis statt tmpdir() selbst: die Laufzeit prüft seit 0.7 beim
+  // Mounten, ob sie im Quellordner Metadaten schreiben darf — in der Wurzel des
+  // System-Temp-Verzeichnisses verweigert macOS das.
+  const quelle = mkdtempSync(join(tmpdir(), 'macvibes-restore-'));
+  afterAll(() => rmSync(quelle, { recursive: true, force: true }));
+  const spec = {
+    name,
+    snapshot: 'macvibes-tpl-pwa',
+    workdir: '/work',
+    cpus: 1,
+    memoryMib: 512,
+    previewHostPort: 43211,
+    previewGuestPort: 5173,
+    mounts: [
+      { host: quelle, guest: '/work' },
+      { host: quelle, guest: '/etc/macvibes', readonly: true },
+    ],
+    command: ['/bin/sh', '-c', "trap 'exit 0' TERM; while true; do sleep 1; done"],
+  };
+
+  test('Egress-Policy, Loopback-Port und Nur-Lese-Mount kommen in der VM an', async () => {
+    try {
+      await startSandbox(spec);
+      const cfg = JSON.parse(JSON.stringify(await readSandboxConfig(name)));
+
+      const policy = cfg.network.policy;
+      expect(policy.defaultEgress).toBe('deny');
+      expect(policy.rules.map((r: { destination: unknown }) => r.destination)).toEqual([
+        { group: 'host' },
+        { group: 'public' },
+        { cidr: '172.16.0.0/12' },
+      ]);
+      expect(policy.rules[0].ports).toEqual([{ start: 53, end: 53 }]);
+
+      expect(cfg.network.ports).toHaveLength(1);
+      expect(cfg.network.ports[0].hostBind).toBe('127.0.0.1');
+      expect(cfg.network.ports[0].hostPort).toBe(43211);
+      expect(cfg.network.ports[0].guestPort).toBe(5173);
+
+      const mounts = cfg.mounts as { guest: string; options: { readonly: boolean } }[];
+      expect(mounts.find((m) => m.guest === '/etc/macvibes')?.options.readonly).toBe(true);
+      expect(mounts.find((m) => m.guest === '/work')?.options.readonly).toBe(false);
+      expect(cfg.resources.cpus).toBe(1);
+      expect(cfg.runtime.workdir).toBe('/work');
+    } finally {
+      await stopSandbox(name);
+      await removeSandbox(name);
+    }
+  }, 60_000);
+
+  test('ein Rest gleichen Namens wird ersetzt statt den Start zu blockieren', async () => {
+    try {
+      await startSandbox(spec);
+      await startSandbox({ ...spec, memoryMib: 768 });
+      const cfg = JSON.parse(JSON.stringify(await readSandboxConfig(name)));
+      expect(cfg.resources.memoryMib).toBe(768);
+    } finally {
+      await stopSandbox(name);
+      await removeSandbox(name);
+    }
+  }, 60_000);
+
+  test('eine VM, die das Stoppen ignoriert, hält das Stoppen nur kurz auf', async () => {
+    // Projekt-VMs werden beim Löschen, bei LRU-Verdrängung und beim
+    // Herunterfahren des Servers gestoppt — dort stehen nur wenige Sekunden
+    // zur Verfügung (Shutdown-Budget, wartende Oberfläche). Seit microsandbox
+    // 0.7 wartet ein geordnetes Stoppen sonst unbegrenzt. In der Live-Suite
+    // getroffen: eine fullstack-VM reagierte nicht, das Löschen hing 10 s.
+    try {
+      await startSandbox({ ...spec, command: ['/bin/sh', '-c', 'while true; do sleep 5; done'] });
+      await waitForSandboxReady(name);
+      const start = Date.now();
+      await stopSandbox(name);
+      expect(Date.now() - start).toBeLessThan(4000);
+      const cfgNachStop = await readSandboxConfig(name);
+      expect(cfgNachStop).toBeDefined();
+      // Gestoppt heißt: entfernen gelingt (eine laufende VM lässt sich nicht entfernen).
+      await expect(removeSandbox(name)).resolves.toBeUndefined();
+    } finally {
+      await stopSandbox(name);
+      await removeSandbox(name);
+    }
+  }, 60_000);
+
+  test('ein fehlender Snapshot ist ein klarer Fehler', async () => {
+    await expect(startSandbox({ ...spec, snapshot: 'macvibes-gibt-es-nicht-xyz' })).rejects.toThrow(
+      /Snapshot „macvibes-gibt-es-nicht-xyz" fehlt/,
+    );
   });
 });

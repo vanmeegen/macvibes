@@ -8,13 +8,24 @@
  * erschien („bitte `bun run baselines` ausführen"). Dieselbe Klasse von
  * stillem Fehlschlag steckte im Shutdown-Skript.
  *
- * Das SDK typisiert Fehler — allerdings UNEINHEITLICH (Stand 0.6.8): Sandboxes
- * werfen `SandboxNotFoundError`, Snapshots dagegen ein generisches `Error` mit
- * der Kennung `[SnapshotNotFound]` im Text. Beides wird hier gekapselt, damit
- * der Rest der Anwendung nur noch eindeutige Begriffe sieht.
+ * Das SDK typisiert Fehler (`SandboxNotFoundError` u. a.). Das wird hier
+ * gekapselt, damit der Rest der Anwendung nur noch eindeutige Begriffe sieht.
+ *
+ * Begriffe seit 0.8: Was macvibes „Snapshot" nennt (ein benannter
+ * Plattenstand, aus dem Projekt-VMs entstehen), heißt im SDK `Checkpoint`;
+ * `Snapshot` ist dort eine Gruppe von Checkpoints mit Verlauf. macvibes
+ * braucht keinen Verlauf und bleibt bei benannten Einzelständen.
  */
 import { realpathSync } from 'node:fs';
-import { NetworkPolicy, Sandbox, SandboxNotFoundError, Snapshot } from 'microsandbox';
+import {
+  Checkpoint,
+  NetworkPolicy,
+  Sandbox,
+  SandboxNotFoundError,
+  SandboxNotRunningError,
+  Snapshot,
+  StopTimeoutError,
+} from 'microsandbox';
 
 /** Fehlerbegriff der Sandbox-Schicht — ersetzt den CLI-weiten MicrosandboxError. */
 export class SandboxRuntimeError extends Error {
@@ -54,20 +65,6 @@ export function isSandboxNotFound(error: unknown): boolean {
 }
 
 /**
- * Ist das der Fehler „diesen Snapshot gibt es nicht"?
- *
- * Anders als bei Sandboxes gibt es dafür (noch) keine eigene Fehlerklasse; das
- * SDK liefert ein generisches `Error` mit `code = 'GenericFailure'` und der
- * Kennung im Text. Die Prüfung hängt damit an einer Zeichenkette — bewusst eng
- * gefasst, damit ein anderer Fehler nicht versehentlich als „fehlt" durchgeht.
- * Sobald das SDK eine `SnapshotNotFoundError`-Klasse mitbringt, gehört das hier
- * ersetzt.
- */
-export function isSnapshotNotFound(error: unknown): boolean {
-  return fehlertext(error).includes('[SnapshotNotFound]');
-}
-
-/**
  * Ist die microsandbox-Laufzeit benutzbar? Der Grund für ein „nein" wird
  * geloggt: sonst sieht eine DEFEKTE Installation genauso aus wie eine fehlende
  * — derselbe stille Fehlschlag, den der Kopfkommentar dieser Datei beschreibt.
@@ -83,34 +80,83 @@ export async function msbAvailable(): Promise<boolean> {
 }
 
 /**
+ * Wo liegt der Snapshot mit diesem Namen — als Angabe, aus der `Sandbox.restore`
+ * starten kann? `null`, wenn es ihn nicht gibt.
+ *
+ * Seit 0.8 gibt es zwei Formen:
+ * - **Gruppe** (alles, was macvibes ab 0.8 baut): der Name ist der Gruppenname,
+ *   gestartet wird ihr aktueller Stand (Head).
+ * - **Einzelstand ohne Gruppe** (Baselines aus 0.6.x): die Laufzeit findet sie
+ *   nicht mehr über den Namen, nur über den Pfad. Sie starten weiter, bis
+ *   `bun run baselines` sie durch eine Gruppe ersetzt.
+ *
+ * Bewusst über die Listen statt über „get + Fehler deuten": ein alter
+ * Einzelstand meldet sich bei `get` als InvalidConfig, eine fehlende Gruppe als
+ * IoError — beides taugt nicht als eindeutiges „fehlt".
+ */
+async function findeSnapshot(name: string): Promise<string | null> {
+  const gruppen = await Snapshot.list();
+  const gruppe = gruppen.find((g) => g.name === name);
+  if (gruppe !== undefined && (await gruppe.head()) !== null) return name;
+  const staende = await Checkpoint.list();
+  return staende.find((c) => c.group === null && c.name === name)?.path ?? null;
+}
+
+/**
  * Existiert ein Snapshot mit diesem Namen?
  *
- * Nur ein echtes „nicht gefunden" ergibt `false`. Jeder andere Fehler (defekte
- * Installation, Schema-Konflikt, fehlende Rechte) fliegt weiter — sonst
- * verwandelt sich ein kaputtes Werkzeug in eine irreführende Fachmeldung.
+ * Jeder Fehler der Laufzeit (defekte Installation, Schema-Konflikt, fehlende
+ * Rechte) fliegt weiter — sonst verwandelt sich ein kaputtes Werkzeug in eine
+ * irreführende Fachmeldung („bitte `bun run baselines` ausführen").
  */
 export async function snapshotExists(name: string): Promise<boolean> {
   return msbCall(
     `Snapshot „${name}" konnte nicht geprüft werden`,
-    async () => {
-      await Snapshot.get(name);
-      return true;
-    },
-    { ist: isSnapshotNotFound, wert: false },
+    async () => (await findeSnapshot(name)) !== null,
   );
 }
+
+/**
+ * Frist für das geordnete Herunterfahren einer Projekt-VM, danach wird sie
+ * beendet. Bewusst knapp: gestoppt wird beim Löschen, bei LRU-Verdrängung und
+ * beim Herunterfahren des Servers, wo für ALLE VM-Stopps zusammen nur wenige
+ * Sekunden bleiben (`sandboxShutdownBudgetMs`). Das harte Beenden kostet eine
+ * Projekt-VM nichts: ihre Platte ist ein Wegwerf-Fork der Baseline, der
+ * Arbeitsstand liegt auf dem Host-Mount und ist vorher auto-committet.
+ */
+const STOPP_FRIST_MS = 2_000;
+
+/** Obergrenze für das harte Beenden selbst (dauert gemessen ~30 ms). */
+const KILL_FRIST_MS = 10_000;
 
 /**
  * Stoppt eine Sandbox. Eine unbekannte Sandbox ist KEIN Fehler — der
  * Aufräumpfad läuft auch, wenn schon jemand aufgeräumt hat. Jeder andere
  * Fehler fliegt weiter, statt als „war halt schon weg" durchzugehen.
+ *
+ * Seit 0.7 hat das geordnete Stoppen keine eigene Frist mehr und beendet die
+ * VM auch nicht von sich aus. Reagiert PID 1 nicht rechtzeitig, wird sie
+ * deshalb hier beendet — sonst bliebe sie im Zustand „draining" stehen und
+ * ließe sich weder entfernen noch als Snapshot einfrieren.
+ *
+ * `fristMs` verlängert die Geduld, wo das geordnete Ende zählt: die
+ * Builder-VM, deren Platte gleich eingefroren wird.
  */
-export async function stopSandbox(name: string): Promise<void> {
+export async function stopSandbox(name: string, options: { fristMs?: number } = {}): Promise<void> {
+  const fristMs = options.fristMs ?? STOPP_FRIST_MS;
   await msbCall(
     `Sandbox „${name}" konnte nicht gestoppt werden`,
     async () => {
-      const handle = await Sandbox.get(name);
-      await handle.stop();
+      const sandbox = await Sandbox.get(name);
+      try {
+        await sandbox.stopWithTimeout(fristMs);
+      } catch (error) {
+        if (!(error instanceof StopTimeoutError)) throw error;
+        console.warn(
+          `Sandbox „${name}" hat sich nicht binnen ${fristMs} ms geordnet beendet — wird beendet.`,
+        );
+        await sandbox.killWithTimeout(KILL_FRIST_MS);
+      }
     },
     { ist: isSandboxNotFound, wert: undefined },
   );
@@ -148,8 +194,10 @@ export async function waitForSandboxReady(
   const probe =
     options.probe ??
     (async (n: string) => {
-      const handle = await Sandbox.get(n);
-      return handle.ping();
+      // `get` + `ping` startet eine gestoppte Sandbox NICHT (anders als
+      // `getRunning` oder ein Kommando) — die Probe bleibt eine reine Frage.
+      const sandbox = await Sandbox.get(n);
+      return sandbox.ping();
     });
 
   const start = Date.now();
@@ -227,7 +275,27 @@ export interface SandboxSpec {
  * den Credential-Proxy.
  */
 export async function buildSandboxConfig(spec: SandboxSpec): Promise<unknown> {
-  return bauBuilder(spec).build();
+  if (spec.image === undefined) {
+    throw new SandboxRuntimeError(
+      `Sandbox „${spec.name}": die Startkonfiguration lässt sich nur für Image-Starts vorab bauen — für Snapshot-Starts liefert sie readSandboxConfig() an der laufenden VM`,
+    );
+  }
+  pruefeSpec(spec);
+  return bauImageBuilder(spec, spec.image).build();
+}
+
+/**
+ * Liest die wirksame Konfiguration einer vorhandenen Sandbox. Für
+ * Snapshot-Starts der einzige Weg, Egress-Policy, Port-Bindung und
+ * Nur-Lese-Mounts zu prüfen: der Restore-Builder (seit 0.7) gibt seine
+ * Konfiguration nicht vorab heraus.
+ */
+export async function readSandboxConfig(name: string): Promise<unknown> {
+  return msbCall(`Konfiguration von „${name}" konnte nicht gelesen werden`, async () => {
+    const sandbox = await Sandbox.get(name);
+    const inspektion = (await sandbox.config()) as unknown as { spec: unknown };
+    return inspektion.spec;
+  });
 }
 
 /**
@@ -263,18 +331,24 @@ function egressPolicy() {
   );
 }
 
-function bauBuilder(spec: SandboxSpec) {
+function pruefeSpec(spec: SandboxSpec): [string, string[]] {
   if ((spec.snapshot === undefined) === (spec.image === undefined)) {
     throw new SandboxRuntimeError(
       `Sandbox „${spec.name}": genau eines von snapshot oder image angeben`,
     );
   }
-  const basis = Sandbox.builder(spec.name);
-  let builder = (
-    spec.snapshot !== undefined
-      ? basis.fromSnapshot(spec.snapshot)
-      : basis.image(spec.image as string)
-  )
+  const [cmd, ...args] = spec.command;
+  if (cmd === undefined) {
+    throw new SandboxRuntimeError(`Sandbox „${spec.name}": leeres Startkommando`);
+  }
+  return [cmd, args];
+}
+
+/** Start aus einem OCI-Image — nur die Builder-VM des Baseline-Baus. */
+function bauImageBuilder(spec: SandboxSpec, image: string) {
+  const [cmd, args] = pruefeSpec(spec);
+  let builder = Sandbox.builder(spec.name)
+    .image(image)
     .workdir(spec.workdir)
     .cpus(spec.cpus)
     .memory(spec.memoryMib)
@@ -304,26 +378,86 @@ function bauBuilder(spec: SandboxSpec) {
   }
 
   if (spec.idleTimeoutSecs !== undefined) {
-    builder = builder.idleTimeout(spec.idleTimeoutSecs);
+    builder = builder.idleTimeoutSeconds(spec.idleTimeoutSecs);
   }
 
-  const [cmd, ...args] = spec.command;
-  if (cmd === undefined) {
-    throw new SandboxRuntimeError(`Sandbox „${spec.name}": leeres Startkommando`);
-  }
   // init verlangt einen absoluten Pfad (oder `auto`) — 'sh' allein wird
   // abgelehnt. Die CLI nahm das noch entgegen.
   return builder.init(cmd, args);
 }
 
 /**
- * Startet eine Projekt-VM im Hintergrund und wartet NICHT auf ihre
- * Bereitschaft — dafür ist `waitForSandboxReady` da (der Agent-Endpunkt ist
- * erst später erreichbar).
+ * Start aus einem Snapshot — der Normalfall für Projekt-VMs. Seit 0.7 ein
+ * eigener Builder (`Sandbox.restore`): er startet immer im Hintergrund und
+ * kennt kein „ersetzen" (siehe `startSandbox`).
+ */
+function bauRestore(spec: SandboxSpec, quelle: string) {
+  const [cmd, args] = pruefeSpec(spec);
+  let builder = Sandbox.restore(quelle)
+    .name(spec.name)
+    .workdir(spec.workdir)
+    .cpus(spec.cpus)
+    .memory(spec.memoryMib)
+    // Die Baseline merkt sich die Mounts ihrer Builder-VM (Templates,
+    // Daemon-Bundle). Eine Projekt-VM bringt eigene Mounts mit und braucht
+    // die der Builder-VM nicht — ohne diese Angabe verweigert die Laufzeit
+    // den Start, solange nicht jeder gemerkte Mount wieder zugeordnet ist.
+    .allowMissingResources();
+
+  // H1: ausschließlich ans Host-Loopback binden (wie beim Image-Start).
+  if (spec.previewHostPort > 0) {
+    builder = builder.portBind('127.0.0.1', spec.previewHostPort, spec.previewGuestPort);
+  }
+  // Ohne eigene Policy gilt der Default der Laufzeit; die gehärtete
+  // Egress-Policy ist der Normalfall und muss ausdrücklich abgewählt werden.
+  if (spec.network !== 'unrestricted') {
+    builder = builder.networkPolicy(egressPolicy());
+  }
+
+  for (const mount of spec.mounts) {
+    builder = builder.volume(mount.guest, (b) => {
+      const gebunden = b.bind(realpathSync(mount.host));
+      return mount.readonly === true ? gebunden.readonly() : gebunden;
+    });
+  }
+
+  if (spec.idleTimeoutSecs !== undefined) {
+    builder = builder.idleTimeoutSeconds(spec.idleTimeoutSecs);
+  }
+
+  return builder.init(cmd, args);
+}
+
+/**
+ * Startet eine VM im Hintergrund und wartet NICHT auf ihre Bereitschaft —
+ * dafür ist `waitForSandboxReady` da (der Agent-Endpunkt ist erst später
+ * erreichbar). Eine vorhandene Sandbox gleichen Namens wird ersetzt.
  */
 export async function startSandbox(spec: SandboxSpec): Promise<void> {
+  pruefeSpec(spec);
+  if (spec.image !== undefined) {
+    const image = spec.image;
+    await msbCall(`Sandbox „${spec.name}" konnte nicht gestartet werden`, async () => {
+      await bauImageBuilder(spec, image).create();
+    });
+    return;
+  }
+  const snapshot = spec.snapshot as string;
+  const quelle = await msbCall(`Snapshot „${snapshot}" konnte nicht geprüft werden`, () =>
+    findeSnapshot(snapshot),
+  );
+  if (quelle === null) {
+    throw new SandboxRuntimeError(
+      `Sandbox „${spec.name}" konnte nicht gestartet werden: Snapshot „${snapshot}" fehlt`,
+    );
+  }
+  // Der Restore-Builder kennt kein replace(): ein Rest gleichen Namens (z. B.
+  // nach einem Host-Absturz) muss vorher weg, sonst scheitert der Start an
+  // „sandbox already exists".
+  await stopSandbox(spec.name);
+  await removeSandbox(spec.name);
   await msbCall(`Sandbox „${spec.name}" konnte nicht gestartet werden`, async () => {
-    await bauBuilder(spec).create();
+    await bauRestore(spec, quelle).restore();
   });
 }
 
@@ -331,11 +465,18 @@ export async function startSandbox(spec: SandboxSpec): Promise<void> {
  * Führt ein Shell-Skript in einer laufenden Sandbox aus und liefert stdout.
  * Ein Exit-Code ungleich 0 ist ein Fehler — vorher ging er im generischen
  * „msb exec schlug fehl" unter, ohne stderr.
+ *
+ * Seit 0.8 würde ein Kommando eine GESTOPPTE Sandbox von sich aus starten.
+ * macvibes will das nicht (eine gestoppte VM ist Absicht des Lebenszyklus),
+ * deshalb wird der Zustand vorher geprüft.
  */
 export async function execShell(name: string, script: string): Promise<string> {
   try {
-    const handle = await Sandbox.get(name);
-    const sandbox = await handle.connect();
+    const sandbox = await Sandbox.get(name);
+    const status = await sandbox.status();
+    if (status !== 'running') {
+      throw new SandboxRuntimeError(`Sandbox „${name}" läuft nicht (Zustand: ${status})`);
+    }
     const out = await sandbox.shell(script);
     if (!out.success) {
       throw new SandboxRuntimeError(
@@ -352,22 +493,34 @@ export async function execShell(name: string, script: string): Promise<string> {
   }
 }
 
-/** Erzeugt einen Snapshot aus einer (gestoppten) Sandbox. */
+/**
+ * Erzeugt einen Snapshot aus einer (gestoppten) Sandbox und ersetzt dabei einen
+ * vorhandenen gleichen Namens.
+ *
+ * Seit 0.7 sind Stände in einer Gruppe unveränderlich, das frühere
+ * Überschreiben (`force`) gibt es nicht mehr. Der Name wird zur Gruppe mit
+ * genau einem Stand: erst weg, dann neu.
+ */
 export async function createSnapshot(name: string, fromSandbox: string): Promise<void> {
+  await removeSnapshot(name);
   await msbCall(`Snapshot „${name}" konnte nicht erzeugt werden`, async () => {
-    await Snapshot.builder(name).fromSandbox(fromSandbox).force().create();
+    await Checkpoint.builder().group(name).fromSandbox(fromSandbox).create();
   });
 }
 
-/** Entfernt einen Snapshot. Nicht vorhanden = kein Fehler. */
+/**
+ * Entfernt einen Snapshot — die Gruppe dieses Namens UND einen gleichnamigen
+ * Einzelstand aus 0.6.x. Nicht vorhanden = kein Fehler.
+ */
 export async function removeSnapshot(name: string): Promise<void> {
-  await msbCall(
-    `Snapshot „${name}" konnte nicht entfernt werden`,
-    async () => {
-      await Snapshot.remove(name, { force: true });
-    },
-    { ist: isSnapshotNotFound, wert: undefined },
-  );
+  await msbCall(`Snapshot „${name}" konnte nicht entfernt werden`, async () => {
+    const gruppen = await Snapshot.list();
+    await gruppen.find((g) => g.name === name)?.remove();
+    const staende = await Checkpoint.list();
+    for (const alt of staende.filter((c) => c.group === null && c.name === name)) {
+      await Checkpoint.remove(alt.path, { force: true });
+    }
+  });
 }
 
 /** Namen aller bekannten Sandboxes (laufend und gestoppt). */
@@ -391,10 +544,12 @@ export async function touchSandbox(name: string): Promise<boolean> {
   return msbCall(
     `Idle-Frist von „${name}" konnte nicht zurückgesetzt werden`,
     async () => {
-      const handle = await Sandbox.get(name);
-      await handle.touch();
+      const sandbox = await Sandbox.get(name);
+      await sandbox.touch();
       return true;
     },
-    { ist: isSandboxNotFound, wert: false },
+    // Gestoppt zählt wie unbekannt: seit 0.8 meldet die Laufzeit das als
+    // eigenen Fehler, für den Manager ist es dieselbe Auskunft.
+    { ist: (e) => isSandboxNotFound(e) || e instanceof SandboxNotRunningError, wert: false },
   );
 }

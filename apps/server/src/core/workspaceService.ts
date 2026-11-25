@@ -84,6 +84,11 @@ export async function ensureWorkspace(params: WorkspaceParams): Promise<string> 
     'core.autocrlf=false',
     'clone',
     '--quiet',
+    // Regulärer Transport statt gits Abkürzung für lokale Pfade: die kopiert
+    // den Objektordner des Bare-Repos Datei für Datei — also die Objekte ALLER
+    // Projekte — und bricht ab, wenn währenddessen ein anderes Projekt dort
+    // hineinschreibt („failed to copy file … No such file or directory").
+    '--no-local',
     '--branch',
     params.branchName,
     '--single-branch',

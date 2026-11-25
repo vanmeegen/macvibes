@@ -51,6 +51,9 @@ export function resolveBaselineSnapshotName(options: {
   return options.snapshotName ?? baselineSnapshotName(options.templateDir);
 }
 
+/** Frist für das geordnete Ende der Builder-VM vor dem Einfrieren. */
+const BUILDER_STOPP_FRIST_MS = 15_000;
+
 /** Baut/erneuert den Baseline-Snapshot eines Templates (bun install in der VM). */
 export async function buildTemplateBaseline(options: BuildBaselineOptions): Promise<void> {
   const snapshotName = resolveBaselineSnapshotName(options);
@@ -67,7 +70,11 @@ export async function buildTemplateBaseline(options: BuildBaselineOptions): Prom
     previewHostPort: 0,
     previewGuestPort: 0,
     mounts: [{ host: templatePath, guest: '/src', readonly: true }],
-    command: ['/bin/sleep', 'infinity'],
+    // PID 1 muss auf SIGTERM hören: seit microsandbox 0.7 wartet das Stoppen
+    // auf ein geordnetes Ende, und ein nacktes `sleep` als PID 1 ignoriert das
+    // Signal — die VM müsste dann hart beendet werden, kurz bevor ihre Platte
+    // eingefroren wird.
+    command: ['/bin/sh', '-c', "trap 'exit 0' TERM; while :; do sleep 1; done"],
     // Wie vorher (CLI ohne --net-rule): der Bau braucht apt und das
     // npm-Registry. Die VM läuft ohne Agent und nur während des Baus.
     network: 'unrestricted',
@@ -104,6 +111,11 @@ export async function buildTemplateBaseline(options: BuildBaselineOptions): Prom
         'mkdir -p /baseline/work && cp -r /src/. /baseline/work && rm -rf /baseline/work/node_modules && ' +
         'cd /baseline/work && bun install --silent && mkdir -p node_modules',
     },
+    {
+      // Alles auf die Platte, bevor die VM stoppt und eingefroren wird.
+      beschreibung: 'Platte synchronisieren',
+      script: 'sync',
+    },
   ];
 
   try {
@@ -117,7 +129,9 @@ export async function buildTemplateBaseline(options: BuildBaselineOptions): Prom
         );
       }
     }
-    await stopSandbox(BUILDER_SANDBOX);
+    // Mehr Geduld als bei Projekt-VMs: diese Platte wird gleich eingefroren,
+    // ein hartes Beenden soll hier die Ausnahme bleiben.
+    await stopSandbox(BUILDER_SANDBOX, { fristMs: BUILDER_STOPP_FRIST_MS });
     await createSnapshot(snapshotName, BUILDER_SANDBOX);
   } finally {
     // Erst stoppen, dann entfernen: scheitert ein Bau-Schritt, läuft die
