@@ -1,4 +1,4 @@
-import { isSlowAgentModel } from '../../agent/agentModel';
+import { effectiveAgentModel, isSlowAgentModel } from '../../agent/agentModel';
 import type { AgentRunner } from '../../agent/runner';
 import type { UserRow } from '../../db/schema';
 import type { ChatMessageStore } from './chatMessageStore';
@@ -8,6 +8,12 @@ export interface ConfigWarmupOptions {
   enabled: boolean;
   /** Frist für den stillen Warmup — er blockiert sonst den echten Turn. */
   timeoutMs: number;
+  /**
+   * Läuft oder wartet für das Projekt gerade ein echter Turn? Dann startet
+   * kein Warmup: der Daemon verträgt nur einen Turn, der Warmup würde
+   * abgewiesen und risse per Daemon-Neustart den laufenden Turn mit.
+   */
+  isTurnActive: (projectId: string) => boolean;
 }
 
 /**
@@ -65,6 +71,26 @@ export class ConfigWarmup {
   async prewarm(user: UserRow, projectId: string, workspaceDir: string): Promise<void> {
     if (!this.options.enabled) return;
     if (this.running.has(projectId)) return;
+    // SYNCHRON eintragen, vor jedem await: zwischen „läuft schon einer?" und
+    // dem Eintragen lag früher die DB-Abfrage. In diesem Fenster startete ein
+    // zweiter prewarm einen zweiten Warmup, und ein echter Turn sah keinen
+    // laufenden Warmup, auf den er hätte warten müssen — beides endete in
+    // einer Ablehnung durch den Ein-Turn-Daemon samt Neustart (live: erste
+    // Nachricht in einem neuen Projekt brauchte 60 s).
+    const run = this.pruefeUndStarte(user, projectId, workspaceDir).finally(() => {
+      // Nur den EIGENEN Eintrag räumen (forget + neuer Lauf dazwischen).
+      if (this.running.get(projectId) === run) this.running.delete(projectId);
+    });
+    this.running.set(projectId, run);
+    // Bewusst NICHT auf den Lauf warten: prewarm kehrt zurück, sobald der
+    // Warmup eingetragen ist. Wer sein Ende braucht, nimmt `pending()`.
+  }
+
+  private async pruefeUndStarte(
+    user: UserRow,
+    projectId: string,
+    workspaceDir: string,
+  ): Promise<void> {
     let projectRow;
     try {
       projectRow = await this.store.projectRow(projectId);
@@ -78,14 +104,14 @@ export class ConfigWarmup {
     // und belegte damit deren Ein-Turn-Daemon.
     if (projectRow === undefined || projectRow.ownerId !== user.id) return;
     if (projectRow.claudeSessionId != null) return;
-    const model = projectRow.agentModel;
+    const model = effectiveAgentModel(projectRow.agentModel);
     // Langsame lokale Modelle NICHT vorwärmen: der minutenlange Warmup belegt
     // den Ein-Turn-Daemon und der erste echte Prompt würde abgewiesen.
     if (isSlowAgentModel(model)) return;
-    const run = this.run(projectId, workspaceDir, model).finally(() => {
-      this.running.delete(projectId);
-    });
-    this.running.set(projectId, run);
+    // Nach dem await und ohne weiteres await bis zum Start geprüft: ein Turn,
+    // der inzwischen läuft oder wartet, hat Vorrang.
+    if (this.options.isTurnActive(projectId)) return;
+    await this.run(projectId, workspaceDir, model);
   }
 
   private async run(projectId: string, workspaceDir: string, model: string): Promise<void> {

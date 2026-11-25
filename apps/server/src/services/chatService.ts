@@ -162,6 +162,7 @@ export class ChatService {
     this.warmup = new ConfigWarmup(this.store, runner, {
       enabled: options.prewarmEnabled ?? true,
       timeoutMs: timeouts.warmupMs ?? 60_000,
+      isTurnActive: (projectId) => this.isTurnActive(projectId),
     });
   }
 

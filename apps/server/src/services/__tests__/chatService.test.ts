@@ -121,6 +121,91 @@ describe('Config-Warmup: erster Turn wird schnell, weil beim Öffnen vorgewärmt
     expect((await service.listMessages(projectId)).length).toBe(0);
   });
 
+  test('zwei gleichzeitige prewarm-Aufrufe starten nur EINEN Warmup', async () => {
+    // Zwei enterProject kurz hintereinander (zwei Tabs, StrictMode). Früher
+    // lag zwischen „läuft schon einer?" und dem Eintragen ein await: beide
+    // starteten, der zweite Warmup wurde vom Ein-Turn-Daemon abgewiesen und
+    // löste dessen Neustart aus.
+    let starts = 0;
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        starts += 1;
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          await Bun.sleep(30);
+          yield { type: 'turn-completed', sessionId: 'w' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { owner, service, projectId } = await setup(runner);
+    await Promise.all([
+      service.prewarm(owner, projectId, '/tmp/ws'),
+      service.prewarm(owner, projectId, '/tmp/ws'),
+    ]);
+    await waitFor(() => !service.isBusy(projectId));
+    expect(starts).toBe(1);
+  });
+
+  test('prewarm direkt vor der ersten Nachricht: der echte Turn wartet, statt zu kollidieren', async () => {
+    // Live nachgestellt (2026-11-25): Nachricht sofort nach dem Öffnen eines
+    // neuen Projekts. Der Warmup lief schon an, war aber noch nicht als
+    // laufend eingetragen — der echte Turn startete parallel, wurde vom Daemon
+    // abgewiesen, und die Antwort kam erst nach 60 s.
+    const order: string[] = [];
+    let aktiv = 0;
+    let maxGleichzeitig = 0;
+    const runner: AgentRunner = {
+      startTurn(options: TurnOptions): TurnHandle {
+        const istWarmup = options.prompt.includes('bereit');
+        order.push(istWarmup ? 'warmup' : 'real');
+        aktiv += 1;
+        maxGleichzeitig = Math.max(maxGleichzeitig, aktiv);
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          await Bun.sleep(40);
+          if (!istWarmup) yield { type: 'text-delta', text: 'echt' };
+          aktiv -= 1;
+          yield { type: 'turn-completed', sessionId: 'x' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { owner, service, projectId } = await setup(runner);
+    // OHNE await: genau das Fenster, in dem prewarm noch in seiner DB-Abfrage hängt.
+    const warm = service.prewarm(owner, projectId, '/tmp/ws');
+    await service.sendMessage(owner, sendInput(projectId, 'echte Nachricht'));
+    await warm;
+    await waitFor(() => !service.isBusy(projectId));
+    expect(maxGleichzeitig).toBe(1);
+    expect(order.at(-1)).toBe('real');
+  });
+
+  test('prewarm startet nicht, während ein Turn läuft', async () => {
+    // Reload oder zweiter Tab mitten im ersten Turn eines Projekts ohne
+    // Sitzung: ein Warmup würde abgewiesen und risse den laufenden Turn mit.
+    const prompts: string[] = [];
+    let releaseReal: () => void = () => {};
+    const runner: AgentRunner = {
+      startTurn(options: TurnOptions): TurnHandle {
+        prompts.push(options.prompt);
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          await new Promise<void>((r) => {
+            releaseReal = r;
+          });
+          yield { type: 'turn-completed', sessionId: 'x' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { owner, service, projectId } = await setup(runner);
+    await service.sendMessage(owner, sendInput(projectId, 'echte Nachricht'));
+    await waitFor(() => prompts.length === 1);
+    await service.prewarm(owner, projectId, '/tmp/ws');
+    await Bun.sleep(30);
+    expect(prompts).toHaveLength(1);
+    releaseReal();
+    await waitFor(() => !service.isTurnActive(projectId));
+  });
+
   test('echter Turn wartet auf den laufenden Warmup (keine msb-Konkurrenz)', async () => {
     const order: string[] = [];
     let releaseWarmup: () => void = () => {};
