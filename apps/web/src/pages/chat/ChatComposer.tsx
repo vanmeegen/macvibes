@@ -103,7 +103,7 @@ export const ChatComposer = observer(function ChatComposer({
       {speechStore.showInterim && (
         <Typography
           variant="caption"
-          color="text.secondary"
+          color="textSecondary"
           sx={{ fontStyle: 'italic' }}
           data-testselector="chat-mic-interim"
         >

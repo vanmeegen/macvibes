@@ -54,7 +54,7 @@ export const LoginPage = observer(function LoginPage({
               <Typography variant="h2" component="h1" color="primary">
                 macvibes
               </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+              <Typography variant="body2" color="textSecondary" sx={{ mt: 1 }}>
                 Lokale Vibe-Coding-Plattform
               </Typography>
             </Box>

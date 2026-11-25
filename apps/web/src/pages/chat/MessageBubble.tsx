@@ -52,7 +52,7 @@ export const MessageBubble = observer(function MessageBubble({
     return (
       <Typography
         variant="caption"
-        color="text.secondary"
+        color="textSecondary"
         sx={{ fontFamily: 'monospace', px: 1 }}
         data-testselector="chat-message"
         data-role="tool"
@@ -66,7 +66,7 @@ export const MessageBubble = observer(function MessageBubble({
     return (
       <Typography
         variant="body2"
-        color="text.secondary"
+        color="textSecondary"
         sx={{ fontStyle: 'italic', px: 1, whiteSpace: 'pre-wrap', opacity: 0.8 }}
         data-testselector="chat-message"
         data-role="thinking"

@@ -90,7 +90,7 @@ export const AdminPage = observer(function AdminPage({
                       {isAdmin ? (
                         <Chip size="small" color="primary" label="Admin" />
                       ) : (
-                        <Typography variant="body2" color="text.secondary">
+                        <Typography variant="body2" color="textSecondary">
                           User
                         </Typography>
                       )}
@@ -140,7 +140,7 @@ export const AdminPage = observer(function AdminPage({
                   <TableCell colSpan={4}>
                     <Typography
                       variant="body2"
-                      color="text.secondary"
+                      color="textSecondary"
                       sx={{ textAlign: 'center', py: 2 }}
                     >
                       Noch keine Nutzer.

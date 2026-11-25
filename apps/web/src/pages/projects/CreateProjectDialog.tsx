@@ -82,7 +82,7 @@ export const CreateProjectDialog = observer(function CreateProjectDialog({
                   label={
                     <Box sx={{ py: 0.5 }}>
                       <Typography variant="body1">{template.name}</Typography>
-                      <Typography variant="body2" color="text.secondary">
+                      <Typography variant="body2" color="textSecondary">
                         {template.description}
                       </Typography>
                     </Box>
@@ -91,7 +91,7 @@ export const CreateProjectDialog = observer(function CreateProjectDialog({
               ))}
             </RadioGroup>
             {projectsStore.templates.length === 0 && (
-              <Typography variant="body2" color="text.secondary">
+              <Typography variant="body2" color="textSecondary">
                 Keine Vorlagen verfügbar.
               </Typography>
             )}

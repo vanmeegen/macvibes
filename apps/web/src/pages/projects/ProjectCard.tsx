@@ -67,13 +67,13 @@ export const ProjectCard = observer(function ProjectCard({
                 testselector={`project-status-${project.id}`}
               />
             </Stack>
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="body2" color="textSecondary">
               von {project.owner.username}
             </Typography>
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="body2" color="textSecondary">
               Vorlage: {project.templateDir}
             </Typography>
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="body2" color="textSecondary">
               Letzte Aktivität: {formatTimestamp(project.lastActivityAt)}
             </Typography>
           </Stack>

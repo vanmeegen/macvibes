@@ -77,7 +77,7 @@ export const ChatToolbar = observer(function ChatToolbar({
         {project !== null && (
           <Typography
             variant="body2"
-            color="text.secondary"
+            color="textSecondary"
             // Auf schmalen Screens ausblenden, damit die Toggle-Icons rechts
             // sichtbar bleiben (Toolbar-Überlauf, Phone).
             sx={{ display: { xs: 'none', sm: 'block' } }}

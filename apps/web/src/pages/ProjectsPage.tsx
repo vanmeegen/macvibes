@@ -62,7 +62,7 @@ export const ProjectsPage = observer(function ProjectsPage({
             macvibes
           </Typography>
           <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
-            <Typography variant="body2" color="text.secondary" data-testselector="current-username">
+            <Typography variant="body2" color="textSecondary" data-testselector="current-username">
               {authStore.currentUser?.username ?? ''}
             </Typography>
             {authStore.isAdmin && (
@@ -143,7 +143,7 @@ export const ProjectsPage = observer(function ProjectsPage({
               <Grid size={12}>
                 <Typography
                   variant="body1"
-                  color="text.secondary"
+                  color="textSecondary"
                   sx={{ py: 6, textAlign: 'center' }}
                 >
                   Noch keine Projekte vorhanden. Lege mit dem Plus-Button dein erstes Projekt an.

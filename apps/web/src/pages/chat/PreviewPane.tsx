@@ -57,7 +57,7 @@ export const PreviewPane = observer(function PreviewPane({
         >
           <Stack spacing={2} sx={{ alignItems: 'center' }}>
             {preview.spinner && <LinearProgress sx={{ width: 160 }} />}
-            <Typography variant="body1" color="text.secondary">
+            <Typography variant="body1" color="textSecondary">
               {preview.message}
             </Typography>
           </Stack>
