@@ -14,7 +14,8 @@ export interface SdkUserMessage {
 
 /** Das, was der Daemon von einer SDK-`query()` braucht (Test-Naht). */
 export interface QueryHandle extends AsyncIterable<unknown> {
-  interrupt(): Promise<void>;
+  /** Neuere SDKs liefern eine Quittung zurück; der Daemon wertet sie nicht aus. */
+  interrupt(): Promise<unknown>;
 }
 
 export interface QueryParams {

@@ -13,7 +13,7 @@
     "baselines": "bun scripts/buildBaselines.ts"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.200",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.332",
     "@macvibes/shared": "workspace:*",
     "@pothos/core": "^4.18.1",
     "@whatwg-node/server-plugin-cookies": "^2.0.1",
