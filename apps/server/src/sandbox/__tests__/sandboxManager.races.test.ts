@@ -600,3 +600,49 @@ describe('Idle-Stopp nie unter einem laufenden Turn', () => {
     await waitFor(() => provider.stopCalls.length === 1);
   });
 });
+
+/**
+ * B8: Öffnete jemand ein Projekt, während sein Eigentümer es löschte, wartete
+ * das enter den Stopp ab und startete frisch. Der Manager räumte die VM danach
+ * ab (N8) — aber der Start hatte das Projekt-Volume schon neu angelegt
+ * (Branch-Klon, Agent-Config), und das blieb für ein Projekt liegen, das es
+ * nicht mehr gab.
+ */
+describe('Projekt wird gelöscht: kein Start mehr dazwischen (B8)', () => {
+  test('ein ensureRunning während des Lösch-Stopps wird abgelehnt und startet nichts', async () => {
+    const { provider, manager } = setup({ graceMs: 10_000 });
+    await manager.enter(ctx('p1'), 'u1');
+    let stoppFreigeben: () => void = () => {};
+    provider.stopGate = new Promise<void>((resolve) => {
+      stoppFreigeben = resolve;
+    });
+
+    manager.sperreFuerLoeschen('p1');
+    const stopp = manager.stop('p1');
+    const spaet = manager.ensureRunning(ctx('p1'));
+    stoppFreigeben();
+    await stopp;
+
+    await expect(spaet).rejects.toThrow(/gelöscht/);
+    expect(provider.startCalls).toEqual(['p1']);
+    manager.forget('p1');
+    expect(manager.trackedProjects()).toBe(0);
+  });
+
+  test('scheitert das Löschen, hebt der Aufrufer die Sperre auf und das Projekt ist wieder nutzbar', async () => {
+    const { provider, manager } = setup({ graceMs: 10_000 });
+    const aufheben = manager.sperreFuerLoeschen('p1');
+    await expect(manager.enter(ctx('p1'), 'u1')).rejects.toThrow(/gelöscht/);
+    aufheben();
+    await manager.enter(ctx('p1'), 'u1');
+    expect(provider.startCalls).toEqual(['p1']);
+  });
+
+  test('forget hebt die Sperre auf (eine später wiederverwendete ID wäre sonst für immer gesperrt)', async () => {
+    const { manager } = setup({ graceMs: 10_000 });
+    manager.sperreFuerLoeschen('p1');
+    manager.forget('p1');
+    await manager.enter(ctx('p1'), 'u1');
+    expect(manager.status('p1')).toBe('running');
+  });
+});

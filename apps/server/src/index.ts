@@ -334,6 +334,10 @@ const sandboxManager = new SandboxManager({
   // Offenen Stand vor jedem Stopp sichern (R9).
   onBeforeStop: (projectId) =>
     autoCommitter.saveOpenState(projectId, 'Auto-Commit vor Sandbox-Stopp'),
+  // … und noch einmal, wenn die VM wirklich steht: der Commit davor läuft,
+  // während der Agent noch schreiben kann (B7). Ohne Änderungen ein git status.
+  onAfterStop: (projectId) =>
+    autoCommitter.saveOpenState(projectId, 'Auto-Commit nach Sandbox-Stopp'),
   // … und vor jedem Frischstart (N7, verwaiste VM nach Hot-Reload): bei leerem
   // git status ein No-op, der Normalfall kostet ein git status.
   onBeforeStart: (projectId) =>

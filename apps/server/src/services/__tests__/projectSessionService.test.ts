@@ -173,6 +173,38 @@ describe('deleteProjectAndCleanup (Stufe 2)', () => {
     expect(await getProject(db, project.id)).not.toBeNull();
   });
 
+  test('sperrt das Projekt für neue Starts, BEVOR gestoppt wird — und hebt die Sperre bei einem Fehler auf', async () => {
+    // B8: ein enter während des Löschens legte das Volume neu an, das dann
+    // für ein nicht mehr existierendes Projekt liegen blieb.
+    const { db, config, marco, home } = await setup();
+    const project = await createProject(db, config, marco, { name: 'Weg', templateDir: 'pwa' });
+    const f = fakes(db);
+    const ablauf: string[] = [];
+    const sandbox: SandboxLifecycle = {
+      ...f.sandbox,
+      sperreFuerLoeschen: (id) => {
+        ablauf.push(`sperre:${id}`);
+        return () => ablauf.push(`aufgehoben:${id}`);
+      },
+      stop: async (id) => {
+        ablauf.push(`stop:${id}`);
+        throw new Error('Stopp gescheitert');
+      },
+    };
+
+    await expect(
+      deleteProjectAndCleanup({ db, sandbox, chat: f.chat, macvibesHome: home }, marco, project.id),
+    ).rejects.toThrow('Stopp gescheitert');
+
+    expect(ablauf).toEqual([
+      `sperre:${project.id}`,
+      `stop:${project.id}`,
+      `aufgehoben:${project.id}`,
+    ]);
+    // Das Projekt gibt es weiter.
+    expect(await getProject(db, project.id)).not.toBeNull();
+  });
+
   test('Erfolgspfad: stop → deleteProject → forget(sandbox) → forget(chat) in dieser Reihenfolge', async () => {
     const { db, config, marco, home } = await setup();
     const project = await createProject(db, config, marco, {

@@ -70,6 +70,12 @@ export interface SandboxLifecycle {
   ensureRunning(context: SandboxRunContext): Promise<void>;
   stop(projectId: string): Promise<void>;
   forget(projectId: string): void;
+  /**
+   * Verhindert neue Starts dieses Projekts, bis `forget` oder die
+   * zurückgegebene Funktion die Sperre aufhebt (B8). Optional, damit schlanke
+   * Test-Fakes ohne sie auskommen.
+   */
+  sperreFuerLoeschen?(projectId: string): () => void;
 }
 
 /**
@@ -105,9 +111,19 @@ export async function deleteProjectAndCleanup(
   // einen Auto-Commit im fremden Branch aus und wäre sonst auch für
   // Nicht-Eigentümer auslösbar.
   await assertCanDeleteProject(db, user, projectId);
-  // Sandbox stoppen, bevor die Volumes entfernt werden (R2).
-  await sandbox.stop(projectId);
-  await deleteProject(db, user, projectId, macvibesHome);
+  // Ab hier darf niemand das Projekt mehr starten (B8): ein enter, das den
+  // Stopp nur abwartete, startete sonst frisch und legte das Projekt-Volume
+  // neu an — für ein Projekt, das es gleich nicht mehr gibt.
+  const sperreAufheben = sandbox.sperreFuerLoeschen?.(projectId);
+  try {
+    // Sandbox stoppen, bevor die Volumes entfernt werden (R2).
+    await sandbox.stop(projectId);
+    await deleteProject(db, user, projectId, macvibesHome);
+  } catch (error) {
+    // Das Projekt existiert weiter — es muss wieder nutzbar sein.
+    sperreAufheben?.();
+    throw error;
+  }
   // Zustand freigeben: ohne das behalten SandboxManager und ChatService
   // Kontext, Timer, Queue und Subscriber eines Projekts, das es nicht
   // mehr gibt, für die Lebensdauer des Prozesses. Kein try/finally:

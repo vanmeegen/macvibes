@@ -30,6 +30,12 @@ export interface SandboxManagerOptions {
   /** Hook vor jedem Stopp — Auto-Commit eines offenen Stands (R8/R9). */
   onBeforeStop?: (projectId: string) => Promise<void>;
   /**
+   * Hook NACH dem Stopp der VM, bevor der Eintrag `stopped` meldet — sichert,
+   * was der Agent zwischen dem Commit vor dem Stopp und dem Ende der VM noch
+   * geschrieben hat (B7). Fehler blockieren den Stopp nicht.
+   */
+  onAfterStop?: (projectId: string) => Promise<void>;
+  /**
    * Hook vor jedem Frischstart — Auto-Commit eines offenen Stands (N7): msb
    * startet mit .replace(), eine nach einem Hot-Reload verwaiste VM gleichen
    * Namens wird also ohne stop() (und damit ohne onBeforeStop) überbootet.
@@ -165,6 +171,12 @@ export class SandboxManager {
    */
   private faehrtHerunter = false;
   /**
+   * Projekte, die gerade gelöscht werden (B8): für sie startet nichts mehr.
+   * Ein enter, das den Lösch-Stopp nur abwartete, startete sonst frisch und
+   * legte das Projekt-Volume neu an.
+   */
+  private readonly wirdGeloescht = new Set<string>();
+  /**
    * Wann zuletzt ein Heilungs-Neustart lief (M2) — bewusst am Manager, nicht
    * am Entry: der Frischstart ersetzt das Entry-Objekt, die Sperrfrist muss
    * den Neustart aber überleben.
@@ -198,7 +210,7 @@ export class SandboxManager {
 
   /** Gemeinsamer Kern von enter (mit Betrachter) und ensureRunning (ohne). */
   private async acquire(context: SandboxContext, viewer: string | null): Promise<void> {
-    this.pruefeAnnahme();
+    this.pruefeAnnahme(context.projectId);
     let existing = this.entries.get(context.projectId);
     // Ein laufender Stopp muss ZUERST fertig werden (F17): sonst startet hier
     // eine neue VM unter demselben msb-Namen, während stop() noch auf den
@@ -213,8 +225,9 @@ export class SandboxManager {
       });
       existing = this.entries.get(context.projectId);
     }
-    // Während des Wartens kann das Herunterfahren begonnen haben (A4).
-    this.pruefeAnnahme();
+    // Während des Wartens kann das Herunterfahren begonnen haben (A4) oder
+    // das Projekt gelöscht worden sein (B8).
+    this.pruefeAnnahme(context.projectId);
     if (existing && existing.status === 'starting' && existing.startPromise) {
       // Start läuft schon — darauf warten, damit der Agent nicht auf eine noch
       // nicht exec-bereite VM losfeuert ("no agent endpoint found", Race-Fix).
@@ -502,9 +515,17 @@ export class SandboxManager {
         }
       }
 
+      const hatteVm = entry.handle !== null;
       try {
         await entry.handle?.stop();
       } finally {
+        if (hatteVm && this.options.onAfterStop) {
+          try {
+            await this.options.onAfterStop(projectId);
+          } catch (error) {
+            console.error(`onAfterStop für ${projectId} schlug fehl:`, error);
+          }
+        }
         entry.handle = null;
         // `viewers` bleibt BEWUSST stehen (H11): die Betrachter-Einträge
         // gehören zur Lebensdauer der SUBSCRIPTION, nicht der VM. Eine offene
@@ -527,6 +548,18 @@ export class SandboxManager {
   }
 
   /**
+   * Sperrt ein Projekt für neue Starts — der erste Schritt des Löschens (B8).
+   * Aufgehoben durch `forget` (Löschen gelungen) oder die zurückgegebene
+   * Funktion (Löschen gescheitert, das Projekt existiert weiter).
+   */
+  sperreFuerLoeschen(projectId: string): () => void {
+    this.wirdGeloescht.add(projectId);
+    return () => {
+      this.wirdGeloescht.delete(projectId);
+    };
+  }
+
+  /**
    * Vergisst ein Projekt vollständig — für gelöschte Projekte.
    *
    * Ohne das blieb der Eintrag samt Kontext, Betrachter-Set und Timern für die
@@ -535,6 +568,7 @@ export class SandboxManager {
    * Buchhaltungsteil ab und startet oder stoppt nichts.
    */
   forget(projectId: string): void {
+    this.wirdGeloescht.delete(projectId);
     const entry = this.entries.get(projectId);
     if (entry === undefined) return;
     // Ist die Sandbox nicht (mehr) gestoppt, ist zwischen dem stop() des
@@ -638,7 +672,10 @@ export class SandboxManager {
   }
 
   /** Lehnt neue Starts ab, sobald der Manager abgekoppelt ist oder herunterfährt. */
-  private pruefeAnnahme(): void {
+  private pruefeAnnahme(projectId: string): void {
+    if (this.wirdGeloescht.has(projectId)) {
+      throw new DomainError('Das Projekt wird gerade gelöscht.');
+    }
     if (this.faehrtHerunter) {
       throw new DomainError(
         'Der Server fährt gerade herunter — bitte gleich noch einmal versuchen.',

@@ -2548,3 +2548,53 @@ describe('Fehler beim Verarbeiten eines Agent-Ereignisses bricht den Agenten ab'
     );
   });
 });
+
+describe('forget im Startfenster eines Turns (B11)', () => {
+  test('der Turn eines vergessenen Projekts läuft nicht mehr an oder wird sofort abgebrochen', async () => {
+    // Das Projekt wird gelöscht, während sein Turn noch auf den Warmup wartet:
+    // es gibt noch kein Handle zum Abbrechen. Ohne Pin startete der Turn danach
+    // für ein gelöschtes Projekt und lief bis in den Watchdog.
+    let warmupFreigeben: () => void = () => {};
+    const echteStarts: { abgebrochen: boolean }[] = [];
+    const runner: AgentRunner = {
+      startTurn(options: TurnOptions): TurnHandle {
+        if (options.prompt.includes('bereit')) {
+          const events = (async function* (): AsyncGenerator<AgentEvent> {
+            await new Promise<void>((r) => {
+              warmupFreigeben = r;
+            });
+            yield { type: 'turn-completed', sessionId: 'w' };
+          })();
+          return { events, abort: () => {} };
+        }
+        const start = { abgebrochen: false };
+        echteStarts.push(start);
+        let wecke: () => void = () => {};
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          await new Promise<void>((r) => {
+            wecke = r;
+          });
+          yield { type: 'turn-aborted' };
+        })();
+        return {
+          events,
+          abort: () => {
+            start.abgebrochen = true;
+            wecke();
+          },
+        };
+      },
+    };
+    const { owner, service, projectId } = await setup(runner);
+    await service.prewarm(owner, projectId, '/tmp/ws');
+    await Bun.sleep(10);
+    await service.sendMessage(owner, sendInput(projectId, 'hallo'));
+    await Bun.sleep(10);
+
+    service.forget(projectId);
+    warmupFreigeben();
+    await Bun.sleep(80);
+
+    expect(echteStarts.every((s) => s.abgebrochen)).toBe(true);
+  });
+});

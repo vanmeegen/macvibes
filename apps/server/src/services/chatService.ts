@@ -456,6 +456,12 @@ export class ChatService {
     if (state === undefined) return;
     state.queue.length = 0;
     state.currentHandle?.abort();
+    // Turn im Startfenster (aktiv, aber noch ohne Handle — er wartet auf den
+    // Warmup oder die DB): den Abbruch an seine turnId pinnen, wie stopTurn es
+    // tut. Sonst startete er gleich für ein Projekt, das es nicht mehr gibt.
+    if (state.currentHandle === null && state.activeTurnId !== null) {
+      state.abortActiveTurnId = state.activeTurnId;
+    }
     this.bus.forget(projectId);
     this.states.delete(projectId);
     this.warmup.forget(projectId);
