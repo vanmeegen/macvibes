@@ -1,8 +1,7 @@
 # Client-PWA (React + MobX, Bun-nativ)
 
 Schlanke Progressive Web App **ohne Server** — läuft komplett im Browser.
-Die Toolchain ist bewusst minimal: **nur Bun**, kein Vite, kein Bundler-Zoo
-(siehe `Frameworkcomparison.md` im Plattform-Repo).
+Die Toolchain ist bewusst minimal: **nur Bun**, kein Vite, kein Bundler-Zoo.
 
 - **Dev:** `bun install && bun run dev` — `Bun.serve` mit HMR + React Fast Refresh
   (Port über `PORT`-Env, Fallback 5173)

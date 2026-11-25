@@ -11,11 +11,7 @@ import { buildVmAgentEnv } from '../../agent/vmAgentEnv';
 import { createAnthropicProxy } from '../../http/anthropicProxy';
 import { startEgressProxy } from '../../http/egressProxy';
 import type { EgressProxyHandle } from '../../http/egressProxy';
-import {
-  createTempDir,
-  createTemplatesFixture,
-  removeDir,
-} from '../../services/__tests__/testUtils';
+import { createTempDir, createTemplatesFixture, removeDir } from '../../testing/testUtils';
 import { createProjectBranch, ensureBareRepo } from '../../core/gitService';
 import { GUEST_WORKDIR } from '../../core/vmContract';
 import { workspaceDirFor } from '../../core/workspaceService';
@@ -26,7 +22,7 @@ import type { SandboxHandle } from '../provider';
 
 /**
  * Integrationstest gegen ECHTES microsandbox für den Daemon-Transport
- * (Spike A+C, architektur.md; chatproblems.md-Empfehlung #3: die CI darf auf
+ * (Spike A+C, docs/archiv/architektur.md; docs/archiv/chatproblems.md-Empfehlung #3: die CI darf auf
  * dem kritischen Pfad nicht blind bleiben). Bewusst gated — er baut eine
  * Baseline inkl. apt-Installation und dauert mehrere Minuten:
  *
@@ -122,7 +118,7 @@ beforeAll(async () => {
   const bare = join(home, 'macvibes-apps.git');
   await ensureBareRepo(bare);
   await createProjectBranch(bare, `marco/${PROJECT_ID}`, join(templates, templateDir));
-  await buildTemplateBaseline({ templatesDir: templates, templateDir, image: 'oven/bun:1.3.14' });
+  await buildTemplateBaseline({ templatesDir: templates, templateDir, image: 'oven/bun:1.4.5' });
 
   const bundleDir = join(home, 'agent-daemon');
   await buildDaemonBundle(bundleDir);
@@ -137,6 +133,7 @@ beforeAll(async () => {
     memoryMib: 1024,
     agentDaemon: {
       bundleDir,
+      revokeToken: (sandboxName) => tokens.revoke(sandboxName),
       envFor: (sandboxName) => {
         const vmToken = tokens.mint(sandboxName);
         return {
@@ -250,7 +247,7 @@ describe.skipIf(!enabled)(
         // Daemon beenden — per shutdown-Kommando über die stehende Verbindung.
         // Von außen geht es nicht: msb-exec-Sessions leben in eigenen
         // PID-Namespaces und können den PID-1-Baum nicht killen (Live-Befund;
-        // deckt sich mit chatproblems.md „PID-Files nutzlos").
+        // deckt sich mit docs/archiv/chatproblems.md „PID-Files nutzlos").
         expect(gateway.send(SANDBOX_NAME, { kind: 'shutdown' })).toBe(true);
 
         // monit startet neu (2s-Zyklus) — der Restart ist oft SCHNELLER als die
@@ -337,7 +334,7 @@ describe.skipIf(!enabled)(
             ?.sessionId ?? null;
         expect(session1).not.toBeNull();
 
-        // Turn 2: unterbrechen — das war der Deadlock aus chatproblems.md #13.
+        // Turn 2: unterbrechen — das war der Deadlock aus docs/archiv/chatproblems.md #13.
         const handle2 = runner.startTurn({
           projectId: PROJECT_ID,
           prompt: 'Zähle langsam und ausführlich von 1 bis 100, jede Zahl einzeln erklärt.',

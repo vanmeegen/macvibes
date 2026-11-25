@@ -81,12 +81,9 @@ export function createTargetChecker(policy: EgressPolicy = defaultEgressPolicy()
  * sich eine zweite Request-Line einschmuggeln, die am Policy-Check vorbeiläuft.
  */
 function parseProxyHead(head: string): { requestLine: string; headerLines: string[] } | null {
-  if (head.includes('\n') || head.includes('\r')) {
-    // Nach dem Split an \r\n darf kein einzelnes \r oder \n mehr vorkommen.
-    const lines = head.split('\r\n');
-    if (lines.some((line) => line.includes('\n') || line.includes('\r'))) return null;
-  }
   const lines = head.split('\r\n');
+  // Nach dem Split an \r\n darf kein einzelnes \r oder \n mehr vorkommen.
+  if (lines.some((line) => line.includes('\n') || line.includes('\r'))) return null;
   const requestLine = lines[0] ?? '';
   const parts = requestLine.split(' ');
   if (parts.length !== 3) return null;
@@ -245,6 +242,14 @@ interface ConnState {
 
 const BAD_REQUEST = 'HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n';
 
+const UEBERHANG_WARNUNG =
+  'EgressProxy: Bytes über den absolute-form-Request hinaus — Verbindung getrennt.';
+
+/** Hängt `chunk` an einen Richtungs-Puffer an; ein leerer Puffer wird ersetzt. */
+function haengeAn(puffer: Buffer, chunk: Uint8Array): Buffer {
+  return puffer.length === 0 ? Buffer.from(chunk) : Buffer.concat([puffer, chunk]);
+}
+
 export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle {
   /** Zerlegt "Basic base64(mv:<token>)" und gibt das Token zurück. */
   const tokenFromAuth = (header: string): string | null => {
@@ -284,10 +289,7 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
       beendeBeide(client);
       return;
     }
-    state.antwortPending =
-      state.antwortPending.length === 0
-        ? Buffer.from(chunk)
-        : Buffer.concat([state.antwortPending, chunk]);
+    state.antwortPending = haengeAn(state.antwortPending, chunk);
     state.antwortPending = schreibeMitBackpressure(client, state.antwortPending);
     if (state.antwortPending.length > 0) state.upstream?.pause();
   };
@@ -401,6 +403,188 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
     });
   };
 
+  /** Phase 'tunnel' (CONNECT): opake Bytes Richtung Upstream, mit Backpressure. */
+  const imTunnel = (socket: Socket<ConnState>, chunk: Buffer): void => {
+    const state = socket.data;
+    // Die Grenze ist der Notanker; normal hält pause() den Puffer klein.
+    if (state.pending.length + chunk.length > grenze) {
+      console.warn(`EgressProxy: pending-Puffer über ${grenze} B — Verbindung getrennt.`);
+      beendeBeide(socket);
+      return;
+    }
+    state.pending = haengeAn(state.pending, chunk);
+    if (state.upstream !== null)
+      state.pending = schreibeMitBackpressure(state.upstream, state.pending);
+    // Quelle anhalten, bis der Upstream offen ist bzw. aufgeholt hat
+    // (open/drain flushen weiter und resumen dann).
+    if (state.pending.length > 0) socket.pause();
+  };
+
+  /** Phase 'einzel' (absolute-form): Body des EINEN Requests einsammeln. */
+  const imEinzel = (socket: Socket<ConnState>, chunk: Buffer): void => {
+    const state = socket.data;
+    const einzel = state.einzel as EinzelRequest;
+    const fehlt = einzel.bodySoll - einzel.body.length;
+    if (einzel.gesendet || chunk.length > fehlt) {
+      // Bytes über den EINEN Request hinaus = zweiter Request.
+      // absolute-form ist kein Tunnel: roh weitergereicht käme er
+      // mitsamt Proxy-Authorization beim Origin an (Token-Leak).
+      // Verbindung beenden — ein noch nicht gesendeter Erst-Request
+      // wird dann auch nicht mehr gesendet.
+      console.warn(UEBERHANG_WARNUNG);
+      beendeBeide(socket);
+      return;
+    }
+    einzel.body = Buffer.concat([einzel.body, chunk]);
+    sendeEinzel(socket);
+  };
+
+  /**
+   * CONNECT host:port nach bestandener Auth: in den Tunnel-Modus wechseln.
+   * TLS wird NICHT aufgebrochen, reiner Tunnel.
+   */
+  const starteTunnel = (socket: Socket<ConnState>, target: string, rest: Buffer): void => {
+    const state = socket.data;
+    const sep = target.lastIndexOf(':');
+    const host = sep > 0 ? target.slice(0, sep) : target;
+    const port = sep > 0 ? Number(target.slice(sep + 1)) : 443;
+    state.phase = 'tunnel';
+    // Bytes nach dem Kopf gehören in den Tunnel — in Reihenfolge VOR
+    // allem, was während der Zielprüfung nachkommt (data-Handler hängt
+    // an pending an).
+    state.pending = Buffer.from(rest);
+    connectChecked(socket, host, port, (up) => {
+      anClient(socket, Buffer.from('HTTP/1.1 200 Connection Established\r\n\r\n'));
+      state.pending = schreibeMitBackpressure(up, state.pending);
+      // Falls der Client während der Prüfung pausiert wurde und schon
+      // alles geflusht ist, wieder lesen; sonst resumed der drain-Handler.
+      if (state.pending.length === 0) socket.resume();
+    });
+  };
+
+  /**
+   * absolute-form (http_proxy) nach bestandener Auth: auf origin-form
+   * umschreiben, Proxy-Header strippen, als EINEN atomaren Request behandeln.
+   */
+  const starteEinzel = (
+    socket: Socket<ConnState>,
+    method: string,
+    target: string,
+    headerLines: string[],
+    rest: Buffer,
+  ): void => {
+    const state = socket.data;
+    let url: URL;
+    try {
+      url = new URL(target);
+    } catch {
+      lehneAb(socket, BAD_REQUEST);
+      return;
+    }
+    const port = url.port ? Number(url.port) : url.protocol === 'https:' ? 443 : 80;
+    if (headerLines.some((l) => l.toLowerCase().startsWith('transfer-encoding:'))) {
+      // Chunked-Bodies sind über diesen Proxy exotisch und ohne
+      // Content-Length nicht sicher zu framen (Request-Grenze!) —
+      // sauber ablehnen statt falsch behandeln.
+      lehneAb(
+        socket,
+        'HTTP/1.1 411 Length Required\r\nConnection: close\r\n' +
+          'x-macvibes-reason: transfer-encoding wird nicht unterstuetzt, content-length setzen\r\n\r\n',
+      );
+      return;
+    }
+    const bodySoll = contentLengthAus(headerLines);
+    if (bodySoll === null) {
+      lehneAb(socket, BAD_REQUEST);
+      return;
+    }
+    if (bodySoll > grenze) {
+      lehneAb(socket, 'HTTP/1.1 413 Content Too Large\r\nConnection: close\r\n\r\n');
+      return;
+    }
+    if (rest.length > bodySoll) {
+      // Pipelining schon im ersten Segment: Bytes über den einen Request
+      // hinaus werden NIE weitergereicht (Token-Leak) — Verbindung zu.
+      console.warn(UEBERHANG_WARNUNG);
+      lehneAb(socket);
+      return;
+    }
+    // Proxy-Header UND vorhandene Connection-Header strippen; wir
+    // erzwingen Connection: close, weil die Verbindung nach diesem einen
+    // Request nicht als keep-alive wiederverwendet werden darf.
+    const forwarded = headerLines.filter(
+      (l) => l !== '' && !/^proxy-/i.test(l) && !/^connection:/i.test(l),
+    );
+    const newHead =
+      `${method} ${url.pathname}${url.search} HTTP/1.1\r\n` +
+      `${[...forwarded, 'Connection: close'].join('\r\n')}\r\n\r\n`;
+    state.phase = 'einzel';
+    state.einzel = {
+      kopf: Buffer.from(newHead),
+      bodySoll,
+      body: Buffer.from(rest),
+      gesendet: false,
+    };
+    connectChecked(socket, url.hostname, port, () => {
+      sendeEinzel(socket);
+    });
+  };
+
+  /**
+   * Phase 'kopf': Request-Kopf sammeln, strikt zerlegen, authentisieren und
+   * erst DANACH nach Betriebsart verzweigen — die Reihenfolge dieser Prüfungen
+   * ist sicherheitsrelevant.
+   */
+  const imKopf = (socket: Socket<ConnState>, chunk: Buffer): void => {
+    const state = socket.data;
+    state.buf = Buffer.concat([state.buf, chunk]);
+    const headerEnd = state.buf.indexOf('\r\n\r\n');
+    if (headerEnd === -1) {
+      if (state.buf.length > 32_768) {
+        // Header-Bombe (Defekt 4): NICHT nur die Schreibseite beenden —
+        // ohne Phase 'zu' wüchse buf mit jedem weiteren Segment unbegrenzt
+        // (Speicherhebel der untrusted VM), und ein nachgereichter
+        // Terminator würde doch noch geparst und geproxied.
+        lehneAb(socket);
+      }
+      return;
+    }
+    const head = state.buf.subarray(0, headerEnd).toString();
+    const rest = state.buf.subarray(headerEnd + 4);
+    state.buf = Buffer.alloc(0);
+
+    const parsed = parseProxyHead(head);
+    if (parsed === null) {
+      lehneAb(socket, BAD_REQUEST);
+      return;
+    }
+    const { requestLine, headerLines } = parsed;
+    const auth =
+      headerLines
+        .find((l) => l.toLowerCase().startsWith('proxy-authorization:'))
+        ?.slice('proxy-authorization:'.length)
+        .trim() ?? '';
+    if (options.verifyToken(tokenFromAuth(auth)) === null) {
+      lehneAb(
+        socket,
+        'HTTP/1.1 407 Proxy Authentication Required\r\n' +
+          'Proxy-Authenticate: Basic realm="macvibes"\r\nConnection: close\r\n\r\n',
+      );
+      return;
+    }
+
+    const [method = '', target = ''] = requestLine.split(' ');
+    if (method === 'CONNECT') {
+      starteTunnel(socket, target, rest);
+      return;
+    }
+    if (/^https?:\/\//i.test(target)) {
+      starteEinzel(socket, method, target, headerLines, rest);
+      return;
+    }
+    lehneAb(socket, BAD_REQUEST);
+  };
+
   const listener: TCPSocketListener<ConnState> = Bun.listen<ConnState>({
     hostname: options.hostname ?? '0.0.0.0',
     port: options.port,
@@ -418,173 +602,22 @@ export function startEgressProxy(options: EgressProxyOptions): EgressProxyHandle
         };
       },
       data(socket, chunk) {
-        const state = socket.data;
-        switch (state.phase) {
+        switch (socket.data.phase) {
           case 'zu':
             // Abgelehnt/erledigt: end() ist raus, aber die Leseseite lebt bis
             // zum vollständigen Close. Restbytes stumpf verwerfen — sie dürfen
             // NICHT als neuer Request geparst werden.
             return;
-          case 'tunnel': {
-            // CONNECT: opake Bytes Richtung Upstream, mit Backpressure. Die
-            // Grenze ist der Notanker; normal hält pause() den Puffer klein.
-            if (state.pending.length + chunk.length > grenze) {
-              console.warn(`EgressProxy: pending-Puffer über ${grenze} B — Verbindung getrennt.`);
-              beendeBeide(socket);
-              return;
-            }
-            state.pending =
-              state.pending.length === 0
-                ? Buffer.from(chunk)
-                : Buffer.concat([state.pending, chunk]);
-            if (state.upstream !== null)
-              state.pending = schreibeMitBackpressure(state.upstream, state.pending);
-            // Quelle anhalten, bis der Upstream offen ist bzw. aufgeholt hat
-            // (open/drain flushen weiter und resumen dann).
-            if (state.pending.length > 0) socket.pause();
+          case 'tunnel':
+            imTunnel(socket, chunk);
             return;
-          }
-          case 'einzel': {
-            const einzel = state.einzel as EinzelRequest;
-            const fehlt = einzel.bodySoll - einzel.body.length;
-            if (einzel.gesendet || chunk.length > fehlt) {
-              // Bytes über den EINEN Request hinaus = zweiter Request.
-              // absolute-form ist kein Tunnel: roh weitergereicht käme er
-              // mitsamt Proxy-Authorization beim Origin an (Token-Leak).
-              // Verbindung beenden — ein noch nicht gesendeter Erst-Request
-              // wird dann auch nicht mehr gesendet.
-              console.warn(
-                'EgressProxy: Bytes über den absolute-form-Request hinaus — Verbindung getrennt.',
-              );
-              beendeBeide(socket);
-              return;
-            }
-            einzel.body = Buffer.concat([einzel.body, chunk]);
-            sendeEinzel(socket);
+          case 'einzel':
+            imEinzel(socket, chunk);
             return;
-          }
           case 'kopf':
-            break;
-        }
-
-        state.buf = Buffer.concat([state.buf, chunk]);
-        const headerEnd = state.buf.indexOf('\r\n\r\n');
-        if (headerEnd === -1) {
-          if (state.buf.length > 32_768) {
-            // Header-Bombe (Defekt 4): NICHT nur die Schreibseite beenden —
-            // ohne Phase 'zu' wüchse buf mit jedem weiteren Segment unbegrenzt
-            // (Speicherhebel der untrusted VM), und ein nachgereichter
-            // Terminator würde doch noch geparst und geproxied.
-            lehneAb(socket);
-          }
-          return;
-        }
-        const head = state.buf.subarray(0, headerEnd).toString();
-        const rest = state.buf.subarray(headerEnd + 4);
-        state.buf = Buffer.alloc(0);
-
-        const parsed = parseProxyHead(head);
-        if (parsed === null) {
-          lehneAb(socket, BAD_REQUEST);
-          return;
-        }
-        const { requestLine, headerLines } = parsed;
-        const auth =
-          headerLines
-            .find((l) => l.toLowerCase().startsWith('proxy-authorization:'))
-            ?.slice('proxy-authorization:'.length)
-            .trim() ?? '';
-        if (options.verifyToken(tokenFromAuth(auth)) === null) {
-          lehneAb(
-            socket,
-            'HTTP/1.1 407 Proxy Authentication Required\r\n' +
-              'Proxy-Authenticate: Basic realm="macvibes"\r\nConnection: close\r\n\r\n',
-          );
-          return;
-        }
-
-        const [method = '', target = ''] = requestLine.split(' ');
-        if (method === 'CONNECT') {
-          // CONNECT host:port — TLS wird NICHT aufgebrochen, reiner Tunnel.
-          const sep = target.lastIndexOf(':');
-          const host = sep > 0 ? target.slice(0, sep) : target;
-          const port = sep > 0 ? Number(target.slice(sep + 1)) : 443;
-          state.phase = 'tunnel';
-          // Bytes nach dem Kopf gehören in den Tunnel — in Reihenfolge VOR
-          // allem, was während der Zielprüfung nachkommt (data-Handler hängt
-          // an pending an).
-          state.pending = Buffer.from(rest);
-          connectChecked(socket, host, port, (up) => {
-            anClient(socket, Buffer.from('HTTP/1.1 200 Connection Established\r\n\r\n'));
-            state.pending = schreibeMitBackpressure(up, state.pending);
-            // Falls der Client während der Prüfung pausiert wurde und schon
-            // alles geflusht ist, wieder lesen; sonst resumed der drain-Handler.
-            if (state.pending.length === 0) socket.resume();
-          });
-          return;
-        }
-        if (/^https?:\/\//i.test(target)) {
-          // absolute-form (http_proxy): auf origin-form umschreiben,
-          // Proxy-Header strippen, als EINEN atomaren Request behandeln.
-          let url: URL;
-          try {
-            url = new URL(target);
-          } catch {
-            lehneAb(socket, BAD_REQUEST);
+            imKopf(socket, chunk);
             return;
-          }
-          const port = url.port ? Number(url.port) : url.protocol === 'https:' ? 443 : 80;
-          if (headerLines.some((l) => l.toLowerCase().startsWith('transfer-encoding:'))) {
-            // Chunked-Bodies sind über diesen Proxy exotisch und ohne
-            // Content-Length nicht sicher zu framen (Request-Grenze!) —
-            // sauber ablehnen statt falsch behandeln.
-            lehneAb(
-              socket,
-              'HTTP/1.1 411 Length Required\r\nConnection: close\r\n' +
-                'x-macvibes-reason: transfer-encoding wird nicht unterstuetzt, content-length setzen\r\n\r\n',
-            );
-            return;
-          }
-          const bodySoll = contentLengthAus(headerLines);
-          if (bodySoll === null) {
-            lehneAb(socket, BAD_REQUEST);
-            return;
-          }
-          if (bodySoll > grenze) {
-            lehneAb(socket, 'HTTP/1.1 413 Content Too Large\r\nConnection: close\r\n\r\n');
-            return;
-          }
-          if (rest.length > bodySoll) {
-            // Pipelining schon im ersten Segment: Bytes über den einen Request
-            // hinaus werden NIE weitergereicht (Token-Leak) — Verbindung zu.
-            console.warn(
-              'EgressProxy: Bytes über den absolute-form-Request hinaus — Verbindung getrennt.',
-            );
-            lehneAb(socket);
-            return;
-          }
-          // Proxy-Header UND vorhandene Connection-Header strippen; wir
-          // erzwingen Connection: close, weil die Verbindung nach diesem einen
-          // Request nicht als keep-alive wiederverwendet werden darf.
-          const forwarded = headerLines.filter(
-            (l) => l !== '' && !/^proxy-/i.test(l) && !/^connection:/i.test(l),
-          );
-          const newHead =
-            `${method} ${url.pathname}${url.search} HTTP/1.1\r\n` +
-            `${[...forwarded, 'Connection: close'].join('\r\n')}\r\n\r\n`;
-          state.phase = 'einzel';
-          state.einzel = {
-            kopf: Buffer.from(newHead),
-            bodySoll,
-            body: Buffer.from(rest),
-            gesendet: false,
-          };
-          connectChecked(socket, url.hostname, port, () => {
-            sendeEinzel(socket);
-          });
-          return;
         }
-        lehneAb(socket, BAD_REQUEST);
       },
       drain(socket) {
         // Der Client nimmt wieder auf: Antwort-Rest weiterschreiben, danach

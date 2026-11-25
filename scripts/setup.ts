@@ -1,7 +1,7 @@
 /**
- * `bun run setup` — das geführte First-Run-Setup (installer-plan.md). Läuft im
- * heutigen Source-Betrieb (git clone → bun install → setup) und ist der
- * wiederverwendbare Kern des künftigen Installers.
+ * `bun run setup` — das geführte First-Run-Setup (docs/installer-plan.md).
+ * Läuft im heutigen Source-Betrieb (git clone → bun install → setup) und ist
+ * der wiederverwendbare Kern des künftigen Installers.
  *
  * Diese Datei ist die DÜNNE, interaktive Schale: sie sammelt echte Zustände und
  * Nutzereingaben und delegiert alle Logik an die reinen, getesteten Helfer in
@@ -9,25 +9,19 @@
  * confirm() würden hängen) — der ganze Ablauf steht deshalb hinter
  * `import.meta.main`.
  *
- * Ablauf exakt nach installer-plan.md „First-Run-Setup — Ablauf & Reihenfolge":
+ * Ablauf exakt nach docs/installer-plan.md „First-Run-Setup — Ablauf & Reihenfolge":
  *   Doctor → Anbieter-Wahl → Admin (Pflicht) → .env schreiben (chmod 600) →
  *   ~/macvibes-Baum → Baselines (msb) / Prozess-Fallback → Abschluss-Hinweis.
  */
 import { randomBytes } from 'node:crypto';
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs';
-import { homedir } from 'node:os';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { usernameSchema } from '@macvibes/shared';
+import { supportsPosixModes } from '@macvibes/shared/node';
+import { doctor } from './lib/doctor';
 import { druckeDoctorReport, erhebeDoctorInput } from './lib/doctorState';
+import { macvibesHome } from './lib/env';
 import {
   begrenzeTreffer,
   filterModelle,
@@ -39,12 +33,15 @@ import {
 } from './lib/modelCatalog';
 import { erkenneAnbieterFormat, type FormatDiagnose } from './lib/providerProbe';
 import { envVarName, litellmYamlMitEintrag, modelsJsonMitEintrag } from './lib/providerWiring';
+import { starteImVordergrund } from './lib/prozesse';
 import {
+  baueAnthropicAnbieter,
   buildEnvContent,
-  doctor,
   envWertIstUnsicher,
   envZielPfad,
+  parseAnbieterWahl,
   sandboxModeFor,
+  waehleOption,
   type AnbieterModell,
   type ProviderChoice,
   type SetupAnswers,
@@ -57,43 +54,32 @@ type EigenerAnbieter = Extract<ProviderChoice, { kind: 'custom-anthropic' | 'cus
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 /**
- * Kann das Dateisystem unter `dir` POSIX-Modes durchsetzen? Feature-Detection
- * wie apps/server/src/core/fsCapabilities.ts (supportsPosixModes), hier BEWUSST
- * dupliziert statt importiert: Skripte importieren keinen Server-Code aus
- * apps/server/src/** (M6-Env-Gate, Composition-Root-Sauberkeit). Unter NTFS
- * meldet stat trotz chmod 0o666 → false, dann ist chmod 600 wirkungslos.
- */
-function unterstuetztPosixModes(dir: string): boolean {
-  const probe = join(dir, `.macvibes-mode-probe-${process.pid}-${Date.now()}`);
-  try {
-    writeFileSync(probe, '');
-    chmodSync(probe, 0o600);
-    return (statSync(probe).mode & 0o077) === 0;
-  } catch {
-    return false;
-  } finally {
-    rmSync(probe, { force: true });
-  }
-}
-
-/**
- * Bestimmte Zeichen lassen sich nicht sicher in die single-quoted .env schreiben
- * und werden deshalb schon am Prompt abgewiesen (statt später beim Schreiben mit
- * einer Exception zu scheitern). Es sind GENAU die Zeichen aus envQuote/
- * ENV_UNSICHER — WARUM abgelehnt statt escaped (Bun-Quirks, empirisch verifiziert):
- *   - `$`  : Bun expandiert `$VAR` AUCH in Single-Quotes → stiller Wert-Ersatz;
- *            `\$`-Escaping ist unzuverlässig.
- *   - `\`  : ein auf `\` endender Wert frisst die schließende `'` und die
- *            Folgezeile (löscht das nächste Secret); `\\` wird nicht entschärft.
- *   - `'`  : terminiert den Wert; Bun kann es nicht escapen.
- *   - Steuerzeichen: zerreißen die Zeile.
- * Der Wert wird in der Meldung NIE genannt (Secret-Schutz) — nur die verbotenen
- * Zeichen. Einzige Ausnahme im Setup: der Admin-Username, den usernameSchema
- * (@macvibes/shared) ohnehin auf [a-z0-9_-] beschränkt — dort ist keines dieser
- * Zeichen möglich, deshalb bleibt leseAdminUsername unverändert.
+ * Hinweis am Prompt, wenn eine Eingabe ein Zeichen enthält, das die
+ * single-quoted .env nicht sicher transportiert. Welche Zeichen das sind und
+ * WARUM sie abgelehnt statt escaped werden, steht an EINER Stelle:
+ * ENV_UNSICHER in lib/setup.ts. Der Wert wird in der Meldung NIE genannt
+ * (Secret-Schutz) — nur die verbotenen Zeichen. Der Admin-Username läuft
+ * zusätzlich durch usernameSchema (@macvibes/shared, nur [a-z0-9_-]).
  */
 const VERBOTENE_ZEICHEN_HINWEIS =
   "  Nicht erlaubt: ' (Anführungszeichen), \\ (Backslash), $ (Dollar) und Steuerzeichen — bitte ohne diese Zeichen.";
+
+/**
+ * Getippte Auswahl an einer „[u]… / [b]… / [a]…"-Frage: fragt und ordnet die
+ * Eingabe einer Option zu (lib/setup.waehleOption). null = keine der Optionen
+ * — der Aufrufer nimmt dann seinen nicht-destruktiven Default.
+ */
+function frageWahl<K extends string>(
+  frage: string,
+  optionen: Record<K, readonly string[]>,
+): K | null {
+  return waehleOption(prompt(frage) ?? '', optionen);
+}
+
+/** Einheitliche Meldung, wenn ein Anbieter NICHT eingetragen wird (nie halb konfigurieren). */
+function meldeUebersprungen(): void {
+  console.log('    → Übersprungen — es wurde nichts konfiguriert.');
+}
 
 /** Nicht-leere Eingabe erzwingen (z. B. Admin-Username — Pflicht). */
 function pflichtEingabe(frage: string): string {
@@ -305,7 +291,7 @@ async function eigenenAnbieterErfassen(
     if (modelle.length === 0) {
       console.log('    Kein Modell gewählt.');
       if (nochmal()) continue;
-      console.log('    → Übersprungen — es wurde nichts konfiguriert.');
+      meldeUebersprungen();
       return null;
     }
 
@@ -330,9 +316,7 @@ async function eigenenAnbieterErfassen(
     );
 
     if (diagnose.art === 'anthropic') {
-      return token === ''
-        ? { kind: 'custom-anthropic', name, modelle, url }
-        : { kind: 'custom-anthropic', name, modelle, url, token };
+      return baueAnthropicAnbieter({ name, modelle, url, token });
     }
     if (diagnose.art === 'openai') {
       return baueOpenaiAnbieter(bisherige, { name, modelle, apiBase: diagnose.apiBase, token });
@@ -340,39 +324,37 @@ async function eigenenAnbieterErfassen(
     if (diagnose.art === 'modell-strittig') {
       // Format steht fest, nur das Modell ist strittig — Übernahme erlaubt,
       // aber bewusst (vielleicht mag der Anbieter nur den Minimal-Body nicht).
-      const wahl = (
-        prompt('    [u]ebernehmen trotzdem / [e]rneut eingeben / [s = überspringen]? ') ?? ''
-      )
-        .trim()
-        .toLowerCase();
-      if (wahl === 'u' || wahl === 'uebernehmen' || wahl === 'übernehmen') {
-        if (diagnose.format === 'anthropic') {
-          return token === ''
-            ? { kind: 'custom-anthropic', name, modelle, url }
-            : { kind: 'custom-anthropic', name, modelle, url, token };
-        }
-        return baueOpenaiAnbieter(bisherige, {
-          name,
-          modelle,
-          apiBase: diagnose.apiBase ?? url,
-          token,
-        });
+      const wahl = frageWahl(
+        '    [u]ebernehmen trotzdem / [e]rneut eingeben / [s = überspringen]? ',
+        { uebernehmen: ['u', 'uebernehmen', 'übernehmen'], erneut: ['e', 'erneut'] },
+      );
+      if (wahl === 'uebernehmen') {
+        return diagnose.format === 'anthropic'
+          ? baueAnthropicAnbieter({ name, modelle, url, token })
+          : baueOpenaiAnbieter(bisherige, {
+              name,
+              modelle,
+              apiBase: diagnose.apiBase ?? url,
+              token,
+            });
       }
-      if (wahl === 'e' || wahl === 'erneut') continue;
-      console.log('    → Übersprungen — es wurde nichts konfiguriert.');
+      if (wahl === 'erneut') continue;
+      meldeUebersprungen();
       return null;
     }
     // token-abgelehnt / nicht-erreichbar / kein-format → nie halb konfigurieren.
     if (nochmal()) continue;
-    console.log('    → Übersprungen — es wurde nichts konfiguriert.');
+    meldeUebersprungen();
     return null;
   }
 }
 
 /** „[e]rneut versuchen / [s] überspringen?" — true = noch eine Runde. */
 function nochmal(): boolean {
-  const wahl = (prompt('    [e]rneut versuchen / [s = überspringen]? ') ?? '').trim().toLowerCase();
-  return wahl === 'e' || wahl === 'erneut';
+  return (
+    frageWahl('    [e]rneut versuchen / [s = überspringen]? ', { erneut: ['e', 'erneut'] }) ===
+    'erneut'
+  );
 }
 
 /**
@@ -433,12 +415,12 @@ async function anbieterWaehlen(): Promise<ProviderChoice[]> {
     )
   ) {
     for (;;) {
-      const wahl = (prompt('  Was hinzufügen? [ollama | anbieter] (leer = fertig): ') ?? '')
-        .trim()
-        .toLowerCase();
-      if (wahl === '') break;
-      if (wahl === 'ollama') {
-        providers.push({ kind: 'ollama' });
+      const wahl = parseAnbieterWahl(
+        prompt('  Was hinzufügen? [lokal | anbieter] (leer = fertig): ') ?? '',
+      );
+      if (wahl === 'fertig') break;
+      if (wahl === 'lokal') {
+        providers.push({ kind: 'lokal' });
         console.log(
           '  ✓ Lokales Modell (Qwen 3.8 auf oMLX, http://localhost:8000) — keine Env nötig; oMLX per `omlx start` laufen lassen.',
         );
@@ -446,7 +428,7 @@ async function anbieterWaehlen(): Promise<ProviderChoice[]> {
         const neu = await eigenenAnbieterErfassen(providers);
         if (neu !== null) providers.push(neu);
       } else {
-        console.log('  Unbekannte Wahl — bitte ollama oder anbieter.');
+        console.log('  Unbekannte Wahl — bitte lokal oder anbieter.');
       }
     }
   }
@@ -454,13 +436,14 @@ async function anbieterWaehlen(): Promise<ProviderChoice[]> {
   return providers;
 }
 
-async function main(): Promise<void> {
-  console.log('macvibes — geführtes First-Run-Setup\n');
-
-  // 1) Doctor — Zustands-Erhebung geteilt mit `macvibes doctor`
-  // (lib/doctorState), reine Auswertung in lib/setup.
+/**
+ * Schritt 1 — Doctor. Zustands-Erhebung geteilt mit `macvibes doctor`
+ * (lib/doctorState), reine Auswertung in lib/doctor. Beendet das Setup bei
+ * einem Blocker oder wenn der Nutzer nach Warnungen nicht fortfahren will.
+ * Liefert, ob msb verfügbar ist (entscheidet Sandbox-Modus und Baseline-Bau).
+ */
+async function pruefeUmgebung(): Promise<boolean> {
   const doctorInput = await erhebeDoctorInput();
-  const msbAvailable = doctorInput.msbAvailable;
   const report = doctor(doctorInput);
   druckeDoctorReport(report);
 
@@ -474,20 +457,103 @@ async function main(): Promise<void> {
     console.log('Abgebrochen. Nach dem Beheben erneut: bun run setup');
     process.exit(0);
   }
+  return doctorInput.msbAvailable;
+}
 
-  // 2) Anbieter-Wahl.
+/**
+ * Schritt 2 — Anbieter-Wahl, mit dem lokalen Modell als Fallback: ohne jeden
+ * Anbieter stünde das Setup sonst in einem toten Zustand.
+ */
+async function waehleAnbieterMitFallback(): Promise<ProviderChoice[]> {
   const providers = await anbieterWaehlen();
   if (providers.length === 0) {
     console.log(
       '\n⚠ Kein Anbieter gewählt — Fallback auf das lokale Modell (oMLX). Ohne laufendes oMLX mit Qwen 3.8 antwortet der Agent nicht.',
     );
-    providers.push({ kind: 'ollama' });
+    providers.push({ kind: 'lokal' });
   }
   if (!providers.some((p) => p.kind === 'claude-oauth' || p.kind === 'claude-apikey')) {
     console.log(
       '⚠ Kein Claude konfiguriert — nur lokale/zusätzliche Modelle stehen zur Verfügung.',
     );
   }
+  return providers;
+}
+
+/**
+ * Schritt 4 — .env schreiben. Nicht-destruktiv: ein bestehendes .env wird NIE
+ * stillschweigend überschrieben. Liefert, ob geschrieben wurde.
+ */
+function schreibeEnvNachRueckfrage(envPfad: string, answers: SetupAnswers): boolean {
+  if (existsSync(envPfad)) {
+    const wahl = frageWahl(
+      `\n${envPfad} existiert bereits. [u]eberschreiben / [b]ehalten / [a]bbrechen? `,
+      {
+        ueberschreiben: ['u', 'ueberschreiben', 'überschreiben'],
+        abbrechen: ['a', 'abbrechen'],
+      },
+    );
+    if (wahl === 'abbrechen') {
+      console.log('Abgebrochen — nichts verändert.');
+      process.exit(0);
+    }
+    if (wahl !== 'ueberschreiben') {
+      // Nicht-destruktiv per Default: alles außer einem AUSDRÜCKLICHEN
+      // „ueberschreiben" (auch ein Tippfehler oder leere Eingabe) behält die
+      // bestehende Datei — sie wird nie stillschweigend überschrieben.
+      console.log(`→ ${envPfad} unverändert behalten (Anbieter-/Admin-Eingaben verworfen).`);
+      return false;
+    }
+  }
+  schreibeEnv(envPfad, answers);
+  return true;
+}
+
+/** Schritt 6 — Baselines bauen (braucht msb), sonst klar benannter Fallback. */
+async function baueBaselines(msbAvailable: boolean, sandboxMode: string): Promise<void> {
+  if (!msbAvailable) {
+    console.log(
+      `\n→ Kein msb — Prozess-Modus als Fallback gesetzt (MACVIBES_SANDBOX=${sandboxMode}, ohne VM-Isolat, nur Dev).`,
+    );
+    console.log(
+      '  Voller VM-Modus später:  brew install superradcompany/tap/microsandbox && bun run baselines',
+    );
+    return;
+  }
+  console.log('\n→ Baue Template-Baselines (bun run baselines) — kann beim ersten Mal dauern …');
+  const code = await starteImVordergrund(['bun', 'run', 'baselines']);
+  if (code !== 0) {
+    console.error(
+      '⚠ Baseline-Bau fehlgeschlagen. Der Server läuft trotzdem (ohne Baselines bootet aber keine Projekt-VM).',
+    );
+    console.error('  Später erneut versuchen:  bun run baselines');
+  }
+}
+
+/** Schritt 7 — Abschluss-Hinweise. Der Token selbst wird NIE gedruckt (Secret). */
+function druckeAbschluss(adminUsername: string, envPfad: string, envGeschrieben: boolean): void {
+  console.log('\n✓ Setup abgeschlossen.');
+  console.log('  Server starten:      bun run dev');
+  console.log(
+    `  Danach registrieren als „${adminUsername}" — dieser Nutzer wird automatisch Admin.`,
+  );
+  if (envGeschrieben) {
+    // Der Nutzer erfährt, WO der Token steht und dass er ihn bei der
+    // Registrierung braucht.
+    console.log('  WICHTIG: Bei dieser Erst-Registrierung das Feld „Bootstrap-Token" ausfüllen —');
+    console.log(`  der Wert steht als MACVIBES_ADMIN_BOOTSTRAP_TOKEN in ${envPfad}.`);
+    console.log('  Er schützt den Admin-Namen davor, dass ihn jemand anderes im Netz beansprucht.');
+  }
+}
+
+async function main(): Promise<void> {
+  console.log('macvibes — geführtes First-Run-Setup\n');
+
+  // 1) Doctor.
+  const msbAvailable = await pruefeUmgebung();
+
+  // 2) Anbieter-Wahl.
+  const providers = await waehleAnbieterMitFallback();
 
   // 3) Admin-Username — PFLICHT (Aussperr-Absicherung, H3). Leer nicht akzeptiert.
   console.log('');
@@ -500,7 +566,7 @@ async function main(): Promise<void> {
   // Registrierung. Ohne den Token könnte auf einer frischen Instanz jeder im
   // LAN, der sich zuerst mit dem Namen registriert, Admin werden — der Server
   // lauscht auf 0.0.0.0. Der Nutzer muss sich den Wert NICHT merken: er steht
-  // in der .env (Abschluss-Hinweis unten sagt, wo).
+  // in der .env (der Abschluss-Hinweis sagt, wo).
   const adminBootstrapToken = randomBytes(32).toString('hex');
 
   // 4) Sandbox-Modus aus der msb-Verfügbarkeit ableiten und .env schreiben.
@@ -511,39 +577,14 @@ async function main(): Promise<void> {
   // Repo-Override apps/server/.env; installierte Fassung (kein .git, z. B.
   // Homebrew-libexec) → die upgrade-feste <macvibesHome>/.env. Sonst läge die
   // Konfig (inkl. Token) in libexec und wäre nach jedem `brew upgrade` weg.
-  const macvibesHome = process.env['MACVIBES_HOME'] ?? join(homedir(), 'macvibes');
+  const home = macvibesHome();
   const istDevCheckout = existsSync(join(REPO_ROOT, '.git'));
-  const envPfad = envZielPfad({ istDevCheckout, repoRoot: REPO_ROOT, macvibesHome });
-
-  let envGeschrieben = false;
-  if (existsSync(envPfad)) {
-    // Nicht-destruktiv: bestehendes .env NIE stillschweigend überschreiben.
-    const wahl = (
-      prompt(`\n${envPfad} existiert bereits. [u]eberschreiben / [b]ehalten / [a]bbrechen? `) ?? ''
-    )
-      .trim()
-      .toLowerCase();
-    if (wahl === 'a' || wahl === 'abbrechen') {
-      console.log('Abgebrochen — nichts verändert.');
-      process.exit(0);
-    }
-    if (wahl === 'u' || wahl === 'ueberschreiben' || wahl === 'überschreiben') {
-      schreibeEnv(envPfad, answers);
-      envGeschrieben = true;
-    } else {
-      // Nicht-destruktiv per Default: alles außer einem AUSDRÜCKLICHEN
-      // „ueberschreiben" (auch ein Tippfehler oder leere Eingabe) behält die
-      // bestehende Datei — sie wird nie stillschweigend überschrieben.
-      console.log(`→ ${envPfad} unverändert behalten (Anbieter-/Admin-Eingaben verworfen).`);
-    }
-  } else {
-    schreibeEnv(envPfad, answers);
-    envGeschrieben = true;
-  }
+  const envPfad = envZielPfad({ istDevCheckout, repoRoot: REPO_ROOT, macvibesHome: home });
+  const envGeschrieben = schreibeEnvNachRueckfrage(envPfad, answers);
 
   // 5) ~/macvibes-Verzeichnisbaum anlegen (Home + data-Ordner für die DB).
-  mkdirSync(join(macvibesHome, 'data'), { recursive: true });
-  console.log(`→ Verzeichnisbaum bereit: ${macvibesHome} (inkl. data/)`);
+  mkdirSync(join(home, 'data'), { recursive: true });
+  console.log(`→ Verzeichnisbaum bereit: ${home} (inkl. data/)`);
 
   // 5b) Eigene Anbieter verdrahten: models.json (Chat-Dropdown) und — für
   // OpenAI-kompatible — litellm.yaml. NUR wenn auch die .env geschrieben wurde:
@@ -553,7 +594,7 @@ async function main(): Promise<void> {
   );
   if (eigene.length > 0) {
     if (envGeschrieben) {
-      verdrahteEigeneAnbieter(macvibesHome, eigene);
+      verdrahteEigeneAnbieter(home, eigene);
     } else {
       console.log(
         '→ Eigene Anbieter NICHT verdrahtet (die bestehende .env wurde behalten) — models.json/litellm.yaml unverändert.',
@@ -562,43 +603,20 @@ async function main(): Promise<void> {
   }
 
   // 6) Baselines bauen (braucht laufendes msb) — sonst klar benannter Fallback.
-  if (msbAvailable) {
-    console.log('\n→ Baue Template-Baselines (bun run baselines) — kann beim ersten Mal dauern …');
-    const proc = Bun.spawn(['bun', 'run', 'baselines'], {
-      stdin: 'inherit',
-      stdout: 'inherit',
-      stderr: 'inherit',
-      env: process.env as Record<string, string>,
-    });
-    const code = await proc.exited;
-    if (code !== 0) {
-      console.error(
-        '⚠ Baseline-Bau fehlgeschlagen. Der Server läuft trotzdem (ohne Baselines bootet aber keine Projekt-VM).',
-      );
-      console.error('  Später erneut versuchen:  bun run baselines');
-    }
-  } else {
-    console.log(
-      `\n→ Kein msb — Prozess-Modus als Fallback gesetzt (MACVIBES_SANDBOX=${sandboxMode}, ohne VM-Isolat, nur Dev).`,
-    );
-    console.log(
-      '  Voller VM-Modus später:  brew install superradcompany/tap/microsandbox && bun run baselines',
-    );
-  }
+  await baueBaselines(msbAvailable, sandboxMode);
 
   // 7) Abschluss.
-  console.log('\n✓ Setup abgeschlossen.');
-  console.log('  Server starten:      bun run dev');
-  console.log(
-    `  Danach registrieren als „${adminUsername}" — dieser Nutzer wird automatisch Admin.`,
-  );
-  if (envGeschrieben) {
-    // Der Token selbst wird bewusst NICHT auf die Konsole gedruckt (Secret);
-    // der Nutzer erfährt, WO er steht und dass er ihn bei der Registrierung braucht.
-    console.log('  WICHTIG: Bei dieser Erst-Registrierung das Feld „Bootstrap-Token" ausfüllen —');
-    console.log(`  der Wert steht als MACVIBES_ADMIN_BOOTSTRAP_TOKEN in ${envPfad}.`);
-    console.log('  Er schützt den Admin-Namen davor, dass ihn jemand anderes im Netz beansprucht.');
-  }
+  druckeAbschluss(adminUsername, envPfad, envGeschrieben);
+}
+
+/**
+ * Nutzer-Datei unter `<macvibesHome>` schreiben und auf 0600 sperren
+ * (defensiv; Secrets selbst stehen nur in der .env). `mode` greift nur bei
+ * Neuanlage — eine bestehende Datei wird deshalb explizit nachgezogen.
+ */
+function schreibeNutzerdatei(pfad: string, inhalt: string): void {
+  writeFileSync(pfad, inhalt, { mode: 0o600 });
+  chmodSync(pfad, 0o600);
 }
 
 /**
@@ -614,10 +632,10 @@ async function main(): Promise<void> {
  *     den `'*'`-Catch-all (muss auch nach n Einfügungen letzter Eintrag
  *     bleiben — providerWiring fügt jeweils davor ein). Eine vorhandene Datei
  *     wird ERGÄNZT, nie überschrieben; Duplikate werden nur gemeldet.
- * Beides 0600 (defensiv; Secrets selbst stehen nur in der .env).
+ * Beides 0600 (schreibeNutzerdatei).
  */
-function verdrahteEigeneAnbieter(macvibesHome: string, eigene: EigenerAnbieter[]): void {
-  const modelsPfad = join(macvibesHome, 'models.json');
+function verdrahteEigeneAnbieter(home: string, eigene: EigenerAnbieter[]): void {
+  const modelsPfad = join(home, 'models.json');
   let modelsRaw: string | null = existsSync(modelsPfad) ? readFileSync(modelsPfad, 'utf8') : null;
   let modelsGeaendert = false;
   for (const anbieter of eigene) {
@@ -635,9 +653,7 @@ function verdrahteEigeneAnbieter(macvibesHome: string, eigene: EigenerAnbieter[]
     }
   }
   if (modelsGeaendert && modelsRaw !== null) {
-    writeFileSync(modelsPfad, modelsRaw, { mode: 0o600 });
-    // mode greift nur bei Neuanlage — bestehende Datei explizit nachziehen.
-    chmodSync(modelsPfad, 0o600);
+    schreibeNutzerdatei(modelsPfad, modelsRaw);
     console.log(`→ ${modelsPfad} ergänzt — die Modelle erscheinen im Chat-Dropdown.`);
   }
 
@@ -645,7 +661,7 @@ function verdrahteEigeneAnbieter(macvibesHome: string, eigene: EigenerAnbieter[]
     (p): p is Extract<EigenerAnbieter, { kind: 'custom-openai' }> => p.kind === 'custom-openai',
   );
   if (openaiAnbieter.length === 0) return;
-  const litellmPfad = join(macvibesHome, 'litellm.yaml');
+  const litellmPfad = join(home, 'litellm.yaml');
   const hatteDatei = existsSync(litellmPfad);
   let yamlRaw = hatteDatei
     ? readFileSync(litellmPfad, 'utf8')
@@ -673,9 +689,7 @@ function verdrahteEigeneAnbieter(macvibesHome: string, eigene: EigenerAnbieter[]
     }
   }
   if (yamlGeaendert) {
-    writeFileSync(litellmPfad, yamlRaw, { mode: 0o600 });
-    // mode greift nur bei Neuanlage — bestehende Datei explizit nachziehen.
-    chmodSync(litellmPfad, 0o600);
+    schreibeNutzerdatei(litellmPfad, yamlRaw);
     console.log(
       `→ ${litellmPfad} geschrieben — der Router nutzt ab jetzt DIESE Datei (Basis-Einträge + Catch-all bleiben erhalten).`,
     );
@@ -693,7 +707,7 @@ function schreibeEnv(envPfad: string, answers: SetupAnswers): void {
   // Das nachträgliche chmod bleibt als defensiver Zweitschritt (u. a. falls die
   // Datei schon existierte und writeFileSync den Mode dann nicht mehr anpasst).
   writeFileSync(envPfad, buildEnvContent(answers), { mode: 0o600 });
-  if (unterstuetztPosixModes(ordner)) {
+  if (supportsPosixModes(ordner)) {
     chmodSync(envPfad, 0o600);
     console.log(`→ ${envPfad} geschrieben (chmod 600).`);
   } else {

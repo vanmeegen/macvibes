@@ -130,7 +130,7 @@ const CATCHALL_ZEILE = /^\s*-\s*model_name:\s*'\*'/m;
 /**
  * Die Router-Config um einen OpenAI-kompatiblen Anbieter ergänzen. Basis ist
  * die MITGELIEFERTE litellm_config.yaml (bzw. eine schon vorhandene
- * `<macvibesHome>/litellm.yaml`): so behält der Nutzer die Ollama-Basis-Einträge
+ * `<macvibesHome>/litellm.yaml`): so behält der Nutzer die Basis-Einträge (Qwen via Bridge)
  * und den `'*'`-Catch-all — ohne ihn brechen Claude Codes Hilfsmodell-Aufrufe
  * (der Router antwortete mit 400) und beim Umschalten fehlten die lokalen
  * Modelle. Der neue Eintrag wird deshalb VOR dem Catch-all eingefügt (LiteLLM

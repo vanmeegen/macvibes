@@ -30,7 +30,7 @@ export interface AgentDaemonProviderConfig {
   /** Env für den Daemon der jeweiligen Sandbox (Gateway-URL enthält den Namen). */
   envFor: (sandboxName: string) => Record<string, string>;
   /** Entwertet das VM-Token beim Stoppen — sonst gilt es unbegrenzt weiter. */
-  revokeToken?: (sandboxName: string) => void;
+  revokeToken: (sandboxName: string) => void;
 }
 
 export interface MicrosandboxProviderConfig {
@@ -106,7 +106,7 @@ const BUN_CACHE_GUEST_DIR = '/bun-cache';
  * PID 1 der VM ist ein In-VM-Supervisor (tini + monit, siehe vmServices.ts),
  * der Dev-Server UND Agent-Daemon startet, überwacht und bei Crash neu
  * startet — kein host-seitiger Watchdog, kein msb exec im Agent-Pfad. Der
- * Daemon wählt sich ausgehend ins Host-Gateway ein (architektur.md, A+C).
+ * Daemon wählt sich ausgehend ins Host-Gateway ein (docs/archiv/architektur.md, A+C).
  *
  * Voraussetzung ist der Baseline-Snapshot des Templates (`bun run baselines`):
  * er enthält node_modules, das Agent SDK und tini/monit. Ohne Baseline kann
@@ -114,7 +114,8 @@ const BUN_CACHE_GUEST_DIR = '/bun-cache';
  *
  * Schnittstelle zum Template (template-agnostisch): ausschließlich
  * `devCommand` + `previewPort` + PORT-Env aus templates.json. Der
- * Preview-Status wird nur noch GELESEN (monit-HTTP-API + HTTP-Probe).
+ * Preview-Status wird nur noch GELESEN (Daemon-Push laut ADR 0001 +
+ * HTTP-Probe des Hosts auf den Preview-Port).
  */
 export class MicrosandboxSandboxProvider implements SandboxProvider {
   // Geteilt über ALLE Sandboxen dieses Providers → kollisionsfreie Host-Ports
@@ -162,7 +163,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     try {
       await this.bootVm(context, name, hostPort, { workspaceDir, agentConfigDir, bunCacheDir });
     } catch (error) {
-      this.config.agentDaemon.revokeToken?.(name);
+      this.config.agentDaemon.revokeToken(name);
       this.ports.release(hostPort);
       await this.stopVm(name);
       throw error;
@@ -181,7 +182,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       pushed.receive(status),
     );
     poller = new PreviewStatusPoller({
-      fetchStatus: pushed.fetchStatus(() => httpProbe(`http://localhost:${hostPort}/`)),
+      fetchStatus: pushed.fetchStatus(() => httpProbe(`http://127.0.0.1:${hostPort}/`)),
       onStatusChange: (status) => console.log(`Preview ${context.projectId}: ${status}`),
     });
     poller.start();
@@ -192,7 +193,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       stop: async () => {
         // Token SOFORT entwerten: ein aus der VM abgeflossenes Token öffnete
         // sonst Credential- und Egress-Proxy noch lange nach ihrem Ende.
-        this.config.agentDaemon.revokeToken?.(name);
+        this.config.agentDaemon.revokeToken(name);
         unsubscribeStatus();
         poller.stop();
         this.ports.release(hostPort);

@@ -18,11 +18,8 @@ import { NetworkPolicy, Sandbox, SandboxNotFoundError, Snapshot } from 'microsan
 
 /** Fehlerbegriff der Sandbox-Schicht — ersetzt den CLI-weiten MicrosandboxError. */
 export class SandboxRuntimeError extends Error {
-  constructor(
-    message: string,
-    readonly ursache?: unknown,
-  ) {
-    super(message);
+  constructor(message: string, cause?: unknown) {
+    super(message, { cause });
     this.name = 'SandboxRuntimeError';
   }
 }
@@ -52,7 +49,7 @@ async function msbCall<T>(
 }
 
 /** Ist das der Fehler „diese Sandbox gibt es nicht"? */
-export function istSandboxNichtGefunden(error: unknown): boolean {
+export function isSandboxNotFound(error: unknown): boolean {
   return error instanceof SandboxNotFoundError;
 }
 
@@ -66,16 +63,21 @@ export function istSandboxNichtGefunden(error: unknown): boolean {
  * Sobald das SDK eine `SnapshotNotFoundError`-Klasse mitbringt, gehört das hier
  * ersetzt.
  */
-export function istSnapshotNichtGefunden(error: unknown): boolean {
+export function isSnapshotNotFound(error: unknown): boolean {
   return fehlertext(error).includes('[SnapshotNotFound]');
 }
 
-/** Ist die microsandbox-Laufzeit benutzbar? */
+/**
+ * Ist die microsandbox-Laufzeit benutzbar? Der Grund für ein „nein" wird
+ * geloggt: sonst sieht eine DEFEKTE Installation genauso aus wie eine fehlende
+ * — derselbe stille Fehlschlag, den der Kopfkommentar dieser Datei beschreibt.
+ */
 export async function msbAvailable(): Promise<boolean> {
   try {
     await Sandbox.list();
     return true;
-  } catch {
+  } catch (error) {
+    console.warn(`microsandbox ist nicht benutzbar: ${fehlertext(error) || String(error)}`);
     return false;
   }
 }
@@ -94,7 +96,7 @@ export async function snapshotExists(name: string): Promise<boolean> {
       await Snapshot.get(name);
       return true;
     },
-    { ist: istSnapshotNichtGefunden, wert: false },
+    { ist: isSnapshotNotFound, wert: false },
   );
 }
 
@@ -110,14 +112,14 @@ export async function stopSandbox(name: string): Promise<void> {
       const handle = await Sandbox.get(name);
       await handle.stop();
     },
-    { ist: istSandboxNichtGefunden, wert: undefined },
+    { ist: isSandboxNotFound, wert: undefined },
   );
 }
 
 /** Entfernt eine Sandbox. Unbekannt = kein Fehler (siehe stopSandbox). */
 export async function removeSandbox(name: string): Promise<void> {
   await msbCall(`Sandbox „${name}" konnte nicht entfernt werden`, () => Sandbox.remove(name), {
-    ist: istSandboxNichtGefunden,
+    ist: isSandboxNotFound,
     wert: undefined,
   });
 }
@@ -151,7 +153,7 @@ export async function waitForSandboxReady(
     });
 
   const start = Date.now();
-  let letzterFehler: unknown = null;
+  let letzterFehler: unknown;
   for (;;) {
     try {
       await probe(name);
@@ -195,13 +197,13 @@ export interface SandboxSpec {
   /** PID-1-Kommando, z. B. ['/bin/sh', '-c', '<bootstrap>; <supervisor>']. */
   command: string[];
   /**
-   * Netzzugang. `projekt` = die gehärtete Egress-Policy (Default): Egress
-   * gesperrt, erlaubt sind öffentliches Netz und Host-Gateway. `unbeschraenkt`
+   * Netzzugang. `project` = die gehärtete Egress-Policy (Default): Egress
+   * gesperrt, erlaubt sind öffentliches Netz und Host-Gateway. `unrestricted`
    * = keine Policy — nötig für die Baseline-Builder-VM, die apt und das
    * npm-Registry erreichen muss und die auch vorher (CLI ohne --net-rule)
    * keine Beschränkung hatte. Sie läuft ohne Agent und nur beim Baseline-Bau.
    */
-  netzwerk?: 'projekt' | 'unbeschraenkt';
+  network?: 'project' | 'unrestricted';
   /**
    * Idle-Frist der VM in Sekunden (ADR 0003) — Auffangnetz, falls der Host
    * stirbt und niemand mehr die Frist zurücksetzt. Ohne Angabe: keine Frist.
@@ -290,7 +292,7 @@ function bauBuilder(spec: SandboxSpec) {
         spec.previewHostPort > 0
           ? n.portBind('127.0.0.1', spec.previewHostPort, spec.previewGuestPort)
           : n;
-      return spec.netzwerk === 'unbeschraenkt' ? mitPort : mitPort.policy(egressPolicy());
+      return spec.network === 'unrestricted' ? mitPort : mitPort.policy(egressPolicy());
     });
 
   for (const mount of spec.mounts) {
@@ -364,7 +366,7 @@ export async function removeSnapshot(name: string): Promise<void> {
     async () => {
       await Snapshot.remove(name, { force: true });
     },
-    { ist: istSnapshotNichtGefunden, wert: undefined },
+    { ist: isSnapshotNotFound, wert: undefined },
   );
 }
 
@@ -393,6 +395,6 @@ export async function touchSandbox(name: string): Promise<boolean> {
       await handle.touch();
       return true;
     },
-    { ist: istSandboxNichtGefunden, wert: false },
+    { ist: isSandboxNotFound, wert: false },
   );
 }

@@ -3,7 +3,7 @@ import { toErrorMessage } from '../api/errors';
 import { gqlRequest } from '../api/graphqlClient';
 import type { User } from '../api/types';
 
-const USER_FIELDS = /* GraphQL */ `
+export const USER_FIELDS = /* GraphQL */ `
   id
   username
   role
@@ -34,34 +34,16 @@ const LOGOUT_MUTATION = /* GraphQL */ `
   }
 `;
 
-const USERS_QUERY = /* GraphQL */ `
-  query Users {
-    users { ${USER_FIELDS} }
-  }
-`;
-
-const APPROVE_USER_MUTATION = /* GraphQL */ `
-  mutation ApproveUser($userId: ID!) {
-    approveUser(userId: $userId) { ${USER_FIELDS} }
-  }
-`;
-
-const REJECT_USER_MUTATION = /* GraphQL */ `
-  mutation RejectUser($userId: ID!) {
-    rejectUser(userId: $userId)
-  }
-`;
-
 const PENDING_NOTICE =
   'Registrierung eingegangen. Ein Admin muss dein Konto freischalten, danach kannst du dich anmelden.';
 
 /** Ergebnis einer Registrierung aus Sicht des UI. */
-export type RegisterOutcome = 'loggedIn' | 'pending' | 'failed';
+type RegisterOutcome = 'loggedIn' | 'pending' | 'failed';
 
 /**
- * Authentifizierungs-Store: hält den aktuell angemeldeten Benutzer sowie
- * (für Admins) die Nutzerverwaltung. Die Session lebt in einem httpOnly-Cookie,
- * das der Server setzt.
+ * Authentifizierungs-Store: hält den aktuell angemeldeten Benutzer. Die
+ * Session lebt in einem httpOnly-Cookie, das der Server setzt. (Die
+ * Admin-Nutzerverwaltung liegt im AdminUsersStore.)
  */
 export class AuthStore {
   currentUser: User | null = null;
@@ -71,8 +53,6 @@ export class AuthStore {
   /** Positiver Hinweis (z. B. „warte auf Freischaltung"). */
   notice: string | null = null;
   pending = false;
-  /** Admin-Nutzerverwaltung. */
-  users: User[] = [];
 
   constructor() {
     makeAutoObservable(this, {}, { autoBind: true });
@@ -80,11 +60,6 @@ export class AuthStore {
 
   get isAdmin(): boolean {
     return this.currentUser?.role === 'admin';
-  }
-
-  /** Noch nicht freigeschaltete Registrierungen — für das Admin-Panel. */
-  get pendingUsers(): User[] {
-    return this.users.filter((u) => !u.approved);
   }
 
   /** Lädt den aktuellen Benutzer (me); null = nicht angemeldet. */
@@ -185,7 +160,6 @@ export class AuthStore {
       await gqlRequest<{ logout: boolean }>(LOGOUT_MUTATION);
       runInAction(() => {
         this.currentUser = null;
-        this.users = [];
       });
     } catch (err) {
       console.error('AuthStore.logout fehlgeschlagen', err);
@@ -195,51 +169,6 @@ export class AuthStore {
     } finally {
       runInAction(() => {
         this.pending = false;
-      });
-    }
-  }
-
-  /** Admin: alle Nutzer laden. */
-  async loadUsers(): Promise<void> {
-    try {
-      const data = await gqlRequest<{ users: User[] }>(USERS_QUERY);
-      runInAction(() => {
-        this.users = data.users;
-      });
-    } catch (err) {
-      console.error('AuthStore.loadUsers fehlgeschlagen', err);
-      runInAction(() => {
-        this.error = toErrorMessage(err);
-      });
-    }
-  }
-
-  /** Admin: Nutzer freischalten. */
-  async approveUser(userId: string): Promise<void> {
-    try {
-      const data = await gqlRequest<{ approveUser: User }>(APPROVE_USER_MUTATION, { userId });
-      runInAction(() => {
-        this.users = this.users.map((u) => (u.id === userId ? data.approveUser : u));
-      });
-    } catch (err) {
-      console.error('AuthStore.approveUser fehlgeschlagen', err);
-      runInAction(() => {
-        this.error = toErrorMessage(err);
-      });
-    }
-  }
-
-  /** Admin: Registrierung ablehnen (Nutzer entfernen). */
-  async rejectUser(userId: string): Promise<void> {
-    try {
-      await gqlRequest<{ rejectUser: boolean }>(REJECT_USER_MUTATION, { userId });
-      runInAction(() => {
-        this.users = this.users.filter((u) => u.id !== userId);
-      });
-    } catch (err) {
-      console.error('AuthStore.rejectUser fehlgeschlagen', err);
-      runInAction(() => {
-        this.error = toErrorMessage(err);
       });
     }
   }

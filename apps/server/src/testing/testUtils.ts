@@ -1,0 +1,134 @@
+import { afterEach } from 'bun:test';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createDb, type Db } from '../db/client';
+import { runMigrations } from '../db/migrate';
+import { approveUser, register, type AuthConfig } from '../services/authService';
+import type { UserRow } from '../db/schema';
+
+export const TEST_AUTH_CONFIG: AuthConfig = {
+  sessionTtlMs: 3 * 24 * 60 * 60 * 1000,
+  // Seit H3 wird ohne Bootstrap-Namen NIEMAND automatisch Admin. Die
+  // Testvorrichtung benennt ihn deshalb — sonst hätte keine Suite mehr einen
+  // freigeschalteten Nutzer. 'marco' ist der Default von registerInput().
+  adminUsername: 'marco',
+};
+
+export function createTestDb(): Db {
+  const db = createDb(':memory:');
+  runMigrations(db);
+  return db;
+}
+
+export async function createTempDir(prefix: string): Promise<string> {
+  return mkdtemp(join(tmpdir(), prefix));
+}
+
+export async function removeDir(path: string): Promise<void> {
+  // Windows gibt Datei-Handles (SQLite-WAL, frisch beendete Kindprozesse)
+  // erst verzögert frei — EBUSY/EPERM hier kurz wiederholen statt den Test
+  // am Aufräumen scheitern zu lassen. Auf POSIX greift der erste Versuch.
+  for (let versuch = 0; ; versuch += 1) {
+    try {
+      await rm(path, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if ((code !== 'EBUSY' && code !== 'EPERM') || versuch >= 20) throw error;
+      await Bun.sleep(100);
+    }
+  }
+}
+
+/**
+ * Temp-Verzeichnisse einer Testdatei: was in die zurückgegebene Liste gelegt
+ * wird, räumt ein afterEach-Hook nach jedem Test wieder ab. Ersetzt den in
+ * jeder Datei wiederholten Block aus Liste + afterEach + Schleife.
+ */
+export function trackTempDirs(): string[] {
+  const dirs: string[] = [];
+  afterEach(async () => {
+    while (dirs.length > 0) {
+      const dir = dirs.pop();
+      if (dir) await removeDir(dir);
+    }
+  });
+  return dirs;
+}
+
+/**
+ * Legt einen Templates-Ordner mit gültiger templates.json und einem Template an.
+ * `templateDir` ist konfigurierbar, damit Baseline-Tests einen isolierten Namen
+ * nutzen können und NIE die Produktions-Snapshots (macvibes-tpl-pwa) überschreiben.
+ */
+export async function createTemplatesFixture(templateDir = 'pwa'): Promise<string> {
+  const dir = await createTempDir('macvibes-templates-');
+  await mkdir(join(dir, templateDir));
+  await writeFile(join(dir, templateDir, 'index.html'), '<!doctype html><title>PWA</title>');
+  await writeFile(join(dir, templateDir, 'package.json'), JSON.stringify({ name: 'app' }));
+  // Mini-Dev-Server für Preview-Tests: respektiert die PORT-Env (Template-Kontrakt).
+  // Zählt bei jedem Start eine Zeile in .starts hoch — so lässt sich ein echter
+  // Supervisor-Neustart (neue Instanz) vom bloßen Weiterlaufen unterscheiden.
+  // /crash lässt den Server sich selbst beenden: msb-exec-Sessions können den
+  // PID-1-Baum der VM nicht killen (eigene PID-Namespaces), ein Crash-Test muss
+  // deshalb von INNEN ausgelöst werden.
+  await writeFile(
+    join(dir, templateDir, 'server.ts'),
+    "import { appendFileSync } from 'node:fs';\n" +
+      "appendFileSync('.starts', 'x\\n');\n" +
+      'Bun.serve({ port: Number(process.env.PORT ?? 5199), fetch: (req) => {\n' +
+      "  if (new URL(req.url).pathname === '/crash') { setTimeout(() => process.exit(1), 20); return new Response('crash'); }\n" +
+      "  return new Response('hallo-preview');\n" +
+      '} });\n',
+  );
+  await writeFile(
+    join(dir, 'templates.json'),
+    JSON.stringify({
+      templates: [
+        {
+          name: 'Client-PWA',
+          description: 'PWA ohne Server',
+          dir: templateDir,
+          devCommand: 'bun run dev',
+          previewPort: 5173,
+        },
+      ],
+    }),
+  );
+  return dir;
+}
+
+/**
+ * Legt einen freigeschalteten Testnutzer an. Nur der Bootstrap-Admin
+ * (TEST_AUTH_CONFIG.adminUsername) ist sofort approved; jeder andere ist
+ * zunächst pending — für Tests, die einen benutzbaren Owner brauchen,
+ * schalten wir ihn direkt frei.
+ */
+export async function createUser(db: Db, username = 'marco'): Promise<UserRow> {
+  const result = await register(db, TEST_AUTH_CONFIG, {
+    username,
+    password: 'sicheres-passwort',
+  });
+  if (result.user.approved) {
+    return result.user;
+  }
+  return approveUser(db, result.user.id);
+}
+
+/**
+ * Pollt eine Bedingung, statt blind zu schlafen. Erfüllte Bedingungen kehren
+ * sofort zurück; die Frist greift nur im Fehlerfall (deshalb großzügig — knappe
+ * Fristen rissen auf langsameren Maschinen korrekte Tests).
+ */
+export async function waitFor(
+  condition: () => boolean | Promise<boolean>,
+  timeoutMs = 10_000,
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (await condition()) return;
+    await Bun.sleep(5);
+  }
+  throw new Error('waitFor: Bedingung nicht erfüllt');
+}

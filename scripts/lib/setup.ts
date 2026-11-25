@@ -14,7 +14,7 @@
 import { join } from 'node:path';
 
 /** Eine zusätzliche Modell-Route (OpenRouter-Stil), wie config.ts sie parst. */
-export interface ModelRoute {
+interface ModelRoute {
   prefix: string;
   upstreamUrl: string;
   apiKey?: string;
@@ -25,7 +25,7 @@ export interface ModelRoute {
  * NICHT aus (der Credential-Proxy routet pro Request nach dem `model` im Body).
  *   - claude-oauth     : Abo-Token (claude setup-token), bevorzugt
  *   - claude-apikey    : klassischer Anthropic-API-Key
- *   - ollama           : lokales Modell (oMLX, Qwen 3.8) — braucht keine Env,
+ *   - lokal            : lokales Modell (oMLX, Qwen 3.8) — braucht keine Env,
  *                        der Credential-Proxy routet direkt an oMLX
  *   - custom-anthropic : eigener Anbieter, dessen Endpunkt die Format-PROBE
  *                        (lib/providerProbe) als Anthropic-/v1/messages-
@@ -48,7 +48,7 @@ export interface ModelRoute {
 export type ProviderChoice =
   | { kind: 'claude-oauth'; token: string }
   | { kind: 'claude-apikey'; apiKey: string }
-  | { kind: 'ollama' }
+  | { kind: 'lokal' }
   | {
       kind: 'custom-anthropic';
       /** Anzeigename des Anbieters (nur für Kommentare/Meldungen). */
@@ -89,7 +89,7 @@ export interface AnbieterModell {
 export const LITELLM_BRIDGE_URL = 'http://localhost:8787';
 
 /** Sandbox-Backend, exakt die Werte, die config.ts akzeptiert. */
-export type SandboxMode = 'auto' | 'process' | 'microsandbox';
+type SandboxMode = 'auto' | 'process' | 'microsandbox';
 
 /** Gesammelte Antworten des Setups → speisen buildEnvContent(). */
 export interface SetupAnswers {
@@ -110,8 +110,7 @@ export interface SetupAnswers {
 /**
  * Eine Anbieter-Wahl auf ihre Env-Vars abbilden.
  *
- * `ollama` (historischer Name der Wahl „lokales Modell") liefert bewusst eine
- * LEERE Map: config.ts zeigt per Default auf oMLX (http://localhost:8000) und
+ * `lokal` (das lokale Modell) liefert bewusst eine LEERE Map: config.ts zeigt per Default auf oMLX (http://localhost:8000) und
  * startet `omlx serve`, falls der brew-Service nicht ohnehin läuft. Es braucht
  * also KEINE Env, um das lokale Modell zu aktivieren; nur ein abweichender
  * Endpunkt/Command würde MACVIBES_LOCAL_* setzen.
@@ -122,7 +121,7 @@ export function providerEnv(choice: ProviderChoice): Record<string, string> {
       return { CLAUDE_CODE_OAUTH_TOKEN: choice.token };
     case 'claude-apikey':
       return { ANTHROPIC_API_KEY: choice.apiKey };
-    case 'ollama':
+    case 'lokal':
       return {};
     case 'custom-anthropic': {
       // Direkte Routen: der Proxy matcht das `model` im Body per
@@ -199,7 +198,7 @@ export function mergeProviderEnv(choices: ProviderChoice[]): Record<string, stri
  *            `'\''` wird wörtlich gelesen, nicht zusammengesetzt).
  *   - Steuerzeichen: würden die Zeile zerreißen / sind in .env-Werten unsinnig.
  */
-// eslint-disable-next-line no-control-regex -- Steuerzeichen \x00–\x1f bewusst abgelehnt.
+// oxlint-disable-next-line no-control-regex -- Steuerzeichen \x00–\x1f bewusst abgelehnt.
 const ENV_UNSICHER = /['\\$\x00-\x1f]/;
 
 /**
@@ -225,11 +224,9 @@ export function envWertIstUnsicher(value: string): boolean {
  * EINZIGE Wahl: Double-Quotes um das JSON würden die inneren `"` als `\"`
  * durchreichen und JSON.parse brechen.
  *
- * WARUM ABLEHNEN statt escapen: die frühere Annahme „Single-Quotes schalten jede
- * Expansion aus" ist gegen den echten Bun-Parser FALSCH (s. ENV_UNSICHER —
- * `$`-Expansion, Trailing-`\`-Zeilenfraß, `'`-Terminierung). Ein zuverlässiges
- * Escaping dieser Zeichen gibt es in Buns Single-Quote-Syntax NICHT (`\$`/`\\`
- * verhalten sich inkonsistent), also werden sie klar abgelehnt statt still ein
+ * WARUM ABLEHNEN statt escapen: die Zeichen aus ENV_UNSICHER (dort steht die
+ * Begründung je Zeichen) lassen sich in Buns Single-Quote-Syntax nicht
+ * zuverlässig escapen, also werden sie klar abgelehnt statt still ein
  * zerbrochenes/injiziertes .env zu erzeugen. Das ist unkritisch: der
  * Admin-Username (usernameSchema: nur [a-z0-9_-]) kann keines davon enthalten,
  * Secrets/URLs praktisch nie. Die interaktive Schale weist solche Eingaben schon
@@ -331,7 +328,7 @@ export function buildEnvContent(answers: SetupAnswers): string {
   }
 
   // Lokales Modell: oMLX ist der Default-Upstream (config.ts), keine Env nötig.
-  if (answers.providers.some((p) => p.kind === 'ollama')) {
+  if (answers.providers.some((p) => p.kind === 'lokal')) {
     lines.push('');
     lines.push('# Lokales Modell (Qwen 3.8 auf oMLX, http://localhost:8000) — Default-Upstream,');
     lines.push(
@@ -379,140 +376,63 @@ export function envZielPfad(opts: {
 }
 
 /**
- * Aussperr-Absicherung des Sandbox-Backends: msb vorhanden → voller VM-Modus
- * (microsandbox), sonst der klar benannte Prozess-Fallback statt eines toten
- * Zustands (installer-plan.md, Schritt 5).
+ * Anthropic-kompatiblen Anbieter (direkte Modell-Route) fertig bauen. Ein
+ * leerer Token wird WEGGELASSEN statt als '' eingetragen: der Endpunkt braucht
+ * dann keinen Key, und providerEnv schreibt keine apiKey in die Route.
  */
-export function sandboxModeFor(msbAvailable: boolean): 'microsandbox' | 'process' {
-  return msbAvailable ? 'microsandbox' : 'process';
-}
-
-/** Injizierte Prüf-Ergebnisse für den Doctor (keine Syscalls in doctor()). */
-export interface DoctorInput {
-  /** Laufende Bun-Version (Bun.version) oder null, wenn bun fehlt. */
-  bunVersion: string | null;
-  /** Erwarteter Pin (CLAUDE.md: 1.3.14). */
-  bunPin: string;
-  gitAvailable: boolean;
-  msbAvailable: boolean;
-  /**
-   * Ist ein Hypervisor (HVF auf Apple Silicon) nutzbar? null = nicht geprüft.
-   * Nur relevant, wenn msb da ist — ohne msb bootet ohnehin keine VM.
-   */
-  hypervisorAvailable: boolean | null;
-  /** Belegte der geprüften Ports (Server/Egress/Web/Gateway). */
-  belegtePorts: number[];
-}
-
-export type DoctorStatus = 'ok' | 'warn' | 'fail';
-
-export interface DoctorCheck {
-  id: 'bun' | 'git' | 'msb' | 'hypervisor' | 'ports';
-  label: string;
-  status: DoctorStatus;
-  /** Umsetzbarer Hinweis (was tun?) — bei 'ok' knapp/leer. */
-  hinweis: string;
-}
-
-export interface DoctorReport {
-  checks: DoctorCheck[];
-  /** Mindestens ein 'fail' — das Setup darf nicht weiterlaufen. */
-  hatFehler: boolean;
-  /** Mindestens ein 'warn' — Setup läuft weiter, aber mit Hinweisen. */
-  hatWarnung: boolean;
+export function baueAnthropicAnbieter(daten: {
+  name: string;
+  modelle: AnbieterModell[];
+  url: string;
+  token: string;
+}): ProviderChoice {
+  const { name, modelle, url, token } = daten;
+  // exactOptionalPropertyTypes: `token` nur aufnehmen, wenn wirklich gesetzt.
+  return token === ''
+    ? { kind: 'custom-anthropic', name, modelle, url }
+    : { kind: 'custom-anthropic', name, modelle, url, token };
 }
 
 /**
- * Reine Auswertung der Doctor-Eingaben. Leitregel (installer-plan.md): nur
- * echte Blocker sind `fail` (ohne bun/git geht gar nichts). Fehlendes msb/
- * Hypervisor ist `warn`, weil der Prozess-Fallback existiert — das Setup soll
- * niemanden aussperren.
+ * Eine getippte Auswahl („u", „ueberschreiben", …) einer Option zuordnen:
+ * `optionen` nennt je Option die akzeptierten Schreibweisen (kleingeschrieben).
+ * Rand-Leerraum und Groß-/Kleinschreibung der Eingabe zählen nicht. Kein
+ * Treffer → null; der Aufrufer entscheidet, was dann gilt (meist die
+ * nicht-destruktive Variante).
  */
-export function doctor(input: DoctorInput): DoctorReport {
-  const checks: DoctorCheck[] = [];
-
-  // bun
-  if (input.bunVersion === null) {
-    checks.push({
-      id: 'bun',
-      label: 'Bun-Laufzeit',
-      status: 'fail',
-      hinweis: `bun nicht gefunden — installieren und auf ${input.bunPin} pinnen (mac: brew install oven-sh/bun/bun && brew pin bun).`,
-    });
-  } else if (input.bunVersion !== input.bunPin) {
-    checks.push({
-      id: 'bun',
-      label: 'Bun-Laufzeit',
-      status: 'warn',
-      hinweis: `Bun ${input.bunVersion} weicht vom Pin ${input.bunPin} ab — macvibes ist auf ${input.bunPin} getestet (Sandbox-/Agent-Pfade). Nur bewusst upgraden.`,
-    });
-  } else {
-    checks.push({ id: 'bun', label: 'Bun-Laufzeit', status: 'ok', hinweis: input.bunVersion });
+export function waehleOption<K extends string>(
+  eingabe: string,
+  optionen: Record<K, readonly string[]>,
+): K | null {
+  const wahl = eingabe.trim().toLowerCase();
+  for (const option of Object.keys(optionen) as K[]) {
+    if (optionen[option].includes(wahl)) return option;
   }
+  return null;
+}
 
-  // git
-  checks.push(
-    input.gitAvailable
-      ? { id: 'git', label: 'git', status: 'ok', hinweis: '' }
-      : {
-          id: 'git',
-          label: 'git',
-          status: 'fail',
-          hinweis:
-            'git fehlt — für die Projekt-Branches im Bare-Repo nötig (mac: brew install git).',
-        },
-  );
+/** Was der Nutzer an der Frage „Was hinzufügen?" gewählt hat. */
+export type AnbieterWahl = 'lokal' | 'anbieter' | 'fertig' | 'unbekannt';
 
-  // msb (microsandbox)
-  checks.push(
-    input.msbAvailable
-      ? { id: 'msb', label: 'microsandbox (msb)', status: 'ok', hinweis: '' }
-      : {
-          id: 'msb',
-          label: 'microsandbox (msb)',
-          status: 'warn',
-          hinweis:
-            'msb fehlt — Setup nutzt den Prozess-Modus (ohne VM-Isolat, nur Dev). Voller VM-Modus: brew install superradcompany/tap/microsandbox, dann bun run baselines.',
-        },
-  );
+/**
+ * Eingabe an der Frage „Was hinzufügen? [lokal | anbieter]" auswerten. Leer =
+ * fertig. `ollama` bleibt als Alias für `lokal` akzeptiert: so hieß die Wahl,
+ * als das lokale Modell noch über Ollama lief — wer das Setup von früher
+ * kennt, soll nicht an einer „Unbekannte Wahl" hängen bleiben.
+ */
+export function parseAnbieterWahl(eingabe: string): AnbieterWahl {
+  const wahl = eingabe.trim().toLowerCase();
+  if (wahl === '') return 'fertig';
+  if (wahl === 'lokal' || wahl === 'ollama') return 'lokal';
+  if (wahl === 'anbieter') return 'anbieter';
+  return 'unbekannt';
+}
 
-  // Hypervisor — nur relevant, wenn msb da ist.
-  if (!input.msbAvailable) {
-    checks.push({
-      id: 'hypervisor',
-      label: 'Hypervisor (HVF)',
-      status: 'ok',
-      hinweis: 'übersprungen (kein msb — es bootet ohnehin keine VM).',
-    });
-  } else if (input.hypervisorAvailable === true) {
-    checks.push({ id: 'hypervisor', label: 'Hypervisor (HVF)', status: 'ok', hinweis: '' });
-  } else {
-    checks.push({
-      id: 'hypervisor',
-      label: 'Hypervisor (HVF)',
-      status: 'warn',
-      hinweis:
-        input.hypervisorAvailable === false
-          ? 'Kein Hypervisor (HVF) verfügbar — MicroVMs können nicht booten; es greift der Prozess-Fallback.'
-          : 'Hypervisor-Status unbekannt — falls MicroVMs nicht booten, hilft der Prozess-Modus (MACVIBES_SANDBOX=process).',
-    });
-  }
-
-  // Ports
-  checks.push(
-    input.belegtePorts.length === 0
-      ? { id: 'ports', label: 'Ports frei', status: 'ok', hinweis: '' }
-      : {
-          id: 'ports',
-          label: 'Ports frei',
-          status: 'warn',
-          hinweis: `Belegt: ${input.belegtePorts.map((p) => `:${p}`).join(' ')} — läuft macvibes schon? Erst: bun run shutdown. Ports (${input.belegtePorts.join(', ')}) freimachen.`,
-        },
-  );
-
-  return {
-    checks,
-    hatFehler: checks.some((c) => c.status === 'fail'),
-    hatWarnung: checks.some((c) => c.status === 'warn'),
-  };
+/**
+ * Aussperr-Absicherung des Sandbox-Backends: msb vorhanden → voller VM-Modus
+ * (microsandbox), sonst der klar benannte Prozess-Fallback statt eines toten
+ * Zustands (docs/installer-plan.md, Schritt 5).
+ */
+export function sandboxModeFor(msbAvailable: boolean): 'microsandbox' | 'process' {
+  return msbAvailable ? 'microsandbox' : 'process';
 }

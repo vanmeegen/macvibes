@@ -1,11 +1,13 @@
 /**
- * Startet den lokalen Modell-Router (LiteLLM) — wird von macvibes automatisch
- * aufgerufen (localRouterService), kann aber auch manuell laufen.
+ * Startet die optionale LiteLLM-Bridge (OpenAI-kompatible Anbieter hinter
+ * einem Anthropic-Endpunkt) — macvibes ruft sie automatisch auf, sobald eine
+ * `litellm.yaml` existiert; `bun run router` startet sie manuell. Das lokale
+ * Modell braucht sie NICHT: es läuft direkt auf oMLX.
  *
  *   Endpunkt:  http://localhost:8787/v1/messages  (Anthropic-Format)
- *   Backend:   Ollama auf http://localhost:11434
+ *   Backends:  laut `model_list` der Config (Cloud-Anbieter, optional oMLX)
  *
- * Bun-TS-Fassung von run.sh (windows-portierung-plan.md, P7): venv-Layout
+ * Plattformneutral (docs/windows-portierung-plan.md, P7): venv-Layout
  * (bin/ vs. Scripts/) und Python-Suche per Feature-Detection statt
  * Plattform-Weiche. Die Python-venv lebt AUSSERHALB des Repos
  * (~/macvibes/local-router-venv) und wird beim allerersten Start automatisch
@@ -15,23 +17,28 @@
  * Homebrew-Installation in `<libexec>` und wird bei jedem `brew upgrade`
  * ersetzt — nutzereigene Router-Config gehört deshalb nach
  * `<macvibesHome>/litellm.yaml` (oder explizit via
- * MACVIBES_LOCAL_ROUTER_CONFIG). Auflösung: configPath.ts.
+ * MACVIBES_LITELLM_CONFIG; alter Name MACVIBES_LOCAL_ROUTER_CONFIG gilt weiter).
+ * Auflösung: configPath.ts.
  */
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { macvibesHomeDir } from '@macvibes/shared/node';
+import { firstSetEnv, resolveBridgePort } from './bridgePort';
 import { resolveRouterConfigPath } from './configPath';
 
 const hier = import.meta.dir;
-const port = process.env['MACVIBES_LOCAL_ROUTER_PORT'] ?? '8787';
-const macvibesHome = process.env['MACVIBES_HOME'] ?? join(homedir(), 'macvibes');
+const port = resolveBridgePort({
+  portEnv: firstSetEnv(process.env, 'MACVIBES_LITELLM_PORT', 'MACVIBES_LOCAL_ROUTER_PORT'),
+  urlEnv: process.env['MACVIBES_LITELLM_URL'],
+});
+const macvibesHome = macvibesHomeDir();
 const venv = join(macvibesHome, 'local-router-venv');
-// Upgrade-feste Router-Config: MACVIBES_LOCAL_ROUTER_CONFIG >
+// Upgrade-feste Bridge-Config: MACVIBES_LITELLM_CONFIG >
 // <macvibesHome>/litellm.yaml > mitgelieferte Datei — Begründung in configPath.ts
 // (die mitgelieferte liegt bei einer Installation in libexec und überlebt kein
 // brew upgrade).
 const configPfad = resolveRouterConfigPath({
-  envPath: process.env['MACVIBES_LOCAL_ROUTER_CONFIG'],
+  envPath: firstSetEnv(process.env, 'MACVIBES_LITELLM_CONFIG', 'MACVIBES_LOCAL_ROUTER_CONFIG'),
   macvibesHome,
   bundledDir: hier,
 });
@@ -84,7 +91,7 @@ if (litellm === null) {
   process.exit(1);
 }
 
-// Kein `exec`-Ersatz nötig: der localRouterService beendet bei Bedarf den
+// Kein `exec`-Ersatz nötig: der modelServerService beendet bei Bedarf den
 // ganzen Prozessbaum (tree-kill); manuell gestartet reicht Ctrl+C.
 console.log(`LiteLLM-Config: ${configPfad}`);
 const router = Bun.spawn([litellm, '--config', configPfad, '--port', port, '--host', '127.0.0.1'], {

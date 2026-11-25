@@ -25,15 +25,17 @@ Bun-Workspaces-Monorepo:
     `MicrosandboxSandboxProvider` (echte MicroVMs). `baselineService` friert
     Template-Snapshots ein, `portService` mappt Preview-Ports.
     `vmServices` erzeugt die In-VM-Supervisor-Konfiguration (tini + monit),
-    `monitStatus` (in `preview/`) und `previewStatusPoller` lesen den
-    Preview-Status aus der monit-HTTP-API. (Der frühere `previewSupervisor`
+    der Agent-Daemon liest monit **in der VM** und pusht den Preview-Status
+    über seinen WebSocket (`agent/daemon/previewStatusReporter`,
+    `previewStatusPush`, ADR 0001); `previewStatusPoller` ergänzt host-seitig
+    die HTTP-Probe. (Der frühere `previewSupervisor`
     ist der generische `core/processSupervisor` und läuft nur noch im
-    `ProcessSandboxProvider` und im `localRouterService`.)
+    `ProcessSandboxProvider` und im `modelServerService`.)
 
   Die Schichtung (core/preview/db als Basis, darüber sandbox+agent, dann
   services, schema, http) erzwingt ein **Architektur-Gate** im Lint
-  (`eslint-plugin-boundaries`, Regelmatrix mit Begründungen in
-  `eslint.config.js`): Schichtverletzungen brechen `bun run ci`.
+  (oxlint mit `eslint-plugin-boundaries` als JS-Plugin, Regelmatrix mit
+  Begründungen in `oxlint.config.ts`): Schichtverletzungen brechen `bun run ci`.
 
   **Sandbox-/Preview-Schnittstelle (sauber gekapselt):** PID 1 der MicroVM ist
   ein **In-VM-Supervisor** (`tini -s` als Reaper + `monit`, Konfiguration aus
@@ -42,10 +44,12 @@ Bun-Workspaces-Monorepo:
   Watchdog, kein `msb exec` im Agent-Pfad. monit macht die geduldige
   **Startphase** (Port-Health-Check erst nach `30 cycles`), **Crash-Recovery**
   (Neustart) und **Crash-Loop-Schutz** (`5 restarts within 40 cycles →
-unmonitor` ≙ `failed`). Der Host **liest** den Status nur: über die
-  monit-HTTP-API (auf `127.0.0.1` gemappt) plus eine HTTP-Probe auf den
-  Preview-Port — `ready` gilt erst, wenn der Dev-Server wirklich HTTP
-  beantwortet (monit sieht nur den Prozess). Der einzige Vertrag zum Template
+unmonitor` ≙ `failed`). Der Host **liest** den Status nur: der
+  Agent-Daemon fragt monit lokal in der VM ab und pusht `preview-status` über
+  seine WebSocket-Verbindung (ADR 0001 — kein monit-Port-Mapping mehr), dazu
+  kommt eine HTTP-Probe des Hosts auf den Preview-Port — `ready` gilt erst,
+  wenn der Dev-Server wirklich HTTP beantwortet (monit sieht nur den Prozess);
+  bleiben die Pushes aus, entscheidet allein die Probe. Der einzige Vertrag zum Template
   ist `devCommand` + `previewPort` + PORT-Env aus `templates.json` — kein
   template-spezifischer Code in der Plattform. Der Preview-Status
   (`starting`/`ready`/`restarting`/`failed`/`stopped`) fließt über GraphQL
@@ -75,16 +79,36 @@ unmonitor` ≙ `failed`). Der Host **liest** den Status nur: über die
   - `agent/` — `AgentRunner`-Interface: `DaemonAgentRunner` (VM-Daemon über das
     WS-Gateway, der Produktivpfad), `ClaudeAgentRunner` (Host, Dev ohne msb),
     `FakeAgentRunner` (Tests). `agent/daemon/` ist der In-VM-Daemon,
-    `agentGateway` die Host-Gegenstelle, `claudeStreamJson`
-    (`agentEventsFromMessage`) mappt SDK-Messages auf `AgentEvent`s.
-  - `services/` — `chatService` (Turn-Queue, Streaming, Historie, Steering),
-    `projectsService`, `authService`, `autoCommitService`, `mirrorService`.
+    (`main` = Verdrahtung, `gatewayConnection` = Anmeldung/Heartbeat/Reconnect,
+    `daemonSession` = Turns), `agentGateway` die Host-Gegenstelle,
+    `sdkMessageMapping` (`agentEventsFromMessage`) mappt SDK-Messages auf
+    `AgentEvent`s — für Daemon UND Host-Runner; `appendPrompt` ist die
+    gemeinsame Zusatz-System-Anweisung, `vmAgentEnv` baut die VM-Umgebung.
+  - `services/` — `chatService` (Turn-Queue, Retry, Stop/Steering) mit seinen
+    Teilen unter `services/chat/` (`chatEventBus`, `chatMessageStore`,
+    `turnAttempt`, `configWarmup`), `projectsService`, `projectSessionService`,
+    `authService`, `autoCommitService` (ein `createAutoCommitter` für alle
+    automatischen Commits), `modelServerService` (oMLX + optionale
+    LiteLLM-Bridge mitstarten), `mirrorService`.
     (`gitService` — Orphan-Branch pro Projekt im Bare-Repo — und
     `workspaceService` liegen in `core/`.)
+  - `schema/` — GraphQL, nach Themen geschnitten: `types`, `guards`
+    (requireUser/requireAdmin, Rate-Limit), `authSchema`, `projectsSchema`,
+    `chatSchema`; `index` legt nur die Wurzeltypen an.
   - `http/anthropicProxy` — Credential-Proxy: die VM sieht nie einen Token.
+  - `testing/` — geteilte Test-Hilfen (DB, Temp-Verzeichnisse, Fixtures) für
+    die Tests aller Schichten.
 
-- **`apps/web`** — React 18 + MobX + MUI, Vite. Presentation-Model-Pattern.
-- **`packages/shared`** — Zod-Schemas, Branch-Slugify (Zod v4); die Schemas validieren serverseitig autoritativ, das Web importiert sie derzeit nicht.
+- **`apps/web`** — React 18 + MobX + MUI, Vite. Presentation-Model-Pattern:
+  Stores/Models unter `models/` (u. a. `ChatPageModel` für den Lebenszyklus
+  der Chat-Seite, `AdminUsersStore`, `NameDialogModel`), logikfreie Seiten
+  unter `pages/` mit ihren Teil-Komponenten in `pages/chat/`, `pages/projects/`
+  und `pages/components/`.
+- **`packages/shared`** — Zod-Schemas, Branch-Slugify (Zod v4),
+  Shutdown-Fristen; die Schemas validieren serverseitig autoritativ, das Web
+  importiert sie derzeit nicht. Der Einstieg `@macvibes/shared/node` trägt die
+  Node-only-Helfer, die Server UND Skripte teilen (`macvibesHomeDir`,
+  `parseEnvFile`, `supportsPosixModes`).
 - **`templates/`** — Projekt-Vorlagen (NICHT Teil der Workspaces), dynamisch
   aus `templates.json` gelesen. `pwa` ist Bun-nativ (kein Vite), `fullstack`
   spiegelt den macvibes-Stack.
@@ -124,10 +148,12 @@ bun run start              # Produktion: Web bauen + Server (liefert dist aus, L
 
 ## Sandbox / VM (microsandbox)
 
-- **Bun ist auf 1.3.14 gepinnt** (Host via `brew pin bun`, VM-Image
-  `oven/bun:1.3.14` in `config.ts`, `@types/bun` exakt in allen Manifesten):
-  das nächste große Bun ist ein Rust-Rewrite — NICHT upgraden ohne intensiven
-  Test aller Sandbox-/Agent-Pfade.
+- **Bun ist auf 1.4.5 gepinnt** (Host via `brew pin bun`, VM-Image
+  `oven/bun:1.4.5` in `config.ts`, `@types/bun` exakt in allen Manifesten,
+  `BUN_PIN` in `scripts/lib/doctorState.ts`, `.github/workflows/ci.yml`):
+  NICHT upgraden ohne Test aller Sandbox-/Agent-Pfade (CI, E2E, Echt-VM-Test,
+  Live-Suite). Der Sprung von 1.3.14 hat z. B. das Socket-Verhalten nach
+  einem Close geändert (ECONNRESET beim Nachschreiben).
 - `msb` muss installiert sein (`brew install superradcompany/tap/microsandbox`).
   Ohne `msb` fällt der Server automatisch auf den Prozess-Provider zurück
   (kein VM-Isolat — nur Dev). Erzwingen: `MACVIBES_SANDBOX=microsandbox|process`.
@@ -160,7 +186,7 @@ Brew-Service (Autostart beim Login); das Storage ist in der Caddyfile auf
 `~/macvibes/caddy-storage` gepinnt — sonst erzeugen verschiedene Startarten
 VERSCHIEDENE Roots mit gleichem CN (Live-Befund 2026-07-17). Geräte müssen
 der lokalen CA einmalig vertrauen: Mac `caddy trust`; iPad das Root-Zertifikat
-(`~/Library/Application Support/Caddy/pki/authorities/local/root.crt`)
+(`~/macvibes/caddy-storage/pki/authorities/local/root.crt`)
 installieren + unter Zertifikatsvertrauen aktivieren.
 
 ## Windows (Stufe 1 portiert, Stand 2026-08-05)
@@ -169,19 +195,19 @@ installieren + unter Zertifikatsvertrauen aktivieren.
 Prozess-Provider laufen nativ unter Windows 11; die CI-Matrix in
 `.github/workflows/ci.yml` (macOS + Windows + E2E) ist seit `27935bf`
 **Pflicht** (kein `continue-on-error` mehr).
-Leitprinzip aus `windows-portierung-plan.md`: **plattformneutrale
+Leitprinzip aus `docs/windows-portierung-plan.md`: **plattformneutrale
 Mechanismen statt `process.platform`-Weichen** (`bun exec` + `tree-kill` in
-`core/exec.ts`, Feature-Detection in `core/fsCapabilities.ts`) — bitte
+`core/exec.ts`, Feature-Detection in `packages/shared/src/node/fsCapabilities.ts`) — bitte
 beibehalten. Wichtig:
 
-- **Bun-Pin 1.3.14** unter Windows via winget/scoop (kein brew).
+- **Bun-Pin 1.4.5** unter Windows via winget/scoop (kein brew).
 - **MicroVMs (Stufe 2) noch nicht produktiv:** der Baseline-Bau scheitert
   unter Windows an msb-Bug #1218 (`cp` auf ro-Mounts meldet EACCES beim
   close; Fix upstream gemerged, noch in keinem Release ≤ 0.6.8). Die
   VM-Integrationstests überspringen sich dort deshalb.
 - Defender legt beim ersten Preview-Port **stille Block-Regeln** für die
   `msb.exe` aus `node_modules` an — Allow-Regel per elevated `netsh` setzen
-  (Details in `windows-portierung.md`, Stufe 0).
+  (Details in `docs/windows-portierung.md`, Stufe 0).
 - git-Härtung nutzt BEWUSST `/dev/null`/`/bin/false` auch unter Windows
   (MSYS-Git übersetzt sie; `os.devNull` wird von git abgelehnt — siehe
   Kommentar in `core/gitService.ts`).

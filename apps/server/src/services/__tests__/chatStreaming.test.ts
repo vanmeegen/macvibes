@@ -4,7 +4,7 @@ import type { AgentRunner, TurnHandle } from '../../agent/runner';
 import type { Db } from '../../db/client';
 import { projects, type UserRow } from '../../db/schema';
 import { ChatService, type ChatEventPayload, type ChatServiceOptions } from '../chatService';
-import { createTestDb, createUser, waitFor } from './testUtils';
+import { createTestDb, createUser, waitFor } from '../../testing/testUtils';
 
 /**
  * Streaming-Kosten: Jedes Text-Delta schrieb die GANZE Zeile neu in die DB und

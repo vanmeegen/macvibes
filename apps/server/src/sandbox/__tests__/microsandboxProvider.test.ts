@@ -3,11 +3,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'n
 import { join } from 'node:path';
 import { buildDaemonBundle } from '../../agent/daemonBundle';
 import { baselineExists, buildTemplateBaseline } from '../baselineService';
-import {
-  createTempDir,
-  createTemplatesFixture,
-  removeDir,
-} from '../../services/__tests__/testUtils';
+import { createTempDir, createTemplatesFixture, removeDir } from '../../testing/testUtils';
 import { createProjectBranch, ensureBareRepo } from '../../core/gitService';
 import { workspaceDirFor } from '../../core/workspaceService';
 import { AGENT_CONFIG_GUEST_DIR } from '../../core/vmContract';
@@ -24,7 +20,7 @@ const available = await msbAvailable();
 // 2. msb#1218 (Fix upstream gemerged, in 0.6.8 noch nicht released): `cp`
 //    auf ro-gemountete Dateien scheitert unter Windows (close → EACCES) —
 //    der Baseline-Bau in der Builder-VM, den beforeAll braucht, ist dort
-//    blockiert (windows-portierung.md, Stufe 0).
+//    blockiert (docs/windows-portierung.md, Stufe 0).
 // 3. MACVIBES_DISABLE_VM_TESTS=1 (ci.yml): GitHub-Runner haben KEINE nested
 //    virtualization — msbAvailable() ist dort trotzdem true (das SDK liegt
 //    in node_modules), der VM-Start scheitert erst mit VmSetup(VmCreate).
@@ -56,7 +52,7 @@ beforeAll(async () => {
       await buildTemplateBaseline({
         templatesDir: templates,
         templateDir: FIXTURE_TEMPLATE_DIR,
-        image: 'oven/bun:1.3.14',
+        image: 'oven/bun:1.4.5',
       });
     } finally {
       await removeDir(templates);
@@ -86,6 +82,8 @@ function providerConfig(home: string, bare: string): MicrosandboxProviderConfig 
     memoryMib: 512,
     agentDaemon: {
       bundleDir,
+      // Diese Suite vergibt keine echten Tokens — nichts zu entwerten.
+      revokeToken: () => {},
       envFor: (sandboxName) => ({
         MACVIBES_AGENT_GATEWAY_URL: `ws://host.microsandbox.internal:9/agent?sandbox=${sandboxName}&token=test`,
         MACVIBES_AGENT_CWD: '/work',

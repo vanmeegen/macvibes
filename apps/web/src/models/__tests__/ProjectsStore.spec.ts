@@ -1,14 +1,9 @@
 import { runInAction } from 'mobx';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { gqlRequest } from '../../api/graphqlClient';
-import type { Project, Template } from '../../api/types';
-import { AuthStore } from '../AuthStore';
-import {
-  agentWorkingLabel,
-  PROJECT_FILTER_STORAGE_KEY,
-  ProjectsStore,
-  projectStatusChip,
-} from '../ProjectsStore';
+import type { Project } from '../../api/types';
+import { makeAuthStore, makeProject, makeTemplate, makeUser } from '../../__tests__/factories';
+import { PROJECT_FILTER_STORAGE_KEY, ProjectsStore } from '../ProjectsStore';
 
 vi.mock('../../api/graphqlClient', () => ({
   gqlRequest: vi.fn(),
@@ -16,64 +11,7 @@ vi.mock('../../api/graphqlClient', () => ({
 
 const mockGql = vi.mocked(gqlRequest);
 
-function makeProject(overrides: Partial<Project> & { id: string }): Project {
-  return {
-    name: `Projekt ${overrides.id}`,
-    templateDir: 'react-starter',
-    owner: { id: 'u1', username: 'alice', role: 'admin', approved: true },
-    agentModel: 'claude-sonnet-5',
-    lastActivityAt: '2026-07-02T12:00:00.000Z',
-    sandboxStatus: 'stopped',
-    previewStatus: 'stopped',
-    turnActive: false,
-    ...overrides,
-  };
-}
-
-const templates: Template[] = [
-  {
-    name: 'React Starter',
-    description: 'Vite + React Grundgerüst',
-    dir: 'react-starter',
-  },
-];
-
-function makeAuthStore(username: string | null): AuthStore {
-  const authStore = new AuthStore();
-  runInAction(() => {
-    authStore.currentUser =
-      username === null ? null : { id: 'u1', username, role: 'user', approved: true };
-    authStore.initialized = true;
-  });
-  return authStore;
-}
-
-describe('agentWorkingLabel — sichtbares Boot-Feedback statt gefühltem Hänger', () => {
-  it('zeigt beim VM-Boot klar an, dass die MicroVM startet', () => {
-    expect(agentWorkingLabel('starting')).toBe('MicroVM startet — Workspace wird vorbereitet …');
-  });
-
-  it('zeigt bei gestoppter/stoppender Sandbox, dass sie gleich gestartet wird', () => {
-    expect(agentWorkingLabel('stopped')).toBe('Sandbox wird gestartet …');
-    expect(agentWorkingLabel('stopping')).toBe('Sandbox wird gestartet …');
-  });
-
-  it('zeigt bei laufender Sandbox den normalen Agenten-Status', () => {
-    expect(agentWorkingLabel('running')).toBe('Agent arbeitet …');
-  });
-});
-
-describe('projectStatusChip — „arbeitet" hat Vorrang vor dem Sandbox-Status', () => {
-  it('zeigt „arbeitet", wenn ein Agent-Turn läuft (Sandbox läuft dann ohnehin)', () => {
-    expect(projectStatusChip('running', true)).toEqual({ label: 'arbeitet', color: 'warning' });
-  });
-
-  it('zeigt sonst den Sandbox-Status wie bisher', () => {
-    expect(projectStatusChip('running', false)).toEqual({ label: 'bereit', color: 'success' });
-    expect(projectStatusChip('starting', false)).toEqual({ label: 'startet', color: 'default' });
-    expect(projectStatusChip('stopped', false)).toEqual({ label: 'gestoppt', color: 'default' });
-  });
-});
+const templates = [makeTemplate()];
 
 describe('ProjectsStore', () => {
   beforeEach(() => {
@@ -115,11 +53,11 @@ describe('ProjectsStore', () => {
         store.projects = [
           makeProject({
             id: 'p1',
-            owner: { id: 'u1', username: 'alice', role: 'admin', approved: true },
+            owner: makeUser({ role: 'admin' }),
           }),
           makeProject({
             id: 'p2',
-            owner: { id: 'u2', username: 'bob', role: 'user', approved: true },
+            owner: makeUser({ id: 'u2', username: 'bob' }),
           }),
         ];
       });
@@ -134,11 +72,11 @@ describe('ProjectsStore', () => {
         store.projects = [
           makeProject({
             id: 'p1',
-            owner: { id: 'u1', username: 'alice', role: 'admin', approved: true },
+            owner: makeUser({ role: 'admin' }),
           }),
           makeProject({
             id: 'p2',
-            owner: { id: 'u2', username: 'bob', role: 'user', approved: true },
+            owner: makeUser({ id: 'u2', username: 'bob' }),
           }),
         ];
       });
@@ -246,7 +184,7 @@ describe('copyProject („Kopieren und Anpassen" — für JEDEN User)', () => {
         makeProject({
           id: 'p-bob',
           name: 'Bobs Dashboard',
-          owner: { id: 'u2', username: 'bob', role: 'user', approved: true },
+          owner: makeUser({ id: 'u2', username: 'bob' }),
         }),
       ];
     });
@@ -295,7 +233,7 @@ describe('copyProject („Kopieren und Anpassen" — für JEDEN User)', () => {
 describe('canManage — Kartenmenü für Eigentümer und Admins', () => {
   const foreignProject = makeProject({
     id: 'p-bob',
-    owner: { id: 'u2', username: 'bob', role: 'user', approved: true },
+    owner: makeUser({ id: 'u2', username: 'bob' }),
   });
 
   it('erlaubt normalen Usern nur eigene Projekte', () => {
@@ -478,6 +416,31 @@ describe('enterProject: Eager-Start ohne Betrachter-Kennung', () => {
     expect(variablen[0]).toEqual({ id: 'p1' });
   });
 
+  it('ein alter Fehler klebt nicht: die nächste Aktion räumt ihn weg', async () => {
+    // Vorher blieb z. B. ein setProjectModel-Fehler dauerhaft über der
+    // Chat-Seite stehen, weil nur load() und deleteProject() ihn löschten.
+    const store = new ProjectsStore(makeAuthStore('alice'));
+    runInAction(() => {
+      store.error = 'Alter Fehler';
+    });
+    vi.mocked(gqlRequest).mockResolvedValue({ projects: [], templates: [], agentModels: [] });
+
+    await store.enterProject('p1');
+
+    expect(store.error).toBeNull();
+  });
+
+  it('clearError verwirft die Fehlermeldung (Seitenwechsel)', () => {
+    const store = new ProjectsStore(makeAuthStore('alice'));
+    runInAction(() => {
+      store.error = 'Alter Fehler';
+    });
+
+    store.clearError();
+
+    expect(store.error).toBeNull();
+  });
+
   it('der Store kennt kein leaveProject mehr — Abmelden ist Subscription-Sache', () => {
     const store = new ProjectsStore(makeAuthStore('alice'));
     expect('leaveProject' in store).toBe(false);
@@ -589,6 +552,34 @@ describe('Status-Polling pausiert im versteckten Tab', () => {
     vi.advanceTimersByTime(1000);
     expect(mockGql).toHaveBeenCalledTimes(2);
     store.stopPolling();
+  });
+
+  it('ein zweites startPolling ersetzt das Intervall (Seitenwechsel Übersicht → Chat)', () => {
+    const store = new ProjectsStore(makeAuthStore('alice'));
+    store.startPolling(2000);
+    store.startPolling(1000);
+    vi.advanceTimersByTime(1000);
+    expect(mockGql).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1000);
+    // Liefe das alte 2-s-Intervall weiter, wären es hier drei Abfragen.
+    expect(mockGql).toHaveBeenCalledTimes(2);
+    store.stopPolling();
+  });
+
+  it('das Stoppen eines abgelösten Pollings beendet das neue nicht (Übersicht räumt NACH dem Chat-Start auf)', () => {
+    // React führt das passive Aufräumen der verlassenen Übersicht erst aus,
+    // nachdem die Chat-Seite ihr Polling (im Layout-Effekt) gestartet hat.
+    const store = new ProjectsStore(makeAuthStore('alice'));
+    const stopOverview = store.startPolling(2000);
+    const stopChat = store.startPolling(1000);
+    stopOverview();
+
+    vi.advanceTimersByTime(1000);
+    expect(mockGql).toHaveBeenCalledTimes(1);
+
+    stopChat();
+    vi.advanceTimersByTime(3000);
+    expect(mockGql).toHaveBeenCalledTimes(1);
   });
 
   it('reagiert nach stopPolling nicht mehr auf Sichtbarkeitswechsel', () => {

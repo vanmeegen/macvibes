@@ -43,13 +43,67 @@ export function spawnShellCommand(
     stdout: out,
     stderr: err,
   });
+  let killing = false;
   return {
     pid: proc.pid,
     kill: () => {
-      if (proc.exitCode === null) killTree(proc.pid);
+      // Wiederholte Aufrufe starten keine zweite Warteschleife.
+      if (killing || proc.exitCode !== null) return;
+      killing = true;
+      void killTreeOnceSettled(proc);
     },
     exited: proc.exited.then((code) => code ?? 0),
   };
+}
+
+/**
+ * Höchstens so lange wartet kill() darauf, dass der Wrapper sein Kind gestartet
+ * hat. Großzügig, weil der Wrapper unter Last (voller Testlauf) deutlich über
+ * eine Sekunde bis zum Kind-Start braucht — und eine zu knappe Frist genau die
+ * Waise hinterlässt, die sie verhindern soll. Im Normalfall kostet die Frist
+ * nichts: sie endet, sobald das Kind da ist.
+ *
+ * Bewusst KEINE eigene Prozessgruppe (detached + Gruppen-Kill) — das wäre zwar
+ * race-frei, aber die Kinder überlebten dann jeden harten Abbruch des Servers
+ * (Playwright und Terminals beenden die Prozessgruppe des Servers; getestet:
+ * die E2E-Suite blieb an verwaisten Dev-Servern hängen).
+ */
+const CHILD_SPAWN_GRACE_MS = 10_000;
+
+/**
+ * Beendet den Prozessbaum — aber erst, wenn der Wrapper (`bun exec`) sein Kind
+ * gestartet hat. tree-kill sammelt die Nachfahren EINMAL ein und beendet dann
+ * alle; ein kill() unmittelbar nach dem Spawn fand deshalb noch kein Kind,
+ * beendete nur den Wrapper, und das kurz darauf gestartete Kind lief als Waise
+ * weiter (verwaiste Dev-Server nach einem Stop direkt nach dem Start).
+ *
+ * Die Wartezeit ist gedeckelt: ein Kommando aus reinen Shell-Builtins bekommt
+ * nie ein Kind und wird nach der Frist trotzdem beendet.
+ */
+async function killTreeOnceSettled(proc: { pid: number; exitCode: number | null }): Promise<void> {
+  const deadline = Date.now() + CHILD_SPAWN_GRACE_MS;
+  while (proc.exitCode === null && Date.now() < deadline && !(await hasChildProcess(proc.pid))) {
+    await Bun.sleep(20);
+  }
+  if (proc.exitCode === null) killTree(proc.pid);
+}
+
+/**
+ * Hat der Prozess schon ein Kind? Feature-Detection statt Plattform-Weiche:
+ * ohne `pgrep` (Windows) gilt „ja" — dann wird wie bisher sofort beendet.
+ */
+async function hasChildProcess(pid: number): Promise<boolean> {
+  if (Bun.which('pgrep') === null) return true;
+  try {
+    const exitCode = await Bun.spawn(['pgrep', '-P', String(pid)], {
+      stdout: 'ignore',
+      stderr: 'ignore',
+    }).exited;
+    return exitCode === 0;
+  } catch (error) {
+    console.warn(`Kindprozesse von ${pid} nicht ermittelbar:`, error);
+    return true;
+  }
 }
 
 /**

@@ -1,10 +1,11 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { GUEST_WORKDIR, MONIT_HTTPD_PORT } from '../../core/vmContract';
 import { httpProbe } from '../../preview/httpProbe';
+import { defaultAppendSystemPrompt } from '../appendPrompt';
 import { DaemonSession } from './daemonSession';
+import { GatewayConnection } from './gatewayConnection';
 import type { QueryHandle } from './daemonSession';
 import { PreviewStatusReporter } from './previewStatusReporter';
-import { parseHostToDaemon } from './protocol';
 import type { DaemonToHostMessage } from './protocol';
 
 /**
@@ -12,11 +13,12 @@ import type { DaemonToHostMessage } from './protocol';
  * hält die Claude-Session über das Agent SDK am Leben und spricht mit dem
  * Host über eine ausgehende WebSocket-Verbindung (host.microsandbox.internal,
  * derselbe Weg wie der Credential-Proxy). Ersetzt das fragile
- * claude-CLI-über-`msb exec`-Muster (chatproblems.md).
+ * claude-CLI-über-`msb exec`-Muster (docs/archiv/chatproblems.md).
  *
  * Env:
  * - MACVIBES_AGENT_GATEWAY_URL  ws://host.microsandbox.internal:<port>/agent?sandbox=…&token=…
  * - MACVIBES_AGENT_CWD          Arbeitsverzeichnis (Default: GUEST_WORKDIR)
+ * - MACVIBES_AGENT_APPEND_PROMPT  optionale Zusatz-System-Anweisung (Default: agent/appendPrompt)
  */
 
 const gatewayUrl = process.env['MACVIBES_AGENT_GATEWAY_URL'];
@@ -28,25 +30,16 @@ if (!gatewayUrl) {
 // Workspace-Mountpunkt nutzt — eine eigene Kopie hier driftete sonst still.
 const cwd = process.env['MACVIBES_AGENT_CWD'] ?? GUEST_WORKDIR;
 
-/**
- * Zusätzliche System-Anweisung an das Modell. Nötig für schwächere lokale
- * Modelle (z. B. qwen3.6-coder), die sonst (a) Arbeit nur ankündigen statt Tools
- * aufzurufen und (b) Dateien nach /home/user statt ins Projekt (cwd) schreiben —
- * beides macht die Live-Preview „tot". Für die Claude-API ist die Anweisung ein
- * harmloses No-Op (macht es ohnehin richtig). Über Env überschreibbar.
- */
+// Zusatz-System-Anweisung: Übersteuerung aus der VM-Env (der Host reicht
+// config.agent.appendSystemPrompt über buildVmAgentEnv herein), sonst der
+// eingebaute Default — derselbe wie im Host-Runner.
 const appendSystemPrompt =
-  process.env['MACVIBES_AGENT_APPEND_PROMPT'] ??
-  `WICHTIG (macvibes-Laufzeitumgebung): Das Projekt liegt im aktuellen ` +
-    `Arbeitsverzeichnis ${cwd}. Erstelle und bearbeite ALLE Dateien ausschließlich ` +
-    `dort mit RELATIVEN Pfaden. Verwende NIEMALS absolute Pfade wie /home/user/... ` +
-    `oder /root/... — Dateien außerhalb von ${cwd} sind für die Live-Preview unsichtbar. ` +
-    `Lies zuerst AGENTS.md im Projekt und HALTE DICH DARAN (welche Datei die App-Wurzel ` +
-    `ist, was ausgeliefert wird). Beende deinen Turn NIEMALS mit einer Ankündigung wie ` +
-    `"Jetzt mache ich X" oder "Als Nächstes …" — führe angekündigte Schritte SOFORT im ` +
-    `selben Turn aus und arbeite die Aufgabe vollständig ab, bevor du zusammenfasst.`;
+  process.env['MACVIBES_AGENT_APPEND_PROMPT'] ?? defaultAppendSystemPrompt(cwd);
 
-let socket: WebSocket | null = null;
+// Die Session entsteht vor der Verbindung (ihre Events brauchen `send`), die
+// Verbindung vor dem ersten Kommando — deshalb die späte Referenz.
+let connection: GatewayConnection | null = null;
+const send = (message: DaemonToHostMessage): boolean => connection?.send(message) ?? false;
 
 const session = new DaemonSession({
   cwd,
@@ -54,9 +47,7 @@ const session = new DaemonSession({
     if (message.kind === 'event') {
       console.log(`Agent-Daemon: Event ${message.event.type} (Turn ${message.turnId})`);
     }
-    if (socket !== null && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify(message));
-    } else {
+    if (!send(message)) {
       // Verbindung gerade weg — der Host bricht den Turn seinerseits ab;
       // die Claude-Session im SDK lebt weiter (nächster Turn resumt nahtlos).
       console.error('Agent-Daemon: Event verworfen (Gateway nicht verbunden):', message.kind);
@@ -88,7 +79,7 @@ const session = new DaemonSession({
 /**
  * Preview-Status-Push (ADR 0001): monit lokal lesen, Status über die stehende
  * Daemon-Verbindung melden — kein fragiles monit-Port-Mapping auf dem Host.
- * Ohne MACVIBES_PREVIEW_PORT (z. B. alte Provider-Version) läuft der Daemon
+ * Ohne MACVIBES_PREVIEW_PORT läuft der Daemon
  * ohne Reporter weiter; der Host fällt dann auf seine HTTP-Probe zurück.
  */
 const previewPort = Number(process.env['MACVIBES_PREVIEW_PORT'] ?? '');
@@ -105,116 +96,24 @@ if (Number.isFinite(previewPort) && previewPort > 0) {
       return response.text();
     },
     probe: () => httpProbe(`http://127.0.0.1:${previewPort}/`),
-    send: (status) => {
-      if (socket !== null && socket.readyState === WebSocket.OPEN) {
-        socket.send(
-          JSON.stringify({ kind: 'preview-status', status } satisfies DaemonToHostMessage),
-        );
-      }
-    },
+    // Ohne Verbindung verworfen: der nächste Takt meldet den dann aktuellen Status.
+    send: (status) => void send({ kind: 'preview-status', status }),
   });
   reporter.start();
 } else {
   console.error('Agent-Daemon: MACVIBES_PREVIEW_PORT fehlt — kein Preview-Status-Push.');
 }
 
-/**
- * Heartbeat-Intervall: hält den NAT-Flow VM→Host warm. microsandbox lässt
- * idle TCP-Flows nach kurzer Zeit still sterben — ohne Ping verschwinden
- * Host-Kommandos nach ruhigen Phasen spurlos (Live-Befund 2026-07-06).
- */
-const PING_INTERVAL_MS = 15_000;
-
-/** Dauerhafte Verbindung zum Host-Gateway mit Backoff-Reconnect. */
-function connect(attempt = 0): void {
-  const ws = new WebSocket(gatewayUrl as string);
-  socket = ws;
-  let pingTimer: ReturnType<typeof setInterval> | null = null;
-
-  ws.addEventListener('open', () => {
-    console.log('Agent-Daemon: mit Host-Gateway verbunden');
-    ws.send(JSON.stringify({ kind: 'ready' } satisfies DaemonToHostMessage));
-    pingTimer = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ kind: 'ping' } satisfies DaemonToHostMessage));
-      }
-    }, PING_INTERVAL_MS);
-  });
-
-  ws.addEventListener('message', (event) => {
-    const raw = typeof event.data === 'string' ? event.data : '';
-    const message = parseHostToDaemon(raw);
-    if (message === null) {
-      console.error('Agent-Daemon: unverständliche Host-Nachricht verworfen:', raw.slice(0, 200));
-      return;
-    }
-    if (message.kind === 'pong') {
-      // Heartbeat-Antwort — hält den NAT-Flow in beide Richtungen aktiv.
-      return;
-    }
-    console.log(
-      `Agent-Daemon: Kommando ${message.kind}` +
-        ('turnId' in message ? ` (Turn ${message.turnId})` : ''),
-    );
-    try {
-      if (message.kind === 'start-turn') {
-        // Sofortige Quittung: beweist dem Host, dass das Kommando ankam
-        // (Schutz gegen halbtote Verbindungen nach Daemon-Neustart).
-        ws.send(
-          JSON.stringify({
-            kind: 'turn-started',
-            turnId: message.turnId,
-          } satisfies DaemonToHostMessage),
-        );
-        session.startTurn(message);
-      } else if (message.kind === 'interrupt') {
-        session.interrupt(message.turnId);
-      } else {
-        // shutdown: sauber beenden — der In-VM-Supervisor startet uns frisch.
-        console.error('Agent-Daemon: Shutdown angefordert — Supervisor übernimmt den Neustart.');
-        process.exit(0);
-      }
-    } catch (error) {
-      // Nie still scheitern — der Host würde sonst ewig warten.
-      console.error('Agent-Daemon: Kommando fehlgeschlagen:', error);
-      if (message.kind === 'start-turn') {
-        const failure: DaemonToHostMessage = {
-          kind: 'event',
-          turnId: message.turnId,
-          event: { type: 'error', message: `Daemon-Kommando fehlgeschlagen: ${String(error)}` },
-        };
-        const abort: DaemonToHostMessage = {
-          kind: 'event',
-          turnId: message.turnId,
-          event: { type: 'turn-aborted' },
-        };
-        ws.send(JSON.stringify(failure));
-        ws.send(JSON.stringify(abort));
-      }
-    }
-  });
-
-  ws.addEventListener('close', () => {
-    if (pingTimer !== null) clearInterval(pingTimer);
-    if (socket === ws) socket = null;
-    // Der Host hat den Turn bei einem Abriss seinerseits abgebrochen. Ohne
-    // diesen Aufruf bliebe currentTurnId hier gesetzt und die Notwehr-Sperre
-    // in startTurn wiese ab da JEDEN Folge-Turn ab.
-    session.abandonTurn();
-    const delayMs = Math.min(10_000, 500 * 2 ** Math.min(attempt, 4));
-    console.error(`Agent-Daemon: Gateway-Verbindung weg — Reconnect in ${delayMs}ms`);
-    setTimeout(() => connect(attempt + 1), delayMs);
-  });
-
-  ws.addEventListener('error', (event) => {
-    // close folgt ohnehin — hier nur Diagnose.
-    console.error('Agent-Daemon: WebSocket-Fehler:', event);
-  });
-
-  // Nach erfolgreichem Connect den Backoff zurücksetzen.
-  ws.addEventListener('open', () => {
-    attempt = 0;
-  });
-}
-
-connect();
+// Dauerhafte Verbindung zum Host-Gateway (Anmeldung, Heartbeat, Kommandos,
+// Backoff-Reconnect): gatewayConnection.ts.
+connection = new GatewayConnection({
+  url: gatewayUrl,
+  session: {
+    startTurn: (message) => session.startTurn(message),
+    interrupt: (turnId) => session.interrupt(turnId),
+    abandonTurn: () => session.abandonTurn(),
+  },
+  // Sauber beenden — der In-VM-Supervisor (monit) startet den Daemon frisch.
+  onShutdown: () => process.exit(0),
+});
+connection.start();

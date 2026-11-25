@@ -14,6 +14,11 @@ import type { DataStore } from '../models/DataStore';
 /** Feste Serienfarben (validierte Palette), nie rotierend zugewiesen. */
 const SERIES_COLORS = ['#2a78d6', '#1baf7a', '#eda100', '#008300', '#4a3aa7', '#e34948'];
 
+/** Farbe der n-ten Serie; nach der letzten Farbe beginnt die Palette von vorn. */
+function seriesColor(index: number): string {
+  return SERIES_COLORS[index % SERIES_COLORS.length] ?? '#2a78d6';
+}
+
 const numberFormat = new Intl.NumberFormat('de-DE');
 
 /**
@@ -52,7 +57,7 @@ export const DemoChart = observer(({ store }: { store: DataStore }) => {
               tickFormatter={(value: number) => numberFormat.format(value)}
             />
             <Tooltip
-              formatter={(value: number | string) =>
+              formatter={(value) =>
                 typeof value === 'number' ? numberFormat.format(value) : value
               }
               cursor={{ fill: 'var(--hover-wash)' }}
@@ -62,7 +67,7 @@ export const DemoChart = observer(({ store }: { store: DataStore }) => {
               <Bar
                 key={key}
                 dataKey={key}
-                fill={SERIES_COLORS[index % SERIES_COLORS.length]}
+                fill={seriesColor(index)}
                 radius={[4, 4, 0, 0]}
                 maxBarSize={40}
               />

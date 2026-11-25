@@ -1,8 +1,7 @@
 import { runInAction } from 'mobx';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { gqlRequest } from '../../api/graphqlClient';
-import type { Template } from '../../api/types';
-import { AuthStore } from '../AuthStore';
+import { makeAuthStore, makeProject, makeTemplate } from '../../__tests__/factories';
 import { CreateProjectModel } from '../CreateProjectModel';
 import { ProjectsStore } from '../ProjectsStore';
 
@@ -12,22 +11,13 @@ vi.mock('../../api/graphqlClient', () => ({
 
 const mockGql = vi.mocked(gqlRequest);
 
-const templates: Template[] = [
-  {
-    name: 'React Starter',
-    description: 'Vite + React Grundgerüst',
-    dir: 'react-starter',
-  },
-  {
-    name: 'Bun API',
-    description: 'Minimaler Bun-HTTP-Server',
-    dir: 'bun-api',
-  },
+const templates = [
+  makeTemplate(),
+  makeTemplate({ name: 'Bun API', description: 'Minimaler Bun-HTTP-Server', dir: 'bun-api' }),
 ];
 
 function makeModel(): { model: CreateProjectModel; projectsStore: ProjectsStore } {
-  const authStore = new AuthStore();
-  const projectsStore = new ProjectsStore(authStore);
+  const projectsStore = new ProjectsStore(makeAuthStore(null));
   runInAction(() => {
     projectsStore.templates = templates;
   });
@@ -78,14 +68,7 @@ describe('CreateProjectModel', () => {
 
   it('legt bei Erfolg das Projekt an, schließt den Dialog und lädt die Projektliste neu', async () => {
     const { model, projectsStore } = makeModel();
-    const createdProject = {
-      id: 'p1',
-      name: 'Mein Projekt',
-      templateDir: 'bun-api',
-      owner: { id: 'u1', username: 'alice' },
-      lastActivityAt: '2026-07-03T08:00:00.000Z',
-      sandboxStatus: 'stopped',
-    };
+    const createdProject = makeProject({ id: 'p1', name: 'Mein Projekt', templateDir: 'bun-api' });
     // 1. Aufruf: createProject-Mutation, 2. Aufruf: Neuladen der Projektliste.
     mockGql
       .mockResolvedValueOnce({ createProject: createdProject })

@@ -213,7 +213,7 @@ describe('Pfad-Allowlist (H9): der Gast bestimmt den Upstream-Pfad nicht', () =>
 });
 
 describe('Modell-Routing (Modellwahl pro Chat: Claude API vs. lokaler Router)', () => {
-  // Zweiter Upstream: der lokale Shim/Router (LiteLLM) für qwen-Modelle.
+  // Zweiter Upstream: der lokale Modell-Server für Nicht-Claude-Modelle.
   let localUpstream: ReturnType<typeof Bun.serve>;
   const localSeen: SeenRequest[] = [];
 

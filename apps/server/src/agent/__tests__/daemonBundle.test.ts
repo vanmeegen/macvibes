@@ -1,16 +1,9 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { existsSync, readFileSync } from 'node:fs';
 import { buildDaemonBundle } from '../daemonBundle';
-import { createTempDir, removeDir } from '../../services/__tests__/testUtils';
+import { createTempDir, trackTempDirs } from '../../testing/testUtils';
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (dir) await removeDir(dir);
-  }
-});
+const tempDirs = trackTempDirs();
 
 describe('buildDaemonBundle', () => {
   test('bündelt den Daemon zu einer Datei — Agent SDK bleibt externer Import', async () => {

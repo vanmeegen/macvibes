@@ -1,4 +1,4 @@
-export { users, type UserRow, type NewUserRow } from './users';
-export { sessions, type SessionRow } from './sessions';
-export { projects, type ProjectRow, type NewProjectRow } from './projects';
+export { users, type UserRow } from './users';
+export { sessions } from './sessions';
+export { projects, type ProjectRow } from './projects';
 export { chatMessages, type ChatMessageRow } from './chatMessages';

@@ -38,11 +38,11 @@ Läuft **nach** dem Voll-Install (Deps sind da) beim ersten Start. Leitregel:
 **Setup endet immer in einem lauffähigen, nicht ausgesperrten Zustand** — nie
 halb konfiguriert.
 
-1. **Doctor** — prüft `bun` (Pin 1.3.14), `git`, `msb` + Hypervisor (HVF auf
+1. **Doctor** — prüft `bun` (Pin 1.4.5), `git`, `msb` + Hypervisor (HVF auf
    Apple Silicon), freie Ports (4000/4010/4173, Web 5173). Fehlt etwas: klare,
    umsetzbare Meldung (welcher `brew install …`), kein stiller Abbruch.
 2. **Modell-Anbieter wählen** (siehe unten) — Claude als Default, optional
-   Ollama (lokal) oder eigene Anbieter per URL + Token (Modell-Liste vom
+   das lokale Modell (oMLX) oder eigene Anbieter per URL + Token (Modell-Liste vom
    Anbieter + Format-Probe).
 3. **Admin festlegen** — `MACVIBES_ADMIN_USERNAME` ist **Pflicht**. Ohne
    Bootstrap-Admin kann niemand Nutzer freischalten → das ist die
@@ -68,10 +68,11 @@ Das Setup fragt den Anbieter ab statt Claude fest zu verdrahten:
   `claude setup-token`, für Max/Abo bevorzugt) **oder** `ANTHROPIC_API_KEY`.
 - **Optional ankreuzbar: weitere Anbieter.** Wird es gewählt, gibt es zwei
   Wege:
-  - **Ollama (lokal)** — braucht KEINE Env: der mitgelieferte LiteLLM-Router
-    wird in `config.ts` automatisch erkannt und gestartet
-    (`detectLocalRouterCommand`), lokale Modelle sind damit ohne Zutun aktiv.
-    Nur ein abweichender Router-Befehl setzt `MACVIBES_LOCAL_ROUTER_CMD`.
+  - **Lokal (oMLX)** — braucht KEINE Env: ein installiertes `omlx` wird in
+    `config.ts` automatisch erkannt und als `omlx serve` gestartet
+    (`detectLocalRouterCommand`), das lokale Modell ist damit ohne Zutun
+    aktiv. Nur ein abweichender Startbefehl setzt `MACVIBES_LOCAL_SERVER_CMD`.
+    (Im Setup heißt die Wahl `lokal`; `ollama` bleibt als Alias akzeptiert.)
   - **Eigener Anbieter (EIN Dialog statt Format-Kunde)** — der Nutzer gibt nur
     **Anzeigename, Basis-URL, Token** an (OpenRouter, OpenAI, ein eigener
     Shim — egal). Danach holt das Setup die **Modell-Liste des Anbieters**
@@ -112,7 +113,7 @@ Das Setup fragt den Anbieter ab statt Claude fest zu verdrahten:
       (`<VAR>` = `<ANZEIGENAME>_API_KEY`, nur `[A-Z0-9_]`, Kollisionen
       bekommen `_2`-Suffixe) + je Modell ein Eintrag in `models.json`. Die
       `litellm.yaml` wird aus der **mitgelieferten** `litellm_config.yaml`
-      erzeugt bzw. eine vorhandene ERGÄNZT — die Ollama-Basis-Einträge
+      erzeugt bzw. eine vorhandene ERGÄNZT — die mitgelieferten Basis-Einträge
       bleiben, der `'*'`-Catch-all bleibt auch nach n Einfügungen **letzter**
       Eintrag (sonst brechen Claude Codes Hilfsmodell-Aufrufe und die
       lokalen Modelle verschwinden).

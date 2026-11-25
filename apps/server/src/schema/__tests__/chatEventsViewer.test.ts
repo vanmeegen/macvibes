@@ -6,7 +6,7 @@ import { projects } from '../../db/schema';
 import type { SandboxContext, SandboxHandle, SandboxProvider } from '../../sandbox/provider';
 import { SandboxManager } from '../../sandbox/sandboxManager';
 import { ChatService } from '../../services/chatService';
-import { createTestDb, createUser } from '../../services/__tests__/testUtils';
+import { createTestDb, createUser } from '../../testing/testUtils';
 import type { GraphQLContext } from '../builder';
 import { schema } from '../index';
 

@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadConfig, loadHomeEnvFile, parseEnvFile, resolveDbPath } from '../config';
+import { parseEnvFile } from '@macvibes/shared/node';
+import { loadConfig, loadHomeEnvFile, resolveDbPath } from '../config';
+import { BUN_PIN } from '../../../../scripts/lib/doctorState';
 import { PORT_DEFAULTS } from '../../../../scripts/lib/ports';
-import { createTempDir, removeDir } from '../services/__tests__/testUtils';
+import { LITELLM_BRIDGE_URL } from '../../../../scripts/lib/setup';
+import { DEFAULT_BRIDGE_PORT } from '../../local-router/bridgePort';
+import { createTempDir, removeDir } from '../testing/testUtils';
 
 const tempDirs: string[] = [];
 const savedEnv = { DB_PATH: Bun.env.DB_PATH };
@@ -195,6 +199,55 @@ describe('loadConfig zentralisiert die früher verstreuten Env-Reads (M6)', () =
     expect(config.adminBootstrapToken).toBeNull();
   });
 
+  test('vertippte Zahlen kippen keinen Wert auf NaN — es gilt der Default', () => {
+    // Number('abc') ist NaN: ein NaN-Port bindet nichts, eine NaN-Frist läuft
+    // nie ab, `x >= NaN` ist immer false. Bisher war nur maxSandboxes gehärtet.
+    clearAll();
+    Bun.env.PORT = 'viertausend';
+    Bun.env.MACVIBES_PREVIEW_GATEWAY_PORT = '41 73';
+    Bun.env.MACVIBES_EGRESS_PORT = 'x';
+    Bun.env.MACVIBES_AGENT_IDLE_TIMEOUT_MS = '60s';
+    Bun.env.MACVIBES_PROXY_KEEPALIVE_MS = 'aus';
+    Bun.env.MACVIBES_WEB_PORT = 'vite';
+    const warn = console.warn;
+    const warnungen: string[] = [];
+    console.warn = (...args: unknown[]): void => void warnungen.push(args.join(' '));
+    try {
+      const config = loadConfig();
+      expect(config.port).toBe(4000);
+      expect(config.sandbox.previewGatewayPort).toBe(4173);
+      expect(config.egress.port).toBe(4010);
+      expect(config.agent.timeouts.idleMs).toBeUndefined();
+      expect(config.anthropic.keepAliveMs).toBeUndefined();
+      expect(config.devWebPort).toBeNull();
+    } finally {
+      console.warn = warn;
+    }
+    // Nicht still: jede verworfene Angabe wird mit Namen gemeldet.
+    for (const name of [
+      'PORT',
+      'MACVIBES_PREVIEW_GATEWAY_PORT',
+      'MACVIBES_AGENT_IDLE_TIMEOUT_MS',
+    ]) {
+      expect(warnungen.some((w) => w.includes(name))).toBe(true);
+    }
+  });
+
+  test('ein leeres MACVIBES_AGENT_APPEND_PROMPT schaltet die eingebaute Anweisung nicht ab', () => {
+    clearAll();
+    Bun.env.MACVIBES_AGENT_APPEND_PROMPT = '';
+    expect(loadConfig().agent.appendSystemPrompt).toBeNull();
+  });
+
+  test("Schalter akzeptieren einheitlich '1' und 'true'", () => {
+    clearAll();
+    Bun.env.MACVIBES_DEBUG_ERRORS = 'true';
+    Bun.env.MACVIBES_RATE_LIMIT_DISABLED = 'true';
+    const config = loadConfig();
+    expect(config.debugErrors).toBe(true);
+    expect(config.rateLimitDisabled).toBe(true);
+  });
+
   test('Env-Overrides landen geparst in der Config', () => {
     clearAll();
     Bun.env.MACVIBES_EGRESS_PORT = '4011';
@@ -248,5 +301,93 @@ describe('loadConfig zentralisiert die früher verstreuten Env-Reads (M6)', () =
     expect(config.port).toBe(PORT_DEFAULTS.server);
     expect(config.egress.port).toBe(PORT_DEFAULTS.egress);
     expect(config.sandbox.previewGatewayPort).toBe(PORT_DEFAULTS.gateway);
+  });
+
+  /**
+   * Die URL der LiteLLM-Bridge steht an drei Stellen: im Server-Default, im
+   * Setup (das Routen dorthin schreibt) und als Port-Default der Bridge
+   * selbst. Driften sie, zeigen frisch geschriebene Routen ins Leere.
+   */
+  test('Bridge-URL driftet nicht gegen Setup und Bridge-Port-Default', () => {
+    const gesichert = Bun.env.MACVIBES_LITELLM_URL;
+    delete Bun.env.MACVIBES_LITELLM_URL;
+    try {
+      const url = loadConfig().litellm.url;
+      expect(url).toBe(LITELLM_BRIDGE_URL);
+      expect(new URL(url).port).toBe(DEFAULT_BRIDGE_PORT);
+    } finally {
+      if (gesichert !== undefined) Bun.env.MACVIBES_LITELLM_URL = gesichert;
+    }
+  });
+
+  /**
+   * Bun ist an EINE Version gepinnt (CLAUDE.md): Host-Typen, VM-Image und der
+   * Doctor müssen dieselbe nennen — sonst läuft die VM still auf einer anderen
+   * Bun-Version als der Host, gegen den getestet wird.
+   */
+  test('Bun-Pin driftet nicht: VM-Image, @types/bun und Doctor nennen dieselbe Version', () => {
+    const gesichert = Bun.env.MACVIBES_SANDBOX_IMAGE;
+    delete Bun.env.MACVIBES_SANDBOX_IMAGE;
+    try {
+      const rootManifest = JSON.parse(
+        readFileSync(join(import.meta.dir, '../../../../package.json'), 'utf8'),
+      ) as { devDependencies: Record<string, string> };
+      const pin = rootManifest.devDependencies['@types/bun'] ?? '';
+      expect(pin).toMatch(/^\d+\.\d+\.\d+$/);
+      expect(loadConfig().sandbox.image).toBe(`oven/bun:${pin}`);
+      expect(BUN_PIN).toBe(pin);
+    } finally {
+      if (gesichert !== undefined) Bun.env.MACVIBES_SANDBOX_IMAGE = gesichert;
+    }
+  });
+
+  /**
+   * `MACVIBES_LOCAL_ROUTER_*` meinte zwei verschiedene Dinge: CMD/PROBE_PATH
+   * den lokalen Modell-Server (oMLX), CONFIG/PORT die LiteLLM-Bridge. Die
+   * neuen Namen sagen, was gemeint ist; die alten gelten als Alias weiter,
+   * damit bestehende .env-Dateien nicht brechen.
+   */
+  describe('Env-Namen des lokalen Modell-Servers', () => {
+    const NAMEN = [
+      'MACVIBES_LOCAL_SERVER_CMD',
+      'MACVIBES_LOCAL_SERVER_PROBE_PATH',
+      'MACVIBES_LOCAL_ROUTER_CMD',
+      'MACVIBES_LOCAL_ROUTER_PROBE_PATH',
+    ] as const;
+    const gesichert = new Map<string, string | undefined>(NAMEN.map((n) => [n, Bun.env[n]]));
+    const leeren = (): void => {
+      for (const name of NAMEN) delete Bun.env[name];
+    };
+    afterEach(() => {
+      for (const [name, wert] of gesichert) {
+        if (wert === undefined) delete Bun.env[name];
+        else Bun.env[name] = wert;
+      }
+    });
+
+    test('die neuen Namen werden gelesen', () => {
+      leeren();
+      Bun.env.MACVIBES_LOCAL_SERVER_CMD = 'mein-server --port 8000';
+      Bun.env.MACVIBES_LOCAL_SERVER_PROBE_PATH = '/bereit';
+      const config = loadConfig();
+      expect(config.localModels.serverCommand).toBe('mein-server --port 8000');
+      expect(config.localModels.probePath).toBe('/bereit');
+    });
+
+    test('die alten Namen gelten als Alias weiter', () => {
+      leeren();
+      Bun.env.MACVIBES_LOCAL_ROUTER_CMD = 'alt-server';
+      Bun.env.MACVIBES_LOCAL_ROUTER_PROBE_PATH = '/health/liveliness';
+      const config = loadConfig();
+      expect(config.localModels.serverCommand).toBe('alt-server');
+      expect(config.localModels.probePath).toBe('/health/liveliness');
+    });
+
+    test('sind beide gesetzt, gewinnt der neue Name', () => {
+      leeren();
+      Bun.env.MACVIBES_LOCAL_SERVER_CMD = 'neu';
+      Bun.env.MACVIBES_LOCAL_ROUTER_CMD = 'alt';
+      expect(loadConfig().localModels.serverCommand).toBe('neu');
+    });
   });
 });

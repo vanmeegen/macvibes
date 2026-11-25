@@ -12,7 +12,7 @@ import {
   type ChatEventPayload,
   type ChatServiceOptions,
 } from '../chatService';
-import { createTestDb, createUser, waitFor } from './testUtils';
+import { createTestDb, createUser, waitFor } from '../../testing/testUtils';
 
 async function createProjectRow(db: Db, owner: UserRow, id = 'projekt-1'): Promise<string> {
   await db.insert(projects).values({
@@ -58,7 +58,14 @@ async function setup(
         turnEnds.push(prompt);
       },
     },
-    { agentIdleTimeoutMs, agentAbortGraceMs, agentFirstEventTimeoutMs, agentColdStartTimeoutMs },
+    {
+      timeouts: {
+        idleMs: agentIdleTimeoutMs,
+        firstEventMs: agentFirstEventTimeoutMs,
+        coldStartMs: agentColdStartTimeoutMs,
+      },
+      abortGraceMs: agentAbortGraceMs,
+    },
   );
   return { db, owner, service, projectId, turnEnds, activity };
 }
@@ -313,9 +320,8 @@ describe('Stop bei nicht erreichbarem Daemon (M1): Terminal-Zeile trotz stummem 
       },
     };
     const { owner, service, projectId } = await setupChat(stummerRunner, {
-      agentFirstEventTimeoutMs: 40,
-      agentColdStartTimeoutMs: 60,
-      agentAbortGraceMs: 20,
+      timeouts: { firstEventMs: 40, coldStartMs: 60 },
+      abortGraceMs: 20,
     });
 
     const payloads: ChatEventPayload[] = [];
@@ -1993,7 +1999,7 @@ describe('Config-Warmup hat eine Frist', () => {
     const db = createTestDb();
     const owner = await createUser(db, 'marco');
     const projectId = await createProjectRow(db, owner);
-    const service = new ChatService(db, runner, {}, { agentWarmupTimeoutMs: 300 });
+    const service = new ChatService(db, runner, {}, { timeouts: { warmupMs: 300 } });
 
     await service.prewarm(owner, projectId, '/tmp/fake');
     await service.sendMessage(owner, sendInput(projectId, 'Hallo'));

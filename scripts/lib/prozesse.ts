@@ -1,6 +1,6 @@
 /**
  * Prozess-/Port-Helfer für die Repo-Skripte. Enthält die EINZIGE bewusste
- * Plattform-Weiche der Skripte (windows-portierung-plan.md, P6): „welche PID
+ * Plattform-Weiche der Skripte (docs/windows-portierung-plan.md, P6): „welche PID
  * lauscht auf Port X" und „welche PIDs passen auf ein Kommandozeilen-Muster"
  * sind ohne Systemwerkzeuge nicht neutral zu beantworten. Alles andere
  * (Belegt-Probe, Kill) ist plattformneutral.
@@ -102,4 +102,21 @@ export function beende(pid: number, hart = false): void {
   } catch {
     // Prozess ist schon weg — genau das wollten wir.
   }
+}
+
+/**
+ * Kommando als Vordergrund-Subprozess starten und auf seinen Exit-Code warten.
+ * stdio 'inherit': Ein-/Ausgabe laufen direkt über das Terminal, und Ctrl+C
+ * erreicht als Konsolen-Signal die ganze Vordergrund-Gruppe (POSIX wie
+ * Windows) — der Aufrufer muss nur noch den Exit-Code durchreichen.
+ */
+export async function starteImVordergrund(argv: string[], cwd?: string): Promise<number> {
+  const proc = Bun.spawn(argv, {
+    ...(cwd === undefined ? {} : { cwd }),
+    stdin: 'inherit',
+    stdout: 'inherit',
+    stderr: 'inherit',
+    env: process.env as Record<string, string>,
+  });
+  return proc.exited;
 }

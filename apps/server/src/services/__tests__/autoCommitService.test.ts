@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { FakeAgentRunner } from '../../agent/fakeRunner';
-import { autoCommit, buildCommitMessage, createTurnEndAutoCommit } from '../autoCommitService';
+import { autoCommit, buildCommitMessage, createAutoCommitter } from '../autoCommitService';
 import { ChatService } from '../chatService';
 import {
   createProjectBranch,
@@ -17,20 +17,13 @@ import {
   createTemplatesFixture,
   createTestDb,
   createUser,
-  removeDir,
+  trackTempDirs,
   waitFor,
-} from './testUtils';
+} from '../../testing/testUtils';
 import { projects } from '../../db/schema';
 import type { Db } from '../../db/client';
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (dir) await removeDir(dir);
-  }
-});
+const tempDirs = trackTempDirs();
 
 async function setupWorkspace(): Promise<{
   home: string;
@@ -158,7 +151,7 @@ describe('autoCommit — Härtung gegen gast-geschriebene git-Metadaten (F1)', (
   });
 });
 
-describe('createTurnEndAutoCommit — Integration mit ChatService (R8)', () => {
+describe('createAutoCommitter — Integration mit ChatService (R8)', () => {
   async function createProjectRow(db: Db, ownerId: string): Promise<void> {
     await db.insert(projects).values({
       id: 'projekt-1',
@@ -178,12 +171,18 @@ describe('createTurnEndAutoCommit — Integration mit ChatService (R8)', () => {
     await createProjectRow(db, owner.id);
     const before = await commitCount(bare, 'marco/projekt');
 
+    // Wie in index.ts: der Committer entsteht VOR dem ChatService und meldet
+    // Fehler über eine späte Referenz.
     let chatService: ChatService | null = null;
-    const hook = (projectId: string, prompt: string) => {
-      if (!chatService) throw new Error('ChatService fehlt');
-      return createTurnEndAutoCommit({ macvibesHome: home, chatService })(projectId, prompt);
-    };
-    chatService = new ChatService(db, new FakeAgentRunner(1), { onTurnEnd: hook });
+    const committer = createAutoCommitter({
+      macvibesHome: home,
+      postError: async (projectId, text) => {
+        await chatService?.postMessage(projectId, 'error', text);
+      },
+    });
+    chatService = new ChatService(db, new FakeAgentRunner(1), {
+      onTurnEnd: (projectId, prompt) => committer.afterTurn(projectId, prompt),
+    });
 
     await chatService.sendMessage(owner, {
       projectId: 'projekt-1',
@@ -208,11 +207,51 @@ describe('createTurnEndAutoCommit — Integration mit ChatService (R8)', () => {
 
     const chatService = new ChatService(db, new FakeAgentRunner(1), {});
     // Workspace existiert nicht → autoCommit muss scheitern.
-    const hook = createTurnEndAutoCommit({ macvibesHome: home, chatService });
-    await hook('projekt-1', 'Irgendwas');
+    const committer = createAutoCommitter({
+      macvibesHome: home,
+      postError: async (projectId, text) => {
+        await chatService.postMessage(projectId, 'error', text);
+      },
+    });
+    await committer.afterTurn('projekt-1', 'Irgendwas');
 
     const messages = await chatService.listMessages('projekt-1');
     const error = messages.find((m) => m.role === 'error');
     expect(error?.content).toContain('Auto-Commit');
+  });
+
+  /**
+   * Vor Sandbox-Stopp (R9) und vor einem Frischstart (N7) wird der offene
+   * Stand gesichert. Diese Logik lag doppelt vor: einmal hier, einmal als
+   * Kopie in index.ts — mit eigener, leicht anderer Fehlerbehandlung.
+   */
+  test('saveOpenState committet offene Änderungen mit dem Anlass als Message', async () => {
+    const { home, bare, workspace } = await setupWorkspace();
+    const before = await commitCount(bare, 'marco/projekt');
+    const fehler: string[] = [];
+    const committer = createAutoCommitter({
+      macvibesHome: home,
+      postError: async (_projectId, text) => void fehler.push(text),
+    });
+    await writeFile(join(workspace, 'offen.txt'), 'nicht committet');
+
+    await committer.saveOpenState('projekt-1', 'Auto-Commit vor Sandbox-Stopp');
+
+    expect(await commitCount(bare, 'marco/projekt')).toBe(before + 1);
+    const log = await runGit(['log', '-1', '--format=%s', 'marco/projekt'], bare);
+    expect(log.trim()).toBe('Auto-Commit vor Sandbox-Stopp');
+    expect(fehler).toEqual([]);
+  });
+
+  test('saveOpenState ist ohne Projekt-Repo ein stilles No-op (Projekt nie geöffnet)', async () => {
+    const home = await createTempDir('macvibes-leer-');
+    tempDirs.push(home);
+    const fehler: string[] = [];
+    const committer = createAutoCommitter({
+      macvibesHome: home,
+      postError: async (_projectId, text) => void fehler.push(text),
+    });
+    await committer.saveOpenState('projekt-1', 'Auto-Commit vor Sandbox-Start');
+    expect(fehler).toEqual([]);
   });
 });

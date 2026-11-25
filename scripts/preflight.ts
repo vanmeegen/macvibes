@@ -4,20 +4,17 @@
  * statt dass sich zwei Instanzen gegenseitig die Ports wegnehmen (EADDRINUSE,
  * gegenseitige SIGTERMs, hängende Sandbox-Starts).
  *
- * Bun-TS-Fassung von scripts/preflight.sh (plattformneutral, P6);
- * Port-Prüfung per TCP-Connect statt lsof.
+ * Plattformneutrales Bun-TS (P6): Port-Prüfung per TCP-Connect statt lsof.
  */
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { wertAusEnvDatei } from './lib/env';
-import { portKonfiguration } from './lib/ports';
+import { envWertMitDateiFallback, macvibesHome } from './lib/env';
+import { allePorts } from './lib/ports';
 import { istPortBelegt } from './lib/prozesse';
 
 export async function preflight(): Promise<boolean> {
-  const ports = portKonfiguration();
   const belegt: string[] = [];
-  for (const port of [ports.server, ports.egress, ports.web]) {
+  for (const port of allePorts()) {
     if (await istPortBelegt(port)) belegt.push(`:${port}`);
   }
   if (belegt.length > 0) {
@@ -32,11 +29,9 @@ export async function preflight(): Promise<boolean> {
   // registriert sich und kann danach niemanden freischalten, auch sich selbst
   // nicht. Das hier fängt es vor dem Start ab. Existiert die Datenbank schon,
   // bleibt die Prüfung still (ensureAdmin warnt sonst beim Serverstart).
-  const envDatei = join('apps', 'server', '.env');
-  const adminName =
-    process.env['MACVIBES_ADMIN_USERNAME'] ??
-    wertAusEnvDatei(envDatei, 'MACVIBES_ADMIN_USERNAME') ??
-    '';
+  // Gelesen wie der Server: Prozess-Env, dann apps/server/.env, dann
+  // <macvibesHome>/.env — dorthin schreibt das Setup bei installierten Fassungen.
+  const adminName = envWertMitDateiFallback('MACVIBES_ADMIN_USERNAME') ?? '';
 
   // DB-Pfad wie resolveDbPath() in apps/server/src/config.ts: der Legacy-Ort ist
   // jetzt DETERMINISTISCH `<serverRoot>/data/<name>` (= apps/server/data/app.db),
@@ -47,7 +42,7 @@ export async function preflight(): Promise<boolean> {
     process.env['DB_PATH'] ?? '',
     join('apps', 'server', 'data', 'app.db'),
     join('data', 'app.db'),
-    join(process.env['MACVIBES_HOME'] ?? join(homedir(), 'macvibes'), 'data', 'app.db'),
+    join(macvibesHome(), 'data', 'app.db'),
   ];
   const dbGefunden = kandidaten.some((pfad) => pfad !== '' && existsSync(pfad));
 

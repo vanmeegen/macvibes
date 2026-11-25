@@ -9,7 +9,7 @@ import ToggleButton from '@mui/material/ToggleButton';
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import Typography from '@mui/material/Typography';
 import { observer } from 'mobx-react-lite';
-import type { FormEvent, MouseEvent } from 'react';
+import type { FormEvent, JSX, MouseEvent } from 'react';
 import type { AuthStore } from '../models/AuthStore';
 import type { LoginMode, LoginModel } from '../models/LoginModel';
 
@@ -54,7 +54,7 @@ export const LoginPage = observer(function LoginPage({
               <Typography variant="h2" component="h1" color="primary">
                 macvibes
               </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+              <Typography variant="body2" color="textSecondary" sx={{ mt: 1 }}>
                 Lokale Vibe-Coding-Plattform
               </Typography>
             </Box>
@@ -94,7 +94,7 @@ export const LoginPage = observer(function LoginPage({
               onChange={(e) => loginModel.setUsername(e.target.value)}
               autoComplete="username"
               autoFocus
-              inputProps={{ 'data-testselector': 'login-username' }}
+              slotProps={{ htmlInput: { 'data-testselector': 'login-username' } }}
             />
             <TextField
               label="Passwort"
@@ -102,7 +102,7 @@ export const LoginPage = observer(function LoginPage({
               value={loginModel.password}
               onChange={(e) => loginModel.setPassword(e.target.value)}
               autoComplete={loginModel.mode === 'login' ? 'current-password' : 'new-password'}
-              inputProps={{ 'data-testselector': 'login-password' }}
+              slotProps={{ htmlInput: { 'data-testselector': 'login-password' } }}
             />
             {loginModel.mode === 'register' && (
               <TextField
@@ -112,7 +112,7 @@ export const LoginPage = observer(function LoginPage({
                 onChange={(e) => loginModel.setBootstrapToken(e.target.value)}
                 autoComplete="off"
                 helperText="Nur für die allererste Admin-Registrierung nötig — der Wert steht als MACVIBES_ADMIN_BOOTSTRAP_TOKEN in der Server-.env. Alle anderen lassen das Feld leer."
-                inputProps={{ 'data-testselector': 'login-bootstrap-token' }}
+                slotProps={{ htmlInput: { 'data-testselector': 'login-bootstrap-token' } }}
               />
             )}
             <Button

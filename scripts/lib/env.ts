@@ -1,6 +1,14 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { macvibesHomeDir, parseEnvFile } from '@macvibes/shared/node';
+
+/**
+ * Das macvibes-Home (`MACVIBES_HOME`, sonst `~/macvibes`) — dieselbe Funktion,
+ * die auch der Server nutzt (@macvibes/shared/node).
+ */
+export function macvibesHome(): string {
+  return macvibesHomeDir();
+}
 
 /**
  * Env-Wert mit .env-Datei-Fallback — für Skripte, die dieselbe Konfiguration
@@ -32,27 +40,15 @@ export function envWertMitDateiFallback(
 
 /** Die beiden .env-Orte, die auch der Server sieht (Reihenfolge = Vorrang). */
 function standardEnvDateien(): string[] {
-  const home = process.env['MACVIBES_HOME'] ?? join(homedir(), 'macvibes');
-  return [join('apps', 'server', '.env'), join(home, '.env')];
+  return [join('apps', 'server', '.env'), join(macvibesHome(), '.env')];
 }
 
 /**
- * Letzter KEY=VALUE-Treffer einer .env-Datei (wie dotenv: spätere Zeilen
- * gewinnen), Anführungszeichen abgestreift. Kein Expansions-/Escape-Support —
- * die macvibes-.env-Dateien sind schlichte KEY=VALUE-Listen (setup.ts).
+ * Wert eines Schlüssels aus einer .env-Datei — mit DEMSELBEN Parser wie der
+ * Server (@macvibes/shared/node: spätere Zeilen gewinnen, umschließende
+ * Quotes entfernt, keine Expansion). Eine fehlende Datei ist kein Fehler.
  */
 export function wertAusEnvDatei(datei: string, name: string): string | undefined {
   if (!existsSync(datei)) return undefined;
-  let wert: string | undefined;
-  const muster = new RegExp(`^\\s*(?:export\\s+)?${name}\\s*=\\s*(.*)$`);
-  for (const zeile of readFileSync(datei, 'utf8').split('\n')) {
-    const match = muster.exec(zeile);
-    if (match) {
-      wert = (match[1] ?? '')
-        .trim()
-        .replace(/^["']/, '')
-        .replace(/["']\s*$/, '');
-    }
-  }
-  return wert;
+  return parseEnvFile(readFileSync(datei, 'utf8'))[name];
 }

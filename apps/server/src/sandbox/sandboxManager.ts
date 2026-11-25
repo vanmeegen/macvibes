@@ -396,7 +396,7 @@ export class SandboxManager {
     return entry.handle?.previewHostPort ?? null;
   }
 
-  /** Zustand des Dev-Servers laut Watchdog (für das UI-Overlay, R7). */
+  /** Zustand des Dev-Servers (für das UI-Overlay, R7). */
   previewStatus(projectId: string): PreviewStatus {
     const entry = this.entries.get(projectId);
     if (!entry) return 'stopped';

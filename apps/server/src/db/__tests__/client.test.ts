@@ -1,20 +1,13 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { existsSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { sql } from 'drizzle-orm';
-import { supportsPosixModes } from '../../core/fsCapabilities';
+import { supportsPosixModes } from '@macvibes/shared/node';
 import { createDb } from '../client';
-import { createTempDir, removeDir } from '../../services/__tests__/testUtils';
+import { createTempDir, trackTempDirs } from '../../testing/testUtils';
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (dir) await removeDir(dir);
-  }
-});
+const tempDirs = trackTempDirs();
 
 /**
  * F25: Die DB enthält Session-Tokens im Klartext (direkt als Cookie
@@ -24,7 +17,7 @@ afterEach(async () => {
 describe('createDb — Dateirechte (F25)', () => {
   // Auf Dateisystemen ohne POSIX-Modes (NTFS) ist die Mode-Zusicherung
   // prinzipbedingt nicht prüfbar — dokumentierte Abschwächung, siehe
-  // windows-portierung-plan.md (P5).
+  // docs/windows-portierung-plan.md (P5).
   test.skipIf(!supportsPosixModes(tmpdir()))(
     'legt DB mit 0600 und Verzeichnis mit 0700 an',
     async () => {

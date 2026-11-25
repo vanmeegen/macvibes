@@ -7,7 +7,7 @@
  * Update weg. Nutzereigene Router-Config gehört deshalb ins upgrade-feste
  * `<macvibesHome>` (Default `~/macvibes`). Vorrang:
  *
- *   1) MACVIBES_LOCAL_ROUTER_CONFIG      — explizit gewählte Datei
+ *   1) MACVIBES_LITELLM_CONFIG      — explizit gewählte Datei
  *   2) <macvibesHome>/litellm.yaml       — falls vorhanden
  *   3) mitgelieferte litellm_config.yaml — Rückwärtskompatibilität (Bestand
  *      ohne Home-Datei läuft unverändert weiter)
@@ -16,7 +16,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 export interface RouterConfigPathOptions {
-  /** MACVIBES_LOCAL_ROUTER_CONFIG (explizit gewählte Datei) oder undefined. */
+  /** MACVIBES_LITELLM_CONFIG (explizit gewählte Datei) oder undefined. */
   envPath: string | undefined;
   /** <macvibesHome> (Default ~/macvibes) — Ort der nutzereigenen litellm.yaml. */
   macvibesHome: string;

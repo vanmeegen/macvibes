@@ -5,16 +5,17 @@ import { createAnthropicProxy } from './http/anthropicProxy';
 import { createTargetChecker, startEgressProxy } from './http/egressProxy';
 import { startPreviewGateway } from './http/previewGateway';
 import { createAppYoga } from './http/createAppYoga';
+import { createRequestRouter } from './http/requestRouter';
 import { serveWebUi } from './http/staticFiles';
-import { existsSync, statSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { AGENT_GATEWAY_PATH, AgentGateway } from './agent/agentGateway';
+import { join, resolve } from 'node:path';
+import type { Server } from 'bun';
+import { AGENT_GATEWAY_PATH, AgentGateway, type GatewaySocketData } from './agent/agentGateway';
 import { loadUserAgentModels } from './agent/agentModel';
 import { ClaudeAgentRunner } from './agent/claudeRunner';
 import { buildDaemonBundle } from './agent/daemonBundle';
 import { DaemonAgentRunner } from './agent/daemonRunner';
 import { FakeAgentRunner } from './agent/fakeRunner';
-import { buildVmAgentEnv } from './agent/vmAgentEnv';
+import { buildVmDaemonEnv } from './agent/vmAgentEnv';
 import {
   MSB_HOST_ALIAS,
   MicrosandboxSandboxProvider,
@@ -24,18 +25,16 @@ import { msbAvailable, touchSandbox } from './sandbox/msbClient';
 import { ProcessSandboxProvider } from './sandbox/processProvider';
 import { selectBackends, type BackendSelection } from './sandbox/backendSelection';
 import { SandboxManager } from './sandbox/sandboxManager';
-import { supportsPosixModes } from './core/fsCapabilities';
-import { GUEST_WORKDIR } from './core/vmContract';
+import { warnIfEnvFileReadable } from './core/envFilePermissions';
 import { createVmTokenRegistry } from './core/vmTokens';
-import { autoCommit, createTurnEndAutoCommit } from './services/autoCommitService';
+import { createAutoCommitter } from './services/autoCommitService';
 import { ensureAdmin, purgeExpiredSessions, resolveSession } from './services/authService';
 import { ChatService } from './services/chatService';
 import { ensureBareRepo } from './core/gitService';
 import { startMirrorScheduler } from './services/mirrorService';
-import { startLocalRouter } from './services/localRouterService';
+import { MODEL_SERVER_UNAVAILABLE, startModelServer } from './services/modelServerService';
 import { ShutdownSequence } from './shutdownSequence';
 import { FIXED_SHUTDOWN_STEP_TIMEOUTS_MS, sandboxShutdownBudgetMs } from '@macvibes/shared';
-import { projectRepoFor } from './core/workspaceService';
 import { initHotReload } from './devHotReload';
 
 // Dev-Hot-Reload (`bun --hot`): Bun führt dieses Modul bei jeder Quelldatei-
@@ -109,7 +108,7 @@ const anthropicProxy = createAnthropicProxy({
   oauthToken: config.anthropic.oauthToken,
   apiKey: config.anthropic.apiKey,
   keepAliveMs: config.anthropic.keepAliveMs,
-  // Modell-Routing: claude-* → Anthropic, alles andere → lokaler Router (Shim);
+  // Modell-Routing: claude-* → Anthropic, alles andere → lokaler Modell-Server;
   // Zusatz-Routen (MACVIBES_MODEL_ROUTES) matchen davor.
   localUpstreamUrl: config.localModels.upstreamUrl,
   localApiKey: config.localModels.apiKey,
@@ -118,7 +117,7 @@ const anthropicProxy = createAnthropicProxy({
 if (config.anthropic.oauthToken === null && config.anthropic.apiKey === null) {
   console.warn(
     'Achtung: keine Claude-Credentials (CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY) — ' +
-      'Claude-Modelle laufen dann über den lokalen Router (Fallback), nur lokale Modelle sind verlässlich.',
+      'Claude-Modelle laufen dann über den lokalen Modell-Server (Fallback), nur lokale Modelle sind verlässlich.',
   );
 }
 
@@ -126,7 +125,7 @@ if (config.anthropic.oauthToken === null && config.anthropic.apiKey === null) {
 // registriert, während der Server hochfährt, und laufen beim Signal rückwärts
 // ab (zuletzt Gestartetes zuerst gestoppt). Die Registrierung steht bewusst so
 // früh, dass auch ein Ctrl-C MITTEN im Hochlauf noch geordnet abräumt — der
-// erste Router-Start kann Minuten dauern (venv + LiteLLM).
+// erste Start eines Modell-Servers kann Minuten dauern (venv + LiteLLM).
 const shutdownSequence = new ShutdownSequence();
 // Handler-Referenzen behalten: beim Hot-Reload trägt die nächste Ausführung
 // genau dieses Paar wieder aus (process.off), damit immer nur EINE — die
@@ -145,25 +144,29 @@ hot.addCleanup('Signal-Handler', () => {
   }
 });
 
-// Lokalen Modell-Router (Anthropic-Shim) MITSTARTEN — im Hintergrund, damit der
-// Server sofort hochkommt; qwen-Turns vor Router-Readiness scheitern mit klarer
-// 502 des Proxys. Ein extern laufender Shim wird erkannt und nie angefasst.
-// Im Fake-Agent-Modus (Tests/E2E) gibt es keine Modell-Requests → kein Autostart.
-// Beim Hot-Reload wird ein selbst gestarteter Router ÜBERNOMMEN statt neu
-// gestartet: der Prozess soll Reloads überleben (Kaltstart dauert Minuten),
-// und ohne Übergabe stufte die neue Ausführung ihn als „extern" ein — ihr
-// Shutdown-Schritt wäre ein No-op und `bun run shutdown` liesse den Shim als
-// Waise zurück. Der ProcessSupervisor der Startausführung überwacht ihn weiter.
+// Lokalen Modell-Server (oMLX) MITSTARTEN — im Hintergrund, damit der Server
+// sofort hochkommt; Turns lokaler Modelle vor dessen Readiness scheitern mit
+// klarer 502 des Proxys. Ein extern laufender Server wird erkannt und nie
+// angefasst. Im Fake-Agent-Modus (Tests/E2E) gibt es keine Modell-Requests →
+// kein Autostart. Beim Hot-Reload wird ein selbst gestarteter Server
+// ÜBERNOMMEN statt neu gestartet: der Prozess soll Reloads überleben
+// (Kaltstart dauert Minuten), und ohne Übergabe stufte die neue Ausführung
+// ihn als „extern" ein — ihr Shutdown-Schritt wäre ein No-op und
+// `bun run shutdown` ließe ihn als Waise zurück. Der ProcessSupervisor der
+// Startausführung überwacht ihn weiter.
 const localRouterReady =
   hot.inherited.localRouter ??
   (config.agent.backend === 'claude'
-    ? startLocalRouter({
+    ? startModelServer({
+        label: 'Lokaler Modell-Server (oMLX)',
         upstreamUrl: config.localModels.upstreamUrl,
-        command: config.localModels.routerCommand,
+        command: config.localModels.serverCommand,
+        commandEnvVar: 'MACVIBES_LOCAL_SERVER_CMD',
+        impact: 'lokale Modelle sind nicht verfügbar, Claude-Modelle funktionieren normal',
         probePath: config.localModels.probePath,
         logFile: join(config.macvibesHome, 'local-router.log'),
       })
-    : Promise.resolve({ state: 'unavailable' as const, stop: async () => {} }));
+    : Promise.resolve(MODEL_SERVER_UNAVAILABLE));
 hot.handOver.localRouter = localRouterReady;
 // Optionale LiteLLM-Bridge (OpenAI-kompatible Cloud-Anbieter): dieselbe
 // Überwachung, eigener Port/Log. Nur wenn konfiguriert (litellm.yaml vorhanden
@@ -171,16 +174,18 @@ hot.handOver.localRouter = localRouterReady;
 const litellmReady =
   hot.inherited.litellm ??
   (config.agent.backend === 'claude' && config.litellm.autostart
-    ? startLocalRouter({
+    ? startModelServer({
+        label: 'LiteLLM-Bridge',
         upstreamUrl: config.litellm.url,
         command: config.litellm.command,
+        commandEnvVar: 'MACVIBES_LITELLM_CMD',
+        impact: 'Modelle OpenAI-kompatibler Anbieter sind nicht verfügbar',
         probePath: '/health/liveliness',
         logFile: join(config.macvibesHome, 'litellm.log'),
-        log: (message) => console.log(`LiteLLM-Bridge: ${message}`),
       })
-    : Promise.resolve({ state: 'unavailable' as const, stop: async () => {} }));
+    : Promise.resolve(MODEL_SERVER_UNAVAILABLE));
 hot.handOver.litellm = litellmReady;
-// Selbst gestarteten Shim beim Beenden mitnehmen (SIGTERM = bun run shutdown).
+// Selbst gestartete Modell-Server beim Beenden mitnehmen (SIGTERM = bun run shutdown).
 // Als Schritt, NICHT als eigener Handler: ein zweiter Handler mit eigenem
 // process.exit(0) hat vorher den Auto-Commit der Sandboxes abgeschnitten.
 // Fristen pro Schritt aus EINER Quelle (@macvibes/shared), damit sie mit der
@@ -193,32 +198,6 @@ shutdownSequence.register(
   },
   FIXED_SHUTDOWN_STEP_TIMEOUTS_MS['lokaler Modell-Router'],
 );
-
-/** Meldet eine group/other-lesbare .env — dort steht der Claude-Token (F26). */
-function warnIfEnvFileReadable(envPath: string): void {
-  if (!existsSync(envPath)) return;
-  try {
-    // Feature-Detection (P5): ohne durchsetzbare POSIX-Modes wäre der
-    // Mode-Check immer „lesbar" und der chmod-Rat sinnlos — stattdessen
-    // EINE ehrliche Warnung über die dokumentierte Abschwächung.
-    if (!supportsPosixModes(dirname(envPath))) {
-      console.warn(
-        `WARNUNG: Das Dateisystem von ${envPath} setzt keine POSIX-Dateirechte ` +
-          `durch — die Datei (enthält den Claude-Token) ist für andere lokale ` +
-          `Konten dieses Rechners lesbar (F26 abgeschwächt).`,
-      );
-      return;
-    }
-    if ((statSync(envPath).mode & 0o077) !== 0) {
-      console.warn(
-        `WARNUNG: ${envPath} ist auch für andere lokale Konten lesbar und enthält ` +
-          `den Claude-Token. Bitte "chmod 600 ${envPath}" ausführen.`,
-      );
-    }
-  } catch {
-    // Rechte nicht ermittelbar — kein Grund, den Start zu stören.
-  }
-}
 
 // chatService entsteht erst nach dem Manager — Hooks greifen über diese Referenz.
 let chatServiceRef: ChatService | null = null;
@@ -239,7 +218,7 @@ try {
 }
 const useMicrosandbox = backends.sandbox === 'microsandbox';
 
-// Agent-Transport in die VM: persistenter SDK-Daemon (architektur.md, A+C).
+// Agent-Transport in die VM: persistenter SDK-Daemon (docs/archiv/architektur.md, A+C).
 // Gateway für die eingehenden Daemon-Verbindungen + gebündelter Daemon,
 // den der Provider read-only in jede VM mountet.
 const agentGateway = new AgentGateway({ tokens: vmTokens });
@@ -275,18 +254,14 @@ const sandboxProvider = useMicrosandbox
           // MSB_HOST_ALIAS wird hier injiziert (wie sandboxNameFor beim
           // Runner): der Weg VM→Host ist msb-Topologie — ein anderes
           // VM-Backend reicht seinen eigenen Alias herein.
-          return {
-            ...buildVmAgentEnv({
-              serverPort: config.port,
-              proxyToken: vmToken,
-              egressPort,
-              hostAlias: MSB_HOST_ALIAS,
-            }),
-            MACVIBES_AGENT_GATEWAY_URL:
-              `ws://${MSB_HOST_ALIAS}:${config.port}${AGENT_GATEWAY_PATH}` +
-              `?sandbox=${encodeURIComponent(sandboxName)}&token=${encodeURIComponent(vmToken)}`,
-            MACVIBES_AGENT_CWD: GUEST_WORKDIR,
-          };
+          return buildVmDaemonEnv({
+            serverPort: config.port,
+            proxyToken: vmToken,
+            egressPort,
+            hostAlias: MSB_HOST_ALIAS,
+            appendSystemPrompt: config.agent.appendSystemPrompt,
+            sandboxName,
+          });
         },
       },
       // Preview-Status kommt als Push über die Daemon-Verbindung (ADR 0001).
@@ -305,25 +280,15 @@ console.log(
   `Sandbox-Backend: ${useMicrosandbox ? `microsandbox (${config.sandbox.image}, ${config.sandbox.cpus} CPUs, ${config.sandbox.memoryMib} MiB)` : 'process (kein VM-Isolat!)'}`,
 );
 
-// Offenen Workspace-Stand per Auto-Commit sichern — vor jedem Stopp (R9) und
-// vor jedem Frischstart (N7: msb-.replace() überbootet eine nach Hot-Reload
-// verwaiste VM ohne stop(), also ohne den Stopp-Hook).
-const sichereProjektStand = async (projectId: string, anlass: string): Promise<void> => {
-  // Kriterium ist das gitDir NEBEN dem Arbeitsbaum (F1) — ein `.git` im
-  // Arbeitsbaum wäre gast-geschrieben und damit kein Beleg für ein Repo.
-  const repo = projectRepoFor(config.macvibesHome, projectId);
-  if (!existsSync(join(repo.gitDir, 'HEAD'))) return;
-  try {
-    await autoCommit(repo, anlass);
-  } catch (error) {
-    console.error(`${anlass} für ${projectId} fehlgeschlagen:`, error);
-    await chatServiceRef?.postMessage(
-      projectId,
-      'error',
-      `${anlass} fehlgeschlagen: ${String(error)}`,
-    );
-  }
-};
+// Alle automatischen Commits (R8 nach jedem Turn, R9 vor jedem Stopp, N7 vor
+// jedem Frischstart — msb-.replace() überbootet eine nach Hot-Reload verwaiste
+// VM ohne stop(), also ohne den Stopp-Hook) samt Fehlermeldung in den Chat.
+const autoCommitter = createAutoCommitter({
+  macvibesHome: config.macvibesHome,
+  postError: async (projectId, text) => {
+    await chatServiceRef?.postMessage(projectId, 'error', text);
+  },
+});
 
 const sandboxManager = new SandboxManager({
   provider: sandboxProvider,
@@ -345,11 +310,12 @@ const sandboxManager = new SandboxManager({
   // absichtlich nicht mit.
   isBusy: (projectId) => chatServiceRef?.isBusy(projectId) ?? false,
   // Offenen Stand vor jedem Stopp sichern (R9).
-  onBeforeStop: (projectId) => sichereProjektStand(projectId, 'Auto-Commit vor Sandbox-Stopp'),
+  onBeforeStop: (projectId) =>
+    autoCommitter.saveOpenState(projectId, 'Auto-Commit vor Sandbox-Stopp'),
   // … und vor jedem Frischstart (N7, verwaiste VM nach Hot-Reload): bei leerem
   // git status ein No-op, der Normalfall kostet ein git status.
   onBeforeStart: (projectId) =>
-    sichereProjektStand(projectId, 'Auto-Commit vor Sandbox-Start (verwaister Stand?)'),
+    autoCommitter.saveOpenState(projectId, 'Auto-Commit vor Sandbox-Start (verwaister Stand?)'),
 });
 // Beim Hot-Reload nur die Timer entschärfen — KEIN stopAll(): laufende
 // MicroVMs (samt Auto-Commit-Hook) bleiben unangetastet, sonst würde ein
@@ -380,7 +346,7 @@ function selectAgentRunner() {
   }
   if (backends.agent === 'daemon') {
     // Persistenter SDK-Daemon in der VM, Kommandos über das WS-Gateway —
-    // kein msb exec im Agent-Pfad (architektur.md, chatproblems.md).
+    // kein msb exec im Agent-Pfad (docs/archiv/architektur.md, docs/archiv/chatproblems.md).
     console.log('Agent-Backend: claude-Daemon in VM (WS-Gateway, Supervisor: tini+monit)');
     return new DaemonAgentRunner({
       gateway: agentGateway,
@@ -403,13 +369,7 @@ const chatService = new ChatService(
   {
     onAgentActivity: (projectId) => sandboxManager.noteAgentActivity(projectId),
     // Auto-Commit nach jedem abgeschlossenen Turn (R8).
-    onTurnEnd: (projectId, userPrompt) => {
-      if (chatServiceRef === null) return Promise.resolve();
-      return createTurnEndAutoCommit({
-        macvibesHome: config.macvibesHome,
-        chatService: chatServiceRef,
-      })(projectId, userPrompt);
-    },
+    onTurnEnd: (projectId, userPrompt) => autoCommitter.afterTurn(projectId, userPrompt),
   },
   {
     // Reagiert der Agent so lange gar nicht, gilt der Turn als hängend und wird
@@ -418,13 +378,7 @@ const chatService = new ChatService(
     // Fristen greifen pro Turn bei LANGSAMEN (lokalen) Modellen, die warmup-
     // Frist deckt den stillen Config-Warmup ab, auf den der erste echte Turn
     // wartet, bevor sein eigener Timeout greift.
-    agentIdleTimeoutMs: config.agent.timeouts.idleMs,
-    agentFirstEventTimeoutMs: config.agent.timeouts.firstEventMs,
-    agentColdStartTimeoutMs: config.agent.timeouts.coldStartMs,
-    agentWarmupTimeoutMs: config.agent.timeouts.warmupMs,
-    agentSlowIdleTimeoutMs: config.agent.timeouts.slowIdleMs,
-    agentSlowFirstEventTimeoutMs: config.agent.timeouts.slowFirstEventMs,
-    agentSlowColdStartTimeoutMs: config.agent.timeouts.slowColdStartMs,
+    timeouts: config.agent.timeouts,
     prewarmEnabled: config.agent.prewarm,
   },
 );
@@ -444,29 +398,16 @@ const server = Bun.serve({
   idleTimeout: 255,
   // Agent-Gateway: die Daemons in den VMs halten hierüber ihre WS-Verbindung.
   websocket: agentGateway.websocket,
-  fetch: async (request, server) => {
-    const url = new URL(request.url);
-    if (url.pathname === AGENT_GATEWAY_PATH) {
-      return agentGateway.handleUpgrade(request, server);
-    }
-    if (url.pathname === '/graphql') {
-      // Client-IP in den Server-Context — Grundlage fürs Rate-Limit (F14).
-      return yoga.fetch(request, { ip: server.requestIP(request)?.address ?? null });
-    }
-    // Credential-Proxy für den Agenten in der VM (B5c): /anthropic/* → Claude API.
-    if (url.pathname.startsWith('/anthropic/')) {
-      const upstreamPath = url.pathname.slice('/anthropic'.length) + url.search;
-      return anthropicProxy(request, upstreamPath);
-    }
-    const staticResponse = await serveWebUi(config.webDistDir, url.pathname);
-    if (staticResponse) {
-      return staticResponse;
-    }
-    return new Response(
-      'macvibes-Server läuft. Web-UI: im Dev-Modus http://localhost:5173, sonst apps/web bauen.',
-      { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8' } },
-    );
-  },
+  fetch: createRequestRouter({
+    gatewayPath: AGENT_GATEWAY_PATH,
+    upgradeGateway: (request, server: Server<GatewaySocketData>) =>
+      agentGateway.handleUpgrade(request, server),
+    // Client-IP in den Server-Context — Grundlage fürs Rate-Limit (F14).
+    graphql: (request, server) =>
+      yoga.fetch(request, { ip: server.requestIP(request)?.address ?? null }),
+    anthropicProxy,
+    serveStatic: (pathname) => serveWebUi(config.webDistDir, pathname),
+  }),
 });
 // stop(true) kappt auch die Gateway-WebSockets der Daemons SAUBER (Close-Frame
 // statt hängender halbtoter Verbindung): die Daemons in den weiterlaufenden

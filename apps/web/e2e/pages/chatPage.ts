@@ -51,8 +51,36 @@ export class ChatPage {
     return this.page.getByTestId('chat-mic-lang');
   }
 
-  messagesByRole(role: 'user' | 'assistant' | 'tool' | 'system' | 'error'): Locator {
+  messagesByRole(role: 'user' | 'assistant' | 'thinking' | 'tool' | 'system' | 'error'): Locator {
     return this.page.locator(`[data-testselector="chat-message"][data-role="${role}"]`);
+  }
+
+  get chatColumn(): Locator {
+    return this.page.getByTestId('chat-column');
+  }
+
+  get previewColumn(): Locator {
+    return this.page.getByTestId('preview-column');
+  }
+
+  /** Schalter „Preview ein-/ausblenden" in der Toolbar. */
+  get previewToggle(): Locator {
+    return this.page.getByTestId('chat-preview-toggle');
+  }
+
+  /** Das Preview-iframe (nur sichtbar, wenn der Dev-Server bereit ist). */
+  get previewIframe(): Locator {
+    return this.page.getByTestId('chat-preview');
+  }
+
+  /** Overlay anstelle des iframes (Start, Neustart, Fehler, gestoppt). */
+  get previewUnavailable(): Locator {
+    return this.page.getByTestId('chat-preview-unavailable');
+  }
+
+  /** `<body>` der Seite IM Preview-iframe. */
+  get previewBody(): Locator {
+    return this.page.frameLocator('[data-testselector="chat-preview"]').locator('body');
   }
 
   async send(text: string): Promise<void> {

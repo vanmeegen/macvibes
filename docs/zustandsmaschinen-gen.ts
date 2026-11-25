@@ -9,6 +9,12 @@
 
 type Box = { id: string; x: number; y: number; w: number; h: number };
 const boxes: Record<string, Box> = {};
+/** Bereits angelegte Box — ein Tippfehler in der ID soll laut scheitern. */
+function box(id: string): Box {
+  const found = boxes[id];
+  if (!found) throw new Error(`Unbekannte Box: ${id}`);
+  return found;
+}
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 const C = {
@@ -137,9 +143,11 @@ function arrow(
   P(
     `<path d="${d}" fill="none" stroke="${color}" stroke-width="${o.lw ?? 1.8}"${o.dash ? ` stroke-dasharray="${o.dash}"` : ''} marker-end="url(#ah-${color.replace('#', '')})"/>`,
   );
-  if (label) {
-    const lx = o.lx ?? (pts[0].x + pts[pts.length - 1].x) / 2;
-    const ly = o.ly ?? (pts[0].y + pts[pts.length - 1].y) / 2 - 6;
+  const first = pts[0];
+  const last = pts[pts.length - 1];
+  if (label && first && last) {
+    const lx = o.lx ?? (first.x + last.x) / 2;
+    const ly = o.ly ?? (first.y + last.y) / 2 - 6;
     const an = o.anchor ?? 'middle';
     if (o.bg !== false) {
       const w = label.length * 5.9 + 8;
@@ -239,7 +247,7 @@ container(
 boxes['running'] = { id: 'running', x: runX, y: runY, w: runW, h: runH };
 
 // Meta-Übergänge (kurz, keine Kreuzung)
-arrow([R(boxes['stopped']), L(boxes['starting'])], C.aLine, 'enter / ensureRunning', { ly: 151 });
+arrow([R(box('stopped')), L(box('starting'))], C.aLine, 'enter / ensureRunning', { ly: 151 });
 arrow(
   [
     { x: 332, y: 208 },
@@ -314,13 +322,13 @@ state('done', tx, rbY + 52, 122, 46, C.cLine, C.cFill, 'done', 'turn-completed')
 terminal('aborting', tx, rbY + 108, 122, 46, 'aborting', '„Stop heißt Stop“');
 terminal('failed', tx, rbY + 164, 122, 46, 'failed', 'error-Zeile');
 
-arrow([R(boxes['idle']), L(boxes['queued'])], C.bLine);
-arrow([R(boxes['queued']), L(boxes['waiting'])], C.bLine);
-arrow([R(boxes['waiting']), L(boxes['active'])], C.bLine, 'Daemon verbunden', { ly: ty0 - 8 });
-arrow([R(boxes['active']), { x: tx, y: rbY + 75 }], C.cLine, '', {});
+arrow([R(box('idle')), L(box('queued'))], C.bLine);
+arrow([R(box('queued')), L(box('waiting'))], C.bLine);
+arrow([R(box('waiting')), L(box('active'))], C.bLine, 'Daemon verbunden', { ly: ty0 - 8 });
+arrow([R(box('active')), { x: tx, y: rbY + 75 }], C.cLine, '', {});
 arrow(
   [
-    { x: boxes['active'].x + boxes['active'].w * 0.7, y: Bt(boxes['active']).y },
+    { x: box('active').x + box('active').w * 0.7, y: Bt(box('active')).y },
     { x: tx, y: rbY + 131 },
   ],
   C.tLine,
@@ -329,14 +337,14 @@ arrow(
 );
 arrow(
   [
-    Bt(boxes['failed']),
-    { x: boxes['failed'].x + boxes['failed'].w / 2, y: rbY + 232 },
-    { x: boxes['waiting'].x + boxes['waiting'].w / 2, y: rbY + 232 },
-    Bt(boxes['waiting']),
+    Bt(box('failed')),
+    { x: box('failed').x + box('failed').w / 2, y: rbY + 232 },
+    { x: box('waiting').x + box('waiting').w / 2, y: rbY + 232 },
+    Bt(box('waiting')),
   ],
   C.bLine,
   'Retry 1× (sawMeaningful = false · kein Nutzerabbruch)',
-  { lx: boxes['waiting'].x + 150, ly: rbY + 229, dash: '6 4' },
+  { lx: box('waiting').x + 150, ly: rbY + 229, dash: '6 4' },
 );
 
 // Nested: Daemon-Verbindung
@@ -354,14 +362,14 @@ initialDot(dX + 24, dY + 65, C.bLine);
 state('disc', dX + 40, dY + 42, 128, 46, C.bLine, C.bFill, 'disconnected');
 state('conn', dX + 214, dY + 42, 128, 46, C.bLine, C.bFill, 'connecting', 'WS dial-out');
 state('cted', dX + 388, dY + 42, 128, 46, C.bLine, C.bFill, 'connected');
-arrow([R(boxes['disc']), L(boxes['conn'])], C.bLine, 'connect', { ly: dY + 60 });
-arrow([R(boxes['conn']), L(boxes['cted'])], C.bLine, 'open→ready', { ly: dY + 60 });
+arrow([R(box('disc')), L(box('conn'))], C.bLine, 'connect', { ly: dY + 60 });
+arrow([R(box('conn')), L(box('cted'))], C.bLine, 'open→ready', { ly: dY + 60 });
 arrow(
   [
-    Bt(boxes['cted']),
-    { x: boxes['cted'].x + boxes['cted'].w / 2, y: dY + dH - 8 },
-    { x: boxes['disc'].x + boxes['disc'].w / 2, y: dY + dH - 8 },
-    Bt(boxes['disc']),
+    Bt(box('cted')),
+    { x: box('cted').x + box('cted').w / 2, y: dY + dH - 8 },
+    { x: box('disc').x + box('disc').w / 2, y: dY + dH - 8 },
+    Bt(box('disc')),
   ],
   C.tLine,
   'close 1006 → abandonTurn + Backoff',
@@ -419,23 +427,23 @@ state(
 terminal('p_failed', rcX + 676, cy0, 132, 52, 'failed', 'Crash-Loop 5/40 → unmonitor');
 state('p_stopped', rcX + 880, cy0, 130, 52, C.muted, '#EEF1F4', 'stopped', 'Sandbox ≠ running');
 
-arrow([R(boxes['p_starting']), L(boxes['p_ready'])], C.cLine, 'Running + Probe ok', {
+arrow([R(box('p_starting')), L(box('p_ready'))], C.cLine, 'Running + Probe ok', {
   ly: cy0 + 20,
 });
-arrow([R(boxes['p_ready']), L(boxes['p_restart'])], C.cLine, 'Crash', { ly: cy0 + 20 });
+arrow([R(box('p_ready')), L(box('p_restart'))], C.cLine, 'Crash', { ly: cy0 + 20 });
 arrow(
   [
-    Bt(boxes['p_restart']),
-    { x: boxes['p_restart'].x + boxes['p_restart'].w / 2, y: cy0 + 86 },
-    { x: boxes['p_ready'].x + boxes['p_ready'].w / 2, y: cy0 + 86 },
-    Bt(boxes['p_ready']),
+    Bt(box('p_restart')),
+    { x: box('p_restart').x + box('p_restart').w / 2, y: cy0 + 86 },
+    { x: box('p_ready').x + box('p_ready').w / 2, y: cy0 + 86 },
+    Bt(box('p_ready')),
   ],
   C.cLine,
   'Probe wieder ok',
-  { lx: boxes['p_ready'].x + 90, ly: cy0 + 82, dash: '6 4' },
+  { lx: box('p_ready').x + 90, ly: cy0 + 82, dash: '6 4' },
 );
-arrow([R(boxes['p_restart']), L(boxes['p_failed'])], C.tLine, '', {});
-arrow([R(boxes['p_failed']), L(boxes['p_stopped'])], C.muted, 'Stopp', { ly: cy0 + 20 });
+arrow([R(box('p_restart')), L(box('p_failed'))], C.tLine, '', {});
+arrow([R(box('p_failed')), L(box('p_stopped'))], C.muted, 'Stopp', { ly: cy0 + 20 });
 
 chip(rcX + 22, rcY + rcH - 92, 468, 78, C.cLine, C.cFill, [
   'Statusquellen',

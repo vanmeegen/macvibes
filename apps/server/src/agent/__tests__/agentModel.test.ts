@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { projects } from '../../db/schema';
 import {
   AGENT_MODELS,
   DEFAULT_AGENT_MODEL,
@@ -49,5 +50,13 @@ describe('Modellkatalog (Modellwahl pro Chat)', () => {
     // Unbekannte Modelle (z. B. via Router ergänzt): konservativ langsam behandeln,
     // damit ein träges Fremdmodell nicht sofort abgebrochen wird.
     expect(agentTimeoutsFor('mistral-large', fast, slow)).toEqual(slow);
+  });
+});
+
+describe('Default-Modell: Katalog und DB-Spalte driften nicht', () => {
+  test('der Spalten-Default von projects.agent_model ist DEFAULT_AGENT_MODEL', () => {
+    // Die db-Schicht darf agent nicht importieren (Architektur-Gate), der
+    // Wert steht dort deshalb als Literal — dieser Test hält beide zusammen.
+    expect(projects.agentModel.default).toBe(DEFAULT_AGENT_MODEL);
   });
 });

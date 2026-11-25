@@ -70,7 +70,7 @@ export async function buildTemplateBaseline(options: BuildBaselineOptions): Prom
     command: ['/bin/sleep', 'infinity'],
     // Wie vorher (CLI ohne --net-rule): der Bau braucht apt und das
     // npm-Registry. Die VM läuft ohne Agent und nur während des Baus.
-    netzwerk: 'unbeschraenkt',
+    network: 'unrestricted',
   });
 
   // Der Builder braucht dieselbe Ready-Wartezeit wie Projekt-VMs: `msb run -d`
@@ -82,7 +82,7 @@ export async function buildTemplateBaseline(options: BuildBaselineOptions): Prom
   // Ein exec pro Schritt statt eines Mega-Befehls: kurze exec-Sessions sind
   // bei msb deutlich robuster, und ein Fehler ist dem Schritt zuordenbar.
   // Alle Schritte sind PFLICHT: ohne SDK/tini/monit bootet keine Projekt-VM
-  // (Daemon-Transport ist der einzige Agent-Pfad, architektur.md).
+  // (Daemon-Transport ist der einzige Agent-Pfad, docs/archiv/architektur.md).
   const steps: { beschreibung: string; script: string }[] = [
     {
       // Das gemountete Daemon-Bundle (/opt/macvibes/bin/main.js) löst das SDK
@@ -120,6 +120,15 @@ export async function buildTemplateBaseline(options: BuildBaselineOptions): Prom
     await stopSandbox(BUILDER_SANDBOX);
     await createSnapshot(snapshotName, BUILDER_SANDBOX);
   } finally {
+    // Erst stoppen, dann entfernen: scheitert ein Bau-Schritt, läuft die
+    // Builder-VM noch — msb entfernt keine laufende Sandbox, und sie bliebe
+    // als Waise zurück (und blockierte den nächsten Baseline-Bau). Im
+    // Erfolgsfall ist sie schon gestoppt; ein zweites Stoppen ist harmlos.
+    try {
+      await stopSandbox(BUILDER_SANDBOX);
+    } catch (error) {
+      console.error(`Builder-Sandbox konnte nicht gestoppt werden:`, error);
+    }
     try {
       await removeSandbox(BUILDER_SANDBOX);
     } catch (error) {

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { buildVmAgentEnv } from '../vmAgentEnv';
+import { buildVmAgentEnv, buildVmDaemonEnv } from '../vmAgentEnv';
 import { AGENT_CONFIG_GUEST_DIR, PROXY_TOKEN_HEADER } from '../../core/vmContract';
-// Test darf über Schichtgrenzen greifen (s. eslint.config.js): hier wird die
+// Test darf über Schichtgrenzen greifen (s. oxlint.config.ts): hier wird die
 // PRODUKTIONS-Verdrahtung gepinnt — msb-Alias injiziert wie in index.ts.
 import { MSB_HOST_ALIAS } from '../../sandbox/microsandboxProvider';
 
@@ -55,5 +55,49 @@ describe('buildVmAgentEnv — kritische Agent-Umgebung', () => {
     expect(fremd.ANTHROPIC_BASE_URL).toBe('http://host.anderes-backend.test:4000/anthropic');
     expect(fremd.HTTPS_PROXY).toBe('http://mv:secret-xyz@host.anderes-backend.test:4010');
     expect(fremd.NO_PROXY).toContain('host.anderes-backend.test');
+  });
+
+  test('eine konfigurierte Zusatz-Anweisung erreicht den VM-Daemon (MACVIBES_AGENT_APPEND_PROMPT)', () => {
+    // Der Daemon liest die Variable in der VM — gesetzt hat sie aber niemand:
+    // die Übersteuerung wirkte nur im Host-Runner (Dev), nie im Produktivpfad.
+    const mit = buildVmAgentEnv({
+      serverPort: 4000,
+      proxyToken: 'secret-xyz',
+      egressPort: 4010,
+      hostAlias: MSB_HOST_ALIAS,
+      appendSystemPrompt: "Handle sofort.\nKeine 'Ankündigungen'.",
+    });
+    expect(mit.MACVIBES_AGENT_APPEND_PROMPT).toBe("Handle sofort.\nKeine 'Ankündigungen'.");
+  });
+
+  test('ohne Übersteuerung bleibt die Variable weg — der Daemon nimmt dann seinen Default', () => {
+    expect('MACVIBES_AGENT_APPEND_PROMPT' in env).toBe(false);
+    const explizitNull = buildVmAgentEnv({
+      serverPort: 4000,
+      proxyToken: 'secret-xyz',
+      egressPort: 4010,
+      hostAlias: MSB_HOST_ALIAS,
+      appendSystemPrompt: null,
+    });
+    expect('MACVIBES_AGENT_APPEND_PROMPT' in explizitNull).toBe(false);
+  });
+});
+
+describe('buildVmDaemonEnv — Daemon wählt sich ins Host-Gateway ein', () => {
+  test('Gateway-URL trägt Alias, Port, Sandbox-Namen und Token (URL-kodiert)', () => {
+    const env = buildVmDaemonEnv({
+      serverPort: 4000,
+      proxyToken: 'tok/en+1',
+      egressPort: 4010,
+      hostAlias: MSB_HOST_ALIAS,
+      sandboxName: 'macvibes-projekt 1',
+    });
+    expect(env.MACVIBES_AGENT_GATEWAY_URL).toBe(
+      'ws://host.microsandbox.internal:4000/agent?sandbox=macvibes-projekt%201&token=tok%2Fen%2B1',
+    );
+    // Die Claude-Umgebung bleibt vollständig enthalten.
+    expect(env.ANTHROPIC_BASE_URL).toBe('http://host.microsandbox.internal:4000/anthropic');
+    // Das Arbeitsverzeichnis kommt aus dem Host↔VM-Vertrag, nicht aus der Env.
+    expect('MACVIBES_AGENT_CWD' in env).toBe(false);
   });
 });

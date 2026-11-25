@@ -60,7 +60,7 @@ describe('releaseOnClose', () => {
 
   test('gibt frei, wenn die Quelle wirft', async () => {
     let freigaben = 0;
-    // eslint-disable-next-line require-yield
+    // oxlint-disable-next-line require-yield
     async function* kaputt(): AsyncGenerator<number> {
       throw new Error('Quelle kaputt');
     }

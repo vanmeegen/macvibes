@@ -1,16 +1,16 @@
 # macvibes
 
-Lokale Vibe-Coding-Plattform für den Mac: startet Claude-Code-Sessions in
-isolierten Micro-Sandbox-Containern — leichtgewichtig, komplett lokal,
-alles TypeScript auf Bun.
+Lokale Vibe-Coding-Plattform für den Mac: Claude-Code-Sessions laufen
+isoliert in microsandbox-MicroVMs, mit Chat-Interface und Live-Preview —
+leichtgewichtig, komplett lokal, alles TypeScript auf Bun.
 
 ## Vision
 
-- Pro Vibe-Coding-Session wird ein eigener Sandbox-Container hochgefahren,
-  in dem Claude Code autonom und gefahrlos arbeiten kann.
-- Eine schlanke Web-Oberfläche verwaltet Sessions: anlegen, beobachten,
-  fortsetzen, beenden.
-- Session-Metadaten und Historie liegen in einer eingebetteten Datenbank
+- Pro Projekt läuft eine eigene MicroVM, in der Claude Code autonom und
+  gefahrlos arbeiten kann.
+- Eine schlanke Web-Oberfläche verwaltet Projekte: anlegen, chatten, die
+  Preview live beobachten, kopieren, löschen.
+- Projekt-Metadaten und Chat-Historie liegen in einer eingebetteten Datenbank
   (SQLite) — kein externer Dienst nötig.
 
 ## Tech-Stack
@@ -23,20 +23,25 @@ alles TypeScript auf Bun.
 | Sprache   | TypeScript, strict (ES2022, `noUncheckedIndexedAccess` & Co.) |
 | Backend   | `Bun.serve` + GraphQL Yoga + Pothos                           |
 | Datenbank | `bun:sqlite` + Drizzle ORM (Migrationen: drizzle-kit)         |
-| Frontend  | React 18 + MobX + MUI v5, gebaut mit Vite                     |
+| Frontend  | React 19 + MobX + MUI v9, gebaut mit Vite                     |
 | Tests     | `bun test` (Server/Shared), Vitest (Web), Playwright (E2E)    |
-| Qualität  | ESLint 9 (flat config), Prettier, Husky + lint-staged         |
+| Qualität  | oxlint, Prettier, Husky + lint-staged                         |
 | Sandbox   | microsandbox (self-hosted MicroVMs)                           |
 
-## Struktur (geplant)
+## Struktur
 
 ```
 apps/
-  web/      React + MobX Frontend (Session-Verwaltung)
-  server/   Bun.serve + GraphQL, Session- & Container-Orchestrierung
+  web/      React + MobX Frontend (Projekte, Chat, Preview)
+  server/   Bun.serve + GraphQL, Sandbox- & Agent-Orchestrierung
 packages/
-  shared/   Typen, Zod-Validierung, Domain-Logik
+  shared/   Zod-Validierung, Domain-Konstanten
+templates/  Projekt-Vorlagen (pwa, fullstack) — nicht Teil der Workspaces
+scripts/    dev, setup, doctor, shutdown (Bun-TS)
+docs/       ADRs, Diagramme, Windows-Portierung, Archiv
 ```
+
+Die Architektur im Detail steht in [`CLAUDE.md`](CLAUDE.md).
 
 ## Konventionen
 
@@ -71,9 +76,10 @@ doctor`, je `--help`): heute als `bun scripts/cli.ts <befehl>` bzw. nach
 `bun link` (später Homebrew) als `macvibes <befehl>`. `bun run doctor` prüft
 die Umgebung (bun, git, msb, Hypervisor, freie Ports), ohne etwas zu ändern.
 
-Registrieren, dann von einem Admin freischalten lassen (der erste Nutzer der
-Instanz wird automatisch Admin; ist `MACVIBES_ADMIN_USERNAME` gesetzt, gilt das
-nur für diesen Namen). Danach Projekt aus einem Template anlegen, in den Chat
+Registrieren, dann von einem Admin freischalten lassen. Admin wird **nur** der
+in `MACVIBES_ADMIN_USERNAME` benannte Nutzer — ohne diesen Eintrag wird niemand
+automatisch Admin; `MACVIBES_ADMIN_BOOTSTRAP_TOKEN` schützt den Namen auf einer
+frischen Instanz (`bun run setup` setzt beides). Danach Projekt aus einem Template anlegen, in den Chat
 schreiben — Claude Code baut in einer eigenen MicroVM, die Preview läuft
 daneben, jeder Turn wird automatisch committet.
 
@@ -106,7 +112,7 @@ git clone https://github.com/vanmeegen/mac-local-coding-agent && cd mac-local-co
 Danach läuft oMLX als brew-Service (`omlx start|stop|restart`, Admin-UI
 `http://localhost:8000/admin`). macvibes prüft beim Start `GET /health`; läuft
 dort schon etwas, wird es benutzt, sonst startet macvibes `omlx serve` selbst
-und überwacht es (`MACVIBES_LOCAL_ROUTER_CMD`, Log `~/macvibes/local-router.log`).
+und überwacht es (`MACVIBES_LOCAL_SERVER_CMD`, Log `~/macvibes/local-router.log`).
 Gemessen auf einem M5 Pro 48 GB: ~31 tok/s Decode, Prefill 458 tok/s, und der
 Prefix-Cache von oMLX macht Folge-Turns mit 20–30k Token Kontext in Sekunden
 statt Minuten (`cache_read_input_tokens` ≈ 22k im zweiten Turn).
@@ -171,7 +177,7 @@ Anbieter aus ihrer Config.
   `~/macvibes/local-router-venv` an (1–2 min). Log: `~/macvibes/litellm.log`.
   Health: `http://localhost:8787/health/liveliness`.
 - **Config:** existiert `~/macvibes/litellm.yaml`, nutzt die Bridge NUR sie
-  (upgrade-fest; abweichender Pfad über `MACVIBES_LOCAL_ROUTER_CONFIG`), sonst
+  (upgrade-fest; abweichender Pfad über `MACVIBES_LITELLM_CONFIG`), sonst
   die mitgelieferte `litellm_config.yaml`.
 - **Das lokale Qwen-Modell ist auch über die Bridge erreichbar** (Alias
   `Qwen3.8-27B-oQ4e-mtp` auf oMLX' OpenAI-Endpunkt `http://localhost:8000/v1`)

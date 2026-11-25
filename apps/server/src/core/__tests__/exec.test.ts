@@ -91,4 +91,31 @@ describe('spawnShellCommand (plattformneutrale Shell)', () => {
     }
     expect(tot).toBe(true);
   });
+
+  test('kill() direkt nach dem Start hinterlässt keinen verwaisten Prozess', async () => {
+    // Der Wrapper (`bun exec`) braucht einen Moment, bis er sein Kind startet.
+    // Traf kill() in dieses Fenster, fand tree-kill kein Kind, beendete nur
+    // den Wrapper — und das kurz darauf gestartete Kind lief als Waise weiter
+    // (jeder Testlauf ließ so einen Dev-Server zurück).
+    const port = await freePort();
+    const proc = spawnShellCommand('bun child.ts', {
+      cwd: dir,
+      env: { ...process.env, PROBE_PORT: String(port) },
+    });
+    proc.kill();
+    await proc.exited;
+
+    // Ein verwaistes Kind würde innerhalb dieser Frist erreichbar werden.
+    const frist = Date.now() + 3_000;
+    let lebt = false;
+    while (!lebt && Date.now() < frist) {
+      await Bun.sleep(100);
+      lebt = await erreichbar(port);
+    }
+    if (lebt) {
+      // Aufräumen, damit der rote Test selbst keine Waise hinterlässt.
+      Bun.spawnSync(['pkill', '-f', 'bun child.ts']);
+    }
+    expect(lebt).toBe(false);
+  });
 });

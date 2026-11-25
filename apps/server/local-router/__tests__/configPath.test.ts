@@ -8,7 +8,7 @@ const bundled = join(bundledDir, 'litellm_config.yaml');
 const homeConfig = join(home, 'litellm.yaml');
 
 describe('resolveRouterConfigPath (Env > <macvibesHome>/litellm.yaml > mitgeliefert)', () => {
-  test('MACVIBES_LOCAL_ROUTER_CONFIG gewinnt immer — auch wenn die Home-Datei existiert', () => {
+  test('MACVIBES_LITELLM_CONFIG gewinnt immer — auch wenn die Home-Datei existiert', () => {
     const result = resolveRouterConfigPath({
       envPath: '/etc/custom/litellm.yaml',
       macvibesHome: home,

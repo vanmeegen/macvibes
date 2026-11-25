@@ -6,7 +6,9 @@ apps/server/drizzle
 apps/server/data
 templates/*/node_modules
 templates/*/dist
-# Generierte Security-Scan-Protokolle (Claude-Security-Plugin): git-ignoriert
-# über ihr EIGENES geschachteltes .gitignore, das Prettier nicht liest —
-# ohne diesen Eintrag bricht format:check lokal an unformatierbaren Artefakten.
+# Security-Scan-Rohdaten (Claude-Security-Plugin): über die Root-.gitignore
+# ausgeschlossen; hier zusätzlich, damit format:check nie an unformatierbaren
+# Artefakten bricht.
 CLAUDE-SECURITY-*
+*-VOTES.json
+.claude/worktrees

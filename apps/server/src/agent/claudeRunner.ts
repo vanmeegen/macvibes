@@ -1,12 +1,15 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
+import { defaultAppendSystemPrompt } from './appendPrompt';
 import type { AgentEvent } from './events';
 import type { AgentRunner, TurnHandle, TurnOptions } from './runner';
+import { agentEventsFromMessage } from './sdkMessageMapping';
 
 export interface ClaudeAgentRunnerOptions {
   /**
    * Überschreibt die eingebaute Zusatz-System-Anweisung
    * (MACVIBES_AGENT_APPEND_PROMPT, seit M6 über config.agent.appendSystemPrompt
-   * hereingereicht statt hier aus der Env gelesen); null = Default unten.
+   * hereingereicht statt hier aus der Env gelesen); null = eingebauter Default
+   * (agent/appendPrompt — derselbe wie im VM-Daemon).
    */
   appendSystemPrompt?: string | null;
 }
@@ -22,12 +25,8 @@ export class ClaudeAgentRunner implements AgentRunner {
   startTurn(options: TurnOptions): TurnHandle {
     const abortController = new AbortController();
 
-    // Schwächere lokale Modelle kündigen Arbeit oft nur an, statt Tools aufzurufen —
-    // diese Anweisung drängt zum direkten Handeln. Für Claude ein harmloses No-Op.
     const appendSystemPrompt =
-      this.options.appendSystemPrompt ??
-      `WICHTIG (macvibes): Kündige Änderungen nicht nur an, sondern rufe sofort die ` +
-        `passenden Tools (Write/Edit) im aktuellen Arbeitsverzeichnis auf und führe sie aus.`;
+      this.options.appendSystemPrompt ?? defaultAppendSystemPrompt(options.workspaceDir);
 
     const stream = query({
       prompt: options.prompt,
@@ -44,67 +43,34 @@ export class ClaudeAgentRunner implements AgentRunner {
       },
     });
 
-    const events = (async function* (): AsyncGenerator<AgentEvent> {
-      let sessionId: string | null = null;
-      try {
-        for await (const message of stream) {
-          switch (message.type) {
-            case 'system':
-              if (message.subtype === 'init') {
-                sessionId = message.session_id;
-              }
-              break;
-            case 'stream_event': {
-              const event = message.event;
-              if (
-                event.type === 'content_block_delta' &&
-                event.delta.type === 'text_delta' &&
-                event.delta.text.length > 0
-              ) {
-                yield { type: 'text-delta', text: event.delta.text };
-              }
-              break;
-            }
-            case 'assistant':
-              for (const block of message.message.content) {
-                if (block.type === 'tool_use') {
-                  yield {
-                    type: 'tool-use',
-                    name: block.name,
-                    detail: JSON.stringify(block.input).slice(0, 300),
-                  };
-                }
-              }
-              break;
-            case 'result':
-              sessionId = message.session_id ?? sessionId;
-              if (message.subtype === 'success') {
-                yield { type: 'turn-completed', sessionId };
-              } else {
-                yield { type: 'error', message: `Agent-Turn fehlgeschlagen (${message.subtype})` };
-                yield { type: 'turn-aborted' };
-              }
-              break;
-            default:
-              break;
-          }
-        }
-      } catch (error) {
-        if (abortController.signal.aborted) {
-          yield { type: 'turn-aborted' };
-        } else {
-          yield {
-            type: 'error',
-            message: error instanceof Error ? error.message : String(error),
-          };
-          yield { type: 'turn-aborted' };
-        }
-      }
-    })();
+    const events = eventsFromSdkStream(stream, () => abortController.signal.aborted);
 
     return {
       events,
       abort: () => abortController.abort(),
     };
+  }
+}
+
+/**
+ * SDK-Stream → AgentEvents über dieselbe Abbildung wie der VM-Daemon
+ * (agentEventsFromMessage), damit sich der Dev-Pfad nicht anders verhält als
+ * die Produktion. Hier bleibt nur, was host-spezifisch ist: ein werfender
+ * Stream endet als turn-aborted — mit Fehlermeldung, außer der Wurf ist die
+ * Folge eines Abbruchs.
+ */
+export async function* eventsFromSdkStream(
+  stream: AsyncIterable<unknown>,
+  isAborted: () => boolean,
+): AsyncGenerator<AgentEvent> {
+  try {
+    for await (const message of stream) {
+      yield* agentEventsFromMessage(message);
+    }
+  } catch (error) {
+    if (!isAborted()) {
+      yield { type: 'error', message: error instanceof Error ? error.message : String(error) };
+    }
+    yield { type: 'turn-aborted' };
   }
 }

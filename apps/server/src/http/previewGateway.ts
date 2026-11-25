@@ -193,7 +193,7 @@ interface WsProxyData {
   protocol: string | null;
   upstream: WebSocket | null;
   ready: boolean;
-  pending: (string | Buffer)[];
+  pending: (string | Buffer<ArrayBuffer>)[];
 }
 
 /** Schlichte Hinweisseite fürs iframe (Preview noch nicht da / nicht angemeldet). */
@@ -346,7 +346,7 @@ export function startPreviewGateway(options: PreviewGatewayOptions): PreviewGate
           ws.close();
         });
       },
-      message(ws: ServerWebSocket<WsProxyData>, message: string | Buffer) {
+      message(ws: ServerWebSocket<WsProxyData>, message: string | Buffer<ArrayBuffer>) {
         const upstream = ws.data.upstream;
         if (upstream !== null && ws.data.ready) upstream.send(message);
         else ws.data.pending.push(message);

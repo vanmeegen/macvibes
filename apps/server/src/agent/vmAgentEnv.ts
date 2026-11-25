@@ -1,4 +1,5 @@
 import { AGENT_CONFIG_GUEST_DIR, PROXY_TOKEN_HEADER } from '../core/vmContract';
+import { AGENT_GATEWAY_PATH } from './daemon/protocol';
 
 export interface VmAgentEnvParams {
   /** Port des macvibes-Servers (Host-Proxy). */
@@ -15,6 +16,12 @@ export interface VmAgentEnvParams {
    * eigenen Alias herein, ohne dass diese Datei bricht.
    */
   hostAlias: string;
+  /**
+   * Übersteuerung der Zusatz-System-Anweisung (config.agent.appendSystemPrompt,
+   * MACVIBES_AGENT_APPEND_PROMPT). null/undefined = der Daemon nimmt seinen
+   * eingebauten Default (agent/appendPrompt).
+   */
+  appendSystemPrompt?: string | null | undefined;
 }
 
 /**
@@ -42,5 +49,30 @@ export function buildVmAgentEnv(params: VmAgentEnvParams): Record<string, string
     HTTP_PROXY: `http://mv:${params.proxyToken}@${params.hostAlias}:${params.egressPort}`,
     HTTPS_PROXY: `http://mv:${params.proxyToken}@${params.hostAlias}:${params.egressPort}`,
     NO_PROXY: `${params.hostAlias},localhost,127.0.0.1`,
+    // Die Env IST der Host→VM-Transport: ohne diesen Eintrag las der Daemon
+    // die Variable zwar, bekam sie aber nie.
+    ...(params.appendSystemPrompt != null
+      ? { MACVIBES_AGENT_APPEND_PROMPT: params.appendSystemPrompt }
+      : {}),
+  };
+}
+
+export interface VmDaemonEnvParams extends VmAgentEnvParams {
+  /** Name der Sandbox — der Daemon weist sich damit am Gateway aus. */
+  sandboxName: string;
+}
+
+/**
+ * Umgebung des Agent-Daemons in der VM: die Claude-Umgebung plus die Adresse
+ * des Host-Gateways, in das sich der Daemon ausgehend einwählt (Token-Auth
+ * mit demselben VM-Token wie der Credential-Proxy). Das Arbeitsverzeichnis
+ * wird nicht mitgegeben: der Daemon kennt GUEST_WORKDIR aus dem Host↔VM-Vertrag.
+ */
+export function buildVmDaemonEnv(params: VmDaemonEnvParams): Record<string, string> {
+  return {
+    ...buildVmAgentEnv(params),
+    MACVIBES_AGENT_GATEWAY_URL:
+      `ws://${params.hostAlias}:${params.serverPort}${AGENT_GATEWAY_PATH}` +
+      `?sandbox=${encodeURIComponent(params.sandboxName)}&token=${encodeURIComponent(params.proxyToken)}`,
   };
 }

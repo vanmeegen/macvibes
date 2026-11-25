@@ -12,5 +12,3 @@ export const sessions = sqliteTable('sessions', {
     .$defaultFn(() => new Date()),
   expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
 });
-
-export type SessionRow = typeof sessions.$inferSelect;

@@ -1,6 +1,6 @@
 import { runStepWithTimeout } from './core/stepTimeout';
 import type { VmTokenRegistry } from './core/vmTokens';
-import type { LocalRouterHandle } from './services/localRouterService';
+import type { ModelServerHandle } from './services/modelServerService';
 
 /**
  * Dev-Hot-Reload-Aufräumen für `bun --hot` (nur Dev — in Produktion No-op).
@@ -53,9 +53,9 @@ export interface HotReloadHandoff {
    * Ausführung ihn als „extern" ein und ihr Shutdown-Schritt wäre ein No-op —
    * `bun run shutdown` liesse den selbst gestarteten Prozess dann als Waise zurück.
    */
-  localRouter: Promise<LocalRouterHandle> | null;
+  localRouter: Promise<ModelServerHandle> | null;
   /** Dito für die optionale LiteLLM-Bridge (venv-Kaltstart dauert Minuten). */
-  litellm: Promise<LocalRouterHandle> | null;
+  litellm: Promise<ModelServerHandle> | null;
 }
 
 export type HotCleanupFn = () => void | Promise<void>;

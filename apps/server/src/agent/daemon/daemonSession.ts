@@ -1,4 +1,4 @@
-import { agentEventsFromMessage } from '../claudeStreamJson';
+import { agentEventsFromMessage } from '../sdkMessageMapping';
 import type { AgentEvent } from '../events';
 import type { DaemonToHostMessage } from './protocol';
 
@@ -14,7 +14,8 @@ export interface SdkUserMessage {
 
 /** Das, was der Daemon von einer SDK-`query()` braucht (Test-Naht). */
 export interface QueryHandle extends AsyncIterable<unknown> {
-  interrupt(): Promise<void>;
+  /** Neuere SDKs liefern eine Quittung zurück; der Daemon wertet sie nicht aus. */
+  interrupt(): Promise<unknown>;
 }
 
 export interface QueryParams {
@@ -94,7 +95,7 @@ interface LiveQuery {
  * Kern des Agent-Daemons: hält EINE langlebige SDK-Query (Streaming-Input)
  * über beliebig viele Turns, mappt SDK-Messages auf AgentEvents (getaggt mit
  * der turnId) und bricht Turns per `interrupt()` sauber ab — kein Kill, keine
- * korrupte Session (chatproblems.md #13).
+ * korrupte Session (docs/archiv/chatproblems.md #13).
  */
 export class DaemonSession {
   private live: LiveQuery | null = null;
