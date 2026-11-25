@@ -42,7 +42,7 @@
     "lint-staged": "^17.6.2",
     "oxlint": "1.95.0",
     "prettier": "^3.10.1",
-    "typescript": "6.0.3"
+    "typescript": "7.0.2"
   },
   "lint-staged": {
     "*.{ts,tsx}": [
