@@ -20,6 +20,7 @@ import {
   MSB_HOST_ALIAS,
   MicrosandboxSandboxProvider,
   microsandboxSandboxName,
+  projectIdFromSandboxName,
 } from './sandbox/microsandboxProvider';
 import { msbAvailable, touchSandbox } from './sandbox/msbClient';
 import { ProcessSandboxProvider } from './sandbox/processProvider';
@@ -228,7 +229,16 @@ const useMicrosandbox = backends.sandbox === 'microsandbox';
 // Agent-Transport in die VM: persistenter SDK-Daemon (docs/archiv/architektur.md, A+C).
 // Gateway für die eingehenden Daemon-Verbindungen + gebündelter Daemon,
 // den der Provider read-only in jede VM mountet.
-const agentGateway = new AgentGateway({ tokens: vmTokens });
+// Der SandboxManager entsteht erst weiter unten — der Gateway meldet ihm
+// Verbindungsabrisse über diese späte Bindung (A1).
+let meldeAgentAbriss: (projectId: string) => void = () => {};
+const agentGateway = new AgentGateway({
+  tokens: vmTokens,
+  onDisconnected: (sandbox) => {
+    const projectId = projectIdFromSandboxName(sandbox);
+    if (projectId !== null) meldeAgentAbriss(projectId);
+  },
+});
 const daemonBundleDir = join(config.macvibesHome, 'agent-daemon');
 if (useMicrosandbox) {
   await buildDaemonBundle(daemonBundleDir);
@@ -305,7 +315,12 @@ const sandboxManager = new SandboxManager({
   // ADR 0003: Jeder host-seitige touch() hält auch die VM-Frist offen —
   // gedrosselt, weil das im Pfad jedes Agent-Events liegt.
   ...(useMicrosandbox
-    ? { touchSandbox: (projectId: string) => touchSandbox(microsandboxSandboxName(projectId)) }
+    ? {
+        touchSandbox: (projectId: string) => touchSandbox(microsandboxSandboxName(projectId)),
+        // A1: zusammen mit dem Vorschau-Status das Anzeichen, ob die VM lebt.
+        isAgentConnected: (projectId: string) =>
+          agentGateway.isConnected(microsandboxSandboxName(projectId)),
+      }
     : {}),
   onStatusChange: (projectId, status) => {
     console.log(`Sandbox ${projectId}: ${status}`);
@@ -324,6 +339,9 @@ const sandboxManager = new SandboxManager({
   onBeforeStart: (projectId) =>
     autoCommitter.saveOpenState(projectId, 'Auto-Commit vor Sandbox-Start (verwaister Stand?)'),
 });
+if (useMicrosandbox) {
+  meldeAgentAbriss = (projectId) => sandboxManager.noteAgentDisconnected(projectId);
+}
 // Beim Hot-Reload nur die Timer entschärfen — KEIN stopAll(): laufende
 // MicroVMs (samt Auto-Commit-Hook) bleiben unangetastet, sonst würde ein
 // verwaister Grace-/Idle-Timer der alten Ausführung später VMs stoppen,
@@ -375,6 +393,13 @@ const chatService = new ChatService(
   agentRunner,
   {
     onAgentActivity: (projectId) => sandboxManager.noteAgentActivity(projectId),
+    // A1: nur für die Wortwahl der Fehlzeile nach einem Hänger.
+    ...(useMicrosandbox
+      ? {
+          isAgentReachable: (projectId: string) =>
+            agentGateway.isConnected(microsandboxSandboxName(projectId)),
+        }
+      : {}),
     // Auto-Commit nach jedem abgeschlossenen Turn (R8).
     onTurnEnd: (projectId, userPrompt) => autoCommitter.afterTurn(projectId, userPrompt),
   },

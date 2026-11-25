@@ -350,3 +350,253 @@ describe('Timer-Stopps ohne Rejection-Handler (N5)', () => {
     expect(abgefangen).toEqual([]);
   });
 });
+
+/**
+ * A1 aus der Härtung 2026-11: Stirbt eine VM unter der offenen Seite (Absturz,
+ * VM-eigene Idle-Frist, Ruhezustand, `msb stop` von Hand), heilte NICHTS. Der
+ * Eintrag blieb `running`, die Vorschau `restarting` (nie `failed`), und
+ * `vmVerschwunden` setzte nur der gedrosselte, asynchrone VM-Touch — sein
+ * Ergebnis kam erst NACH dem ensureRunning an, das es gebraucht hätte. Live:
+ * jede Nachricht scheiterte nach 60 s mit „Claude-API antwortet nicht", auch
+ * die zweite.
+ */
+describe('Tote VM wird beim nächsten Zugriff sofort erkannt und geheilt (A1)', () => {
+  function aufbau(overrides: { isBusy?: () => boolean } = {}) {
+    const provider = new FakeProvider();
+    const zustand = { vmDa: true, agentVerbunden: true, touchAufrufe: 0 };
+    const manager = new SandboxManager({
+      provider,
+      graceMs: 10_000,
+      idleMs: 10_000,
+      maxSandboxes: 8,
+      // Der gedrosselte Hintergrund-Touch soll in diesen Tests nicht helfen.
+      vmTouchIntervalMs: 60_000,
+      agentReconnectGraceMs: 20,
+      ...(overrides.isBusy !== undefined ? { isBusy: overrides.isBusy } : {}),
+      isAgentConnected: () => zustand.agentVerbunden,
+      touchSandbox: async () => {
+        zustand.touchAufrufe += 1;
+        return zustand.vmDa;
+      },
+    });
+    return { provider, manager, zustand };
+  }
+
+  test('EIN ensureRunning genügt: Daemon getrennt + VM weg → Neustart', async () => {
+    const { provider, manager, zustand } = aufbau();
+    await manager.enter(ctx('p1'), 'u1');
+    zustand.vmDa = false;
+    zustand.agentVerbunden = false;
+
+    await manager.ensureRunning(ctx('p1'));
+
+    expect(provider.startCalls).toEqual(['p1', 'p1']);
+    expect(manager.status('p1')).toBe('running');
+  });
+
+  test('auch eine Vorschau im Zustand „restarting" ist Anlass zur Prüfung', async () => {
+    const { provider, manager, zustand } = aufbau();
+    await manager.enter(ctx('p1'), 'u1');
+    zustand.vmDa = false;
+    provider.previewStatusVon.set('p1', 'restarting');
+
+    await manager.ensureRunning(ctx('p1'));
+    expect(provider.startCalls).toEqual(['p1', 'p1']);
+  });
+
+  test('Daemon getrennt, aber die VM lebt: kein Neustart (monit startet den Daemon neu)', async () => {
+    const { provider, manager, zustand } = aufbau();
+    await manager.enter(ctx('p1'), 'u1');
+    zustand.agentVerbunden = false;
+
+    await manager.ensureRunning(ctx('p1'));
+    expect(provider.startCalls).toEqual(['p1']);
+    expect(provider.stopCalls).toEqual([]);
+  });
+
+  test('gesunde VM: der Zugriff kostet keinen VM-Aufruf', async () => {
+    const { manager, zustand } = aufbau();
+    await manager.enter(ctx('p1'), 'u1');
+    const vorher = zustand.touchAufrufe;
+    await manager.ensureRunning(ctx('p1'));
+    await manager.enter(ctx('p1'), 'u2');
+    expect(zustand.touchAufrufe).toBe(vorher);
+  });
+
+  test('ein Fehler der Prüfung selbst (msb hängt) ist KEIN „verschwunden"', async () => {
+    const provider = new FakeProvider();
+    let wirft = false;
+    const manager = new SandboxManager({
+      provider,
+      graceMs: 10_000,
+      idleMs: 10_000,
+      maxSandboxes: 8,
+      vmTouchIntervalMs: 60_000,
+      isAgentConnected: () => false,
+      touchSandbox: async () => {
+        if (wirft) throw new Error('msb antwortet nicht');
+        return true;
+      },
+    });
+    await manager.enter(ctx('p1'), 'u1');
+    wirft = true;
+    await manager.ensureRunning(ctx('p1'));
+    expect(provider.startCalls).toEqual(['p1']);
+  });
+
+  test('nie unter einem laufenden Turn', async () => {
+    let busy = false;
+    const { provider, manager, zustand } = aufbau({ isBusy: () => busy });
+    await manager.enter(ctx('p1'), 'u1');
+    zustand.vmDa = false;
+    zustand.agentVerbunden = false;
+    busy = true;
+    await manager.ensureRunning(ctx('p1'));
+    expect(provider.startCalls).toEqual(['p1']);
+  });
+
+  test('Verbindungsabriss mit offenem Tab: nach der Frist wird von selbst geheilt', async () => {
+    const { provider, manager, zustand } = aufbau();
+    await manager.enter(ctx('p1'), 'u1');
+    zustand.vmDa = false;
+    zustand.agentVerbunden = false;
+
+    manager.noteAgentDisconnected('p1');
+    await waitFor(() => provider.startCalls.length === 2);
+    expect(manager.status('p1')).toBe('running');
+  });
+
+  test('Verbindungsabriss ohne Betrachter: der Eintrag wird als gestoppt abgeräumt', async () => {
+    const { provider, manager, zustand } = aufbau();
+    await manager.ensureRunning(ctx('p1'));
+    zustand.vmDa = false;
+    zustand.agentVerbunden = false;
+
+    manager.noteAgentDisconnected('p1');
+    await waitFor(() => manager.status('p1') === 'stopped');
+    expect(provider.startCalls).toEqual(['p1']);
+  });
+
+  test('meldet sich der Daemon innerhalb der Frist zurück, passiert nichts', async () => {
+    const { provider, manager, zustand } = aufbau();
+    await manager.enter(ctx('p1'), 'u1');
+    zustand.agentVerbunden = false;
+    const vorher = zustand.touchAufrufe;
+    manager.noteAgentDisconnected('p1');
+    zustand.agentVerbunden = true;
+    await Bun.sleep(50);
+    expect(zustand.touchAufrufe).toBe(vorher);
+    expect(provider.startCalls).toEqual(['p1']);
+  });
+
+  test('ein inzwischen ersetzter Eintrag wird von einer alten Abriss-Meldung nicht angefasst', async () => {
+    const { provider, manager, zustand } = aufbau();
+    await manager.enter(ctx('p1'), 'u1');
+    zustand.agentVerbunden = false;
+    manager.noteAgentDisconnected('p1');
+    // Regulärer Stopp + Neustart, bevor die Frist abläuft.
+    await manager.stop('p1');
+    zustand.agentVerbunden = true;
+    await manager.enter(ctx('p1'), 'u1');
+    zustand.agentVerbunden = false;
+    zustand.vmDa = false;
+    await Bun.sleep(50);
+    // Die alte Meldung galt dem alten Eintrag; der neue hat keine eigene bekommen.
+    expect(provider.startCalls).toEqual(['p1', 'p1']);
+  });
+});
+
+/**
+ * A4: `stopAll()` stoppte nur, was im Moment des Aufrufs lief. Der HTTP-Server
+ * nimmt bis zum Prozessende Anfragen an — ein `enter` wartete den laufenden
+ * Stopp ab und startete dann frisch (live im Server-Log: „stopped", direkt
+ * danach „starting"). Schafft die VM den Start vor dem Prozessende, überlebt
+ * sie den Server.
+ */
+describe('Herunterfahren: nach stopAll startet nichts mehr (A4)', () => {
+  test('ein ensureRunning während stopAll wird abgelehnt und startet keine VM', async () => {
+    const { provider, manager } = setup({ graceMs: 10_000 });
+    await manager.enter(ctx('p1'), 'u1');
+    let stoppFreigeben: () => void = () => {};
+    provider.stopGate = new Promise<void>((resolve) => {
+      stoppFreigeben = resolve;
+    });
+
+    const herunter = manager.stopAll();
+    const spaet = manager.ensureRunning(ctx('p1'));
+    stoppFreigeben();
+    await herunter;
+
+    await expect(spaet).rejects.toThrow(/fährt gerade herunter/);
+    expect(provider.startCalls).toEqual(['p1']);
+    expect(manager.status('p1')).toBe('stopped');
+  });
+
+  test('auch ein neues Projekt startet nach stopAll nicht mehr', async () => {
+    const { provider, manager } = setup();
+    await manager.stopAll();
+    await expect(manager.enter(ctx('p2'), 'u1')).rejects.toThrow(/fährt gerade herunter/);
+    expect(provider.startCalls).toEqual([]);
+  });
+
+  test('ein gescheiterter Stopp hält die übrigen nicht auf', async () => {
+    const { provider, manager } = setup({ graceMs: 10_000 });
+    await manager.enter(ctx('p1'), 'u1');
+    await manager.enter(ctx('p2'), 'u1');
+    provider.stopFehlerFuer.add('p1');
+    await manager.stopAll();
+    expect(provider.stopCalls.sort()).toEqual(['p1', 'p2']);
+    expect(manager.status('p2')).toBe('stopped');
+  });
+
+  test('ein Start, der beim Herunterfahren gerade läuft, wird mit abgeräumt', async () => {
+    const { provider, manager } = setup({ graceMs: 10_000 });
+    let startFreigeben: () => void = () => {};
+    provider.startGate = new Promise<void>((resolve) => {
+      startFreigeben = resolve;
+    });
+    const start = manager.enter(ctx('p1'), 'u1');
+    await Bun.sleep(5);
+    const herunter = manager.stopAll();
+    startFreigeben();
+    await herunter;
+    await start.catch(() => undefined);
+    expect(manager.status('p1')).toBe('stopped');
+  });
+});
+
+/**
+ * B10: `detachForReload()` löschte nur die Timer, die es gerade gab. Ein
+ * nachlaufendes Agent-Ereignis des alten ChatService stellte danach einen
+ * frischen Idle-Timer, der später die von der NEUEN Ausführung geführte VM
+ * stoppte.
+ */
+describe('Abgekoppelter Manager (Hot-Reload) fasst nichts mehr an (B10)', () => {
+  test('Aktivität nach dem Abkoppeln stellt keinen neuen Timer', async () => {
+    const { provider, manager } = setup({ graceMs: 10_000, idleMs: 20 });
+    await manager.enter(ctx('p1'), 'u1');
+    manager.detachForReload();
+    manager.noteAgentActivity('p1');
+    await Bun.sleep(60);
+    expect(provider.stopCalls).toEqual([]);
+  });
+
+  test('ein enter nach dem Abkoppeln wird abgelehnt', async () => {
+    const { provider, manager } = setup();
+    manager.detachForReload();
+    await expect(manager.enter(ctx('p1'), 'u1')).rejects.toThrow(/abgelöst/);
+    expect(provider.startCalls).toEqual([]);
+  });
+});
+
+describe('Idle-Stopp nie unter einem laufenden Turn', () => {
+  test('ist das Projekt beim Ablauf der Idle-Frist belegt, verschiebt sich der Stopp', async () => {
+    let busy = true;
+    const { provider, manager } = setup({ graceMs: 10_000, idleMs: 20, isBusy: () => busy });
+    await manager.enter(ctx('p1'), 'u1');
+    await Bun.sleep(70);
+    expect(provider.stopCalls).toEqual([]);
+    busy = false;
+    await waitFor(() => provider.stopCalls.length === 1);
+  });
+});

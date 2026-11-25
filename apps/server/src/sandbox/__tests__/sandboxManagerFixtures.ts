@@ -23,14 +23,23 @@ export class FakeProvider implements SandboxProvider {
   stopCalls: string[] = [];
   /** Settable pro Projekt (Default „ready") — für die M2-Heilungstests. */
   readonly previewStatusVon = new Map<string, PreviewStatus>();
+  /** Hält jeden Start an, bis das Promise auflöst (Rennen nachstellen). */
+  startGate: Promise<void> | null = null;
+  /** Hält jeden Stopp an, bis das Promise auflöst. */
+  stopGate: Promise<void> | null = null;
+  /** Projekte, deren Stopp wirft. */
+  readonly stopFehlerFuer = new Set<string>();
 
   async start(context: SandboxContext): Promise<SandboxHandle> {
     this.startCalls.push(context.projectId);
+    if (this.startGate !== null) await this.startGate;
     return {
       previewHostPort: 9999,
       previewStatus: () => this.previewStatusVon.get(context.projectId) ?? 'ready',
       stop: async () => {
         this.stopCalls.push(context.projectId);
+        if (this.stopGate !== null) await this.stopGate;
+        if (this.stopFehlerFuer.has(context.projectId)) throw new Error('Stopp kaputt');
       },
     };
   }

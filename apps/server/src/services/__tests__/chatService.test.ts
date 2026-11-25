@@ -2361,3 +2361,45 @@ describe('Re-Entry-Resume (resumeUnansweredTurn)', () => {
     );
   });
 });
+
+/**
+ * A1: Antwortet der Agent nicht, weil die VM oder der Daemon weg ist, nannte
+ * die Fehlzeile „die Claude-API antwortet nicht" — die falsche Spur.
+ */
+describe('Fehlzeile nach einem Hänger nennt die richtige Ursache', () => {
+  const stumm: AgentRunner = {
+    startTurn(): TurnHandle {
+      const events: AsyncIterable<never> = {
+        [Symbol.asyncIterator]: () => ({ next: () => new Promise<never>(() => {}) }),
+      };
+      return { events, abort: () => {} };
+    },
+  };
+
+  async function fehlzeile(erreichbar: boolean | undefined): Promise<string> {
+    const db = createTestDb();
+    const owner = await createUser(db, 'marco');
+    const projectId = await createProjectRow(db, owner);
+    const service = new ChatService(
+      db,
+      stumm,
+      erreichbar === undefined ? {} : { isAgentReachable: () => erreichbar },
+      { timeouts: { firstEventMs: 20, coldStartMs: 30 }, abortGraceMs: 10, prewarmEnabled: false },
+    );
+    await service.sendMessage(owner, sendInput(projectId, 'hallo'));
+    await waitFor(() => !service.isTurnActive(projectId), 3000);
+    const messages = await service.listMessages(projectId);
+    return messages.find((m) => m.role === 'error')?.content ?? '';
+  }
+
+  test('Sandbox nicht erreichbar: die Zeile sagt das und verweist auf den Neustart', async () => {
+    const text = await fehlzeile(false);
+    expect(text).toContain('Sandbox');
+    expect(text).not.toContain('Claude-API');
+  });
+
+  test('Sandbox erreichbar: es bleibt beim Hinweis auf die API', async () => {
+    expect(await fehlzeile(true)).toContain('Claude-API');
+    expect(await fehlzeile(undefined)).toContain('Claude-API');
+  });
+});

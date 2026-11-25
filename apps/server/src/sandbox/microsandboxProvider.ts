@@ -82,6 +82,11 @@ export function microsandboxSandboxName(projectId: string): string {
   return `macvibes-${projectId}`;
 }
 
+/** Umkehrung von `microsandboxSandboxName`; `null` für fremde Namen. */
+export function projectIdFromSandboxName(sandbox: string): string | null {
+  return sandbox.startsWith('macvibes-') ? sandbox.slice('macvibes-'.length) : null;
+}
+
 /**
  * Hostname, unter dem eine msb-VM ihren Host erreicht (NAT-Alias des
  * libkrun-Gateways). Das ist msb-spezifische Netz-Topologie, KEIN

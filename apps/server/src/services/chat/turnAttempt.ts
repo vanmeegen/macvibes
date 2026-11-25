@@ -52,6 +52,8 @@ export interface TurnAttemptDeps {
   publish: (projectId: string, message: ChatMessageRow, turnActive: boolean) => void;
   /** Für den Idle-Timer der Sandbox (R9). */
   onAgentActivity: (projectId: string) => void;
+  /** Ist der Agent-Daemon der Sandbox verbunden? Nur für die Fehlzeile (A1). */
+  isAgentReachable: (projectId: string) => boolean;
   /** Timeouts für schnelle bzw. langsame (lokale) Modelle — die Wahl fällt pro Turn. */
   fastTimeouts: AgentTimeouts;
   slowTimeouts: AgentTimeouts;
@@ -251,8 +253,11 @@ export class TurnAttempt {
               `Der Agent hat ${secs}s lang nicht reagiert und wurde abgebrochen.` +
                 (detail
                   ? `\n\n${detail}`
-                  : ' Kein weiterer Fehlertext verfügbar — mögliche Ursache: die Claude-API ' +
-                    'antwortet nicht (Netz-/Rate-Limit-Problem).') +
+                  : this.deps.isAgentReachable(this.projectId)
+                    ? ' Kein weiterer Fehlertext verfügbar — mögliche Ursache: die Claude-API ' +
+                      'antwortet nicht (Netz-/Rate-Limit-Problem).'
+                    : ' Die Sandbox des Projekts ist nicht erreichbar (die VM oder ihr ' +
+                      'Agent-Prozess reagiert nicht). Die nächste Nachricht startet sie neu.') +
                 (this.sawWork ? `\n\n${CONTINUE_HINT}` : ''),
             );
           }

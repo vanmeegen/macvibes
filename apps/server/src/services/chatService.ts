@@ -21,6 +21,12 @@ export interface ChatHooks {
   onAgentActivity?: (projectId: string) => void;
   /** Nach jedem abgeschlossenen Turn — Auto-Commit (R8, B4). */
   onTurnEnd?: (projectId: string, userPrompt: string) => Promise<void>;
+  /**
+   * Ist der Agent-Daemon der Sandbox gerade mit dem Host verbunden? Nur für
+   * die Wortwahl der Fehlzeile nach einem Hänger (A1). Fehlt der Hook, gilt
+   * der Agent als erreichbar.
+   */
+  isAgentReachable?: (projectId: string) => boolean;
 }
 
 export interface SendMessageInput {
@@ -145,6 +151,7 @@ export class ChatService {
         this.insertMessage(projectId, turnId, role, content),
       publish: (projectId, message, turnActive) => this.publish(projectId, message, turnActive),
       onAgentActivity: (projectId) => this.hooks.onAgentActivity?.(projectId),
+      isAgentReachable: (projectId) => this.hooks.isAgentReachable?.(projectId) ?? true,
       fastTimeouts: {
         idleMs,
         // Nie länger warten als der Idle-Timeout — der Start-Timeout ist die UNTERE Schranke.

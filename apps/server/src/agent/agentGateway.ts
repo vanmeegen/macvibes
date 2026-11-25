@@ -33,8 +33,18 @@ export class AgentGateway {
   private readonly listeners = new Map<string, Set<GatewayListener>>();
   private readonly connectWaiters = new Map<string, Set<() => void>>();
 
-  constructor(options: { tokens: VmTokenRegistry }) {
+  private readonly onDisconnected: ((sandbox: string) => void) | undefined;
+
+  constructor(options: {
+    tokens: VmTokenRegistry;
+    /**
+     * Wird bei jedem ECHTEN Verbindungsabriss gerufen (nicht bei Ersetzen oder
+     * geordnetem Abbau) — das früheste Zeichen einer toten VM (A1).
+     */
+    onDisconnected?: (sandbox: string) => void;
+  }) {
     this.tokens = options.tokens;
+    this.onDisconnected = options.onDisconnected;
   }
 
   /** Upgrade-Handler für index.ts — undefined, wenn der Socket übernommen wurde. */
@@ -216,6 +226,7 @@ export class AgentGateway {
       `Agent-Gateway: ${sandbox} getrennt (Code ${code ?? '?'}, ${logSafe(reason ?? '')})`,
     );
     this.notify(sandbox, { kind: 'disconnected' });
+    this.onDisconnected?.(sandbox);
   }
 
   private notify(sandbox: string, notification: GatewayNotification): void {
