@@ -1,11 +1,5 @@
 import { GraphQLError, type GraphQLErrorOptions } from 'graphql';
-import {
-  createLogger,
-  createYoga,
-  maskError as yogaMaskError,
-  type Plugin,
-  type YogaLogger,
-} from 'graphql-yoga';
+import { createYoga, Logger, maskError as yogaMaskError, type Plugin } from 'graphql-yoga';
 import { useCookies } from '@whatwg-node/server-plugin-cookies';
 import { DomainError } from '../core/errors';
 import type { Db } from '../db/client';
@@ -94,26 +88,39 @@ function involvesDomainError(value: unknown): boolean {
 /**
  * Yoga loggt jeden Fehler, den maskError durch ein NEUES Objekt ersetzt, als
  * error mit vollem Stacktrace (server.js: `if (newError !== error)
- * this.logger.error(error)`). Seit maskInternalErrors DomainErrors in frische
- * GraphQLErrors umverpackt (M3), träfe das auch sie — jedes „Nicht
- * angemeldet" eines ausgeloggten Tabs, jeder Rate-Limit-Treffer würde
- * Dauerrauschen, das echte Fehler verdeckt. DomainErrors sind aber erwartete,
- * nutzerpräsentierbare Zustände, keine Serverfehler. Dieser Logger filtert
- * genau diese error-Aufrufe heraus; alles andere (interne Fehler — die
+ * (context?.log ?? this.log).error({ err: error })`). Seit maskInternalErrors
+ * DomainErrors in frische GraphQLErrors umverpackt (M3), träfe das auch sie —
+ * jedes „Nicht angemeldet" eines ausgeloggten Tabs, jeder Rate-Limit-Treffer
+ * würde Dauerrauschen, das echte Fehler verdeckt. DomainErrors sind aber
+ * erwartete, nutzerpräsentierbare Zustände, keine Serverfehler. Dieser Logger
+ * filtert genau diese error-Aufrufe heraus; alles andere (interne Fehler — die
  * SOLLEN geloggt werden, gerade weil das UI nur „Unexpected error." sieht —
- * sowie Yogas debug/info/warn) läuft unverändert über den Default-Logger.
+ * sowie Yogas debug/info/warn) läuft unverändert.
+ *
+ * Gefiltert wird am Logger und nicht an einem LogWriter: beim Writer kommt der
+ * Fehler nur noch als flaches Objekt an, die Klasse ist dort nicht mehr
+ * prüfbar. Yoga loggt Request-Fehler über einen Kind-Logger (`context.log`),
+ * deshalb erben Kinder den Filter.
  */
-function createDomainErrorSilentLogger(): YogaLogger {
-  const base = createLogger();
-  return {
-    debug: (...args) => base.debug(...args),
-    info: (...args) => base.info(...args),
-    warn: (...args) => base.warn(...args),
-    error: (...args) => {
-      if (args.some(involvesDomainError)) return;
-      base.error(...args);
-    },
-  };
+function createDomainErrorSilentLogger(): Logger {
+  return silenceDomainErrors(new Logger({ level: 'info' }));
+}
+
+function silenceDomainErrors(log: Logger): Logger {
+  const error = log.error.bind(log) as (...args: unknown[]) => void;
+  const child = log.child.bind(log) as (...args: unknown[]) => Logger;
+  log.error = ((...args: unknown[]) => {
+    if (args.some(carriesDomainError)) return;
+    error(...args);
+  }) as Logger['error'];
+  log.child = ((...args: unknown[]) => silenceDomainErrors(child(...args))) as Logger['child'];
+  return log;
+}
+
+/** Der Fehler selbst oder Yogas Attribut-Form `{ err: fehler }`. */
+function carriesDomainError(arg: unknown): boolean {
+  if (involvesDomainError(arg)) return true;
+  return typeof arg === 'object' && arg !== null && 'err' in arg && involvesDomainError(arg.err);
 }
 
 /**
