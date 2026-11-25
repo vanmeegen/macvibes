@@ -45,7 +45,7 @@ function serveProjects(projects: Project[]): string[] {
     return {
       projects,
       templates: [],
-      agentModels: [{ id: 'claude-sonnet-5', label: 'Sonnet 5' }],
+      agentModels: [{ id: 'claude-sonnet-5-5', label: 'Sonnet 5.5' }],
       previewGatewayPort: 4173,
       previewGatewayHttpsPort: null,
     };

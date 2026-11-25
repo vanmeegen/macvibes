@@ -134,7 +134,7 @@ describe('AgentGateway', () => {
       turnId: 't-1',
       prompt: 'los',
       resumeSessionId: null,
-      model: 'claude-sonnet-5',
+      model: 'claude-sonnet-5-5',
     });
     expect(ok).toBe(true);
 

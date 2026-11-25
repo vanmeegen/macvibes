@@ -9,14 +9,14 @@ describe('parseHostToDaemon', () => {
       turnId: 't-1',
       prompt: 'Baue eine Todo-App',
       resumeSessionId: 'sess-1',
-      model: 'claude-sonnet-5',
+      model: 'claude-sonnet-5-5',
     });
     expect(parseHostToDaemon(raw)).toEqual({
       kind: 'start-turn',
       turnId: 't-1',
       prompt: 'Baue eine Todo-App',
       resumeSessionId: 'sess-1',
-      model: 'claude-sonnet-5',
+      model: 'claude-sonnet-5-5',
     });
   });
 
@@ -26,7 +26,7 @@ describe('parseHostToDaemon', () => {
       turnId: 't-2',
       prompt: 'weiter',
       resumeSessionId: null,
-      model: 'claude-sonnet-5',
+      model: 'claude-sonnet-5-5',
     });
     expect(parseHostToDaemon(raw)?.kind).toBe('start-turn');
   });

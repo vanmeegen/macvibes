@@ -373,7 +373,7 @@ describe('Modellwahl pro Projekt (Dropdown im Chat)', () => {
     mockGql.mockRejectedValueOnce(new Error('Unbekanntes Modell "gpt-5"'));
     const ok = await store.setProjectModel('p1', 'gpt-5');
     expect(ok).toBe(false);
-    expect(store.projects[0]?.agentModel).toBe('claude-sonnet-5');
+    expect(store.projects[0]?.agentModel).toBe('claude-sonnet-5-5');
     expect(store.error).toContain('Unbekanntes Modell');
   });
 
@@ -384,12 +384,12 @@ describe('Modellwahl pro Projekt (Dropdown im Chat)', () => {
       templates,
       previewGatewayPort: 4173,
       agentModels: [
-        { id: 'claude-sonnet-5', label: 'Claude Sonnet 5' },
+        { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5' },
         { id: 'qwen3.6-coder', label: 'Qwen 27B (lokal)' },
       ],
     });
     await store.load();
-    expect(store.agentModels.map((m) => m.id)).toEqual(['claude-sonnet-5', 'qwen3.6-coder']);
+    expect(store.agentModels.map((m) => m.id)).toEqual(['claude-sonnet-5-5', 'qwen3.6-coder']);
   });
 });
 
@@ -453,7 +453,7 @@ describe('Status-Polling: unveränderte Antworten lösen kein Neu-Rendern aus', 
     templates,
     previewGatewayPort: 4173,
     previewGatewayHttpsPort: null,
-    agentModels: [{ id: 'claude-sonnet-5', label: 'Sonnet 5' }],
+    agentModels: [{ id: 'claude-sonnet-5-5', label: 'Sonnet 5.5' }],
   });
 
   beforeEach(() => {

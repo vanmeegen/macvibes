@@ -13,7 +13,7 @@ export function makeProject(overrides: Partial<Project> & { id: string }): Proje
     name: `Projekt ${overrides.id}`,
     templateDir: 'react-starter',
     owner: makeUser({ role: 'admin' }),
-    agentModel: 'claude-sonnet-5',
+    agentModel: 'claude-sonnet-5-5',
     lastActivityAt: '2026-07-02T12:00:00.000Z',
     sandboxStatus: 'stopped',
     previewStatus: 'stopped',

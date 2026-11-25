@@ -43,6 +43,13 @@
       "when": 1785264000000,
       "tag": "0005_session_token_hash",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1795635602794,
+      "tag": "0006_modelle_5_5",
+      "breakpoints": true
     }
   ]
 }

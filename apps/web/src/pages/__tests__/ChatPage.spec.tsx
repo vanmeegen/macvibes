@@ -36,7 +36,7 @@ function renderChat(project: Project | null): {
     return {
       projects: project === null ? [] : [project],
       templates: [],
-      agentModels: [{ id: 'claude-sonnet-5', label: 'Sonnet 5' }],
+      agentModels: [{ id: 'claude-sonnet-5-5', label: 'Sonnet 5.5' }],
       previewGatewayPort: 4173,
       previewGatewayHttpsPort: null,
     };

@@ -1,4 +1,9 @@
-import { DEFAULT_AGENT_MODEL, agentTimeoutsFor, type AgentTimeouts } from '../../agent/agentModel';
+import {
+  agentTimeoutsFor,
+  defaultAgentModel,
+  effectiveAgentModel,
+  type AgentTimeouts,
+} from '../../agent/agentModel';
 import type { AgentEvent } from '../../agent/events';
 import type { AgentRunner, TurnHandle } from '../../agent/runner';
 import type { ChatMessageRow } from '../../db/schema';
@@ -86,7 +91,7 @@ export interface TurnAttemptResult {
  * schaltet den Retry für echte Hänger still ab.
  */
 export class TurnAttempt {
-  private model = DEFAULT_AGENT_MODEL;
+  private model = defaultAgentModel();
   /** Setzt NUR das umhüllte Handle (s. Klassenkommentar). */
   private userAborted = false;
   private assistantRow: ChatMessageRow | null = null;
@@ -148,7 +153,9 @@ export class TurnAttempt {
 
     // Modell PRO PROJEKT (Dropdown im Chat); langsame lokale Modelle bekommen
     // großzügigere Timeouts, sonst bricht der Watchdog mitten im „Denken" ab.
-    this.model = projectRow?.agentModel ?? DEFAULT_AGENT_MODEL;
+    // Steht das gespeicherte Modell nicht (mehr) im Katalog, läuft der Turn mit
+    // dem Default — die Liste der Anthropic-Modelle ist Konfiguration.
+    this.model = effectiveAgentModel(projectRow?.agentModel);
     const timeouts = agentTimeoutsFor(this.model, this.deps.fastTimeouts, this.deps.slowTimeouts);
     // Nur fortsetzen, wenn die Session mit dem AKTUELLEN Projekt-Modell erstellt
     // wurde. Sonst (anderes/kein Modell) frisch starten — ein Session-Resume

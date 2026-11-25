@@ -224,6 +224,17 @@ beibehalten. Wichtig:
   (MSYS-Git übersetzt sie; `os.devNull` wird von git abgelehnt — siehe
   Kommentar in `core/gitService.ts`).
 
+## Modelle im Chat-Dropdown
+
+Die Anthropic-Modelle sind Konfiguration: `~/macvibes/claude-models.json`
+ersetzt die eingebaute Liste aus `agent/agentModel.ts` (erster Eintrag =
+Default für neue Projekte, `"zuletzt": true` = Listenende). Das lokale Modell
+bleibt Code, weitere Anbieter stehen in `~/macvibes/models.json`. Gelesen wird
+immer über `effectiveAgentModel` — ein Modell außerhalb des Katalogs wird zum
+Default. Der Spalten-Default von `projects.agent_model` ist Altbestand und
+bleibt: ein Tabellen-Neubau in SQLite löscht über die Fremdschlüssel alle
+Chat-Nachrichten (s. `drizzle/0006_modelle_5_5.sql`).
+
 ## Credentials
 
 Der Agent in der VM erreicht die Claude API nur über den Host-Proxy. In

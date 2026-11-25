@@ -890,7 +890,7 @@ describe('Session-Resume nur bei gleichem Modell (Hänger-Schutz)', () => {
     const { owner, db, service, projectId } = await setup(cap.runner);
     await db
       .update(projects)
-      .set({ claudeSessionId: 'opus-session', claudeSessionModel: 'claude-opus-4-8' })
+      .set({ claudeSessionId: 'opus-session', claudeSessionModel: 'claude-opus-5-5' })
       .where(eq(projects.id, projectId));
     await service.sendMessage(owner, sendInput(projectId, 'Weiter'));
     await waitFor(() => !service.isTurnActive(projectId));
@@ -945,7 +945,7 @@ describe('Modellwahl pro Projekt (Dropdown im Chat)', () => {
     expect(cap.model()).toBe('Qwen3.8-27B-oQ4e-mtp');
   });
 
-  test('ohne explizite Wahl läuft der Turn mit dem Default (Sonnet 5)', async () => {
+  test('ohne explizite Wahl läuft der Turn mit dem Default (Sonnet 5.5)', async () => {
     const cap = modelCapturingRunner();
     const { owner, service, projectId } = await setup(cap.runner);
     await service.sendMessage(owner, sendInput(projectId, 'Bau'));
@@ -958,12 +958,12 @@ describe('Modellwahl pro Projekt (Dropdown im Chat)', () => {
     const { owner, db, service, projectId } = await setup(cap.runner);
     await db
       .update(projects)
-      .set({ agentModel: 'claude-haiku-4-5' })
+      .set({ agentModel: 'claude-haiku-5-5' })
       .where(eq(projects.id, projectId));
     await service.sendMessage(owner, sendInput(projectId, 'Bau'));
     await waitFor(() => !service.isTurnActive(projectId));
     const row = (await db.select().from(projects).where(eq(projects.id, projectId)))[0];
-    expect(row?.claudeSessionModel).toBe('claude-haiku-4-5');
+    expect(row?.claudeSessionModel).toBe('claude-haiku-5-5');
   });
 
   test('prewarm überspringt langsame (lokale) Modelle — der Warmup würde den Daemon blockieren', async () => {
@@ -994,7 +994,7 @@ describe('Modellwahl pro Projekt (Dropdown im Chat)', () => {
     await db
       .update(projects)
       .set({
-        agentModel: 'claude-opus-4-8',
+        agentModel: 'claude-opus-5-5',
         claudeSessionId: 'qwen-session',
         claudeSessionModel: 'Qwen3.8-27B-oQ4e-mtp',
       })
@@ -1006,7 +1006,7 @@ describe('Modellwahl pro Projekt (Dropdown im Chat)', () => {
     // Jetzt passt das Session-Modell zum Projekt-Modell → Resume.
     await db
       .update(projects)
-      .set({ claudeSessionId: 'opus-session', claudeSessionModel: 'claude-opus-4-8' })
+      .set({ claudeSessionId: 'opus-session', claudeSessionModel: 'claude-opus-5-5' })
       .where(eq(projects.id, projectId));
     await service.sendMessage(owner, sendInput(projectId, 'Und weiter'));
     await waitFor(() => !service.isTurnActive(projectId));
