@@ -153,7 +153,7 @@ export async function waitForSandboxReady(
     });
 
   const start = Date.now();
-  let letzterFehler: unknown = null;
+  let letzterFehler: unknown;
   for (;;) {
     try {
       await probe(name);

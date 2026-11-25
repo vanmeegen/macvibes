@@ -458,7 +458,7 @@ describe('envQuote — lehnt ab, was Single-Quotes nicht sicher transportieren',
   ];
   for (const [name, wert] of boese) {
     test(`${name} wirft — mit label, NIE dem Wert (kein Secret-Leak)`, () => {
-      let msg = '';
+      let msg: string;
       try {
         envQuote(wert, 'MY_SECRET');
         throw new Error('sollte werfen, tat es aber nicht');
