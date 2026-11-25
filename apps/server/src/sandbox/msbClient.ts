@@ -116,8 +116,18 @@ export async function snapshotExists(name: string): Promise<boolean> {
   );
 }
 
-/** Frist für das geordnete Herunterfahren, danach wird die VM beendet. */
-const STOPP_FRIST_MS = 10_000;
+/**
+ * Frist für das geordnete Herunterfahren einer Projekt-VM, danach wird sie
+ * beendet. Bewusst knapp: gestoppt wird beim Löschen, bei LRU-Verdrängung und
+ * beim Herunterfahren des Servers, wo für ALLE VM-Stopps zusammen nur wenige
+ * Sekunden bleiben (`sandboxShutdownBudgetMs`). Das harte Beenden kostet eine
+ * Projekt-VM nichts: ihre Platte ist ein Wegwerf-Fork der Baseline, der
+ * Arbeitsstand liegt auf dem Host-Mount und ist vorher auto-committet.
+ */
+const STOPP_FRIST_MS = 2_000;
+
+/** Obergrenze für das harte Beenden selbst (dauert gemessen ~30 ms). */
+const KILL_FRIST_MS = 10_000;
 
 /**
  * Stoppt eine Sandbox. Eine unbekannte Sandbox ist KEIN Fehler — der
@@ -128,18 +138,24 @@ const STOPP_FRIST_MS = 10_000;
  * VM auch nicht von sich aus. Reagiert PID 1 nicht rechtzeitig, wird sie
  * deshalb hier beendet — sonst bliebe sie im Zustand „draining" stehen und
  * ließe sich weder entfernen noch als Snapshot einfrieren.
+ *
+ * `fristMs` verlängert die Geduld, wo das geordnete Ende zählt: die
+ * Builder-VM, deren Platte gleich eingefroren wird.
  */
-export async function stopSandbox(name: string): Promise<void> {
+export async function stopSandbox(name: string, options: { fristMs?: number } = {}): Promise<void> {
+  const fristMs = options.fristMs ?? STOPP_FRIST_MS;
   await msbCall(
     `Sandbox „${name}" konnte nicht gestoppt werden`,
     async () => {
       const sandbox = await Sandbox.get(name);
       try {
-        await sandbox.stopWithTimeout(STOPP_FRIST_MS);
+        await sandbox.stopWithTimeout(fristMs);
       } catch (error) {
         if (!(error instanceof StopTimeoutError)) throw error;
-        console.warn(`Sandbox „${name}" reagiert nicht auf das Stoppen — wird beendet.`);
-        await sandbox.killWithTimeout(STOPP_FRIST_MS);
+        console.warn(
+          `Sandbox „${name}" hat sich nicht binnen ${fristMs} ms geordnet beendet — wird beendet.`,
+        );
+        await sandbox.killWithTimeout(KILL_FRIST_MS);
       }
     },
     { ist: isSandboxNotFound, wert: undefined },

@@ -51,6 +51,9 @@ export function resolveBaselineSnapshotName(options: {
   return options.snapshotName ?? baselineSnapshotName(options.templateDir);
 }
 
+/** Frist für das geordnete Ende der Builder-VM vor dem Einfrieren. */
+const BUILDER_STOPP_FRIST_MS = 15_000;
+
 /** Baut/erneuert den Baseline-Snapshot eines Templates (bun install in der VM). */
 export async function buildTemplateBaseline(options: BuildBaselineOptions): Promise<void> {
   const snapshotName = resolveBaselineSnapshotName(options);
@@ -126,7 +129,9 @@ export async function buildTemplateBaseline(options: BuildBaselineOptions): Prom
         );
       }
     }
-    await stopSandbox(BUILDER_SANDBOX);
+    // Mehr Geduld als bei Projekt-VMs: diese Platte wird gleich eingefroren,
+    // ein hartes Beenden soll hier die Ausnahme bleiben.
+    await stopSandbox(BUILDER_SANDBOX, { fristMs: BUILDER_STOPP_FRIST_MS });
     await createSnapshot(snapshotName, BUILDER_SANDBOX);
   } finally {
     // Erst stoppen, dann entfernen: scheitert ein Bau-Schritt, läuft die

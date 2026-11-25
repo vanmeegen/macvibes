@@ -291,6 +291,28 @@ describe.skipIf(!pwaSnapshotDa)('Snapshot-Start (gegen die echte Laufzeit)', () 
     }
   }, 60_000);
 
+  test('eine VM, die das Stoppen ignoriert, hält das Stoppen nur kurz auf', async () => {
+    // Projekt-VMs werden beim Löschen, bei LRU-Verdrängung und beim
+    // Herunterfahren des Servers gestoppt — dort stehen nur wenige Sekunden
+    // zur Verfügung (Shutdown-Budget, wartende Oberfläche). Seit microsandbox
+    // 0.7 wartet ein geordnetes Stoppen sonst unbegrenzt. In der Live-Suite
+    // getroffen: eine fullstack-VM reagierte nicht, das Löschen hing 10 s.
+    try {
+      await startSandbox({ ...spec, command: ['/bin/sh', '-c', 'while true; do sleep 5; done'] });
+      await waitForSandboxReady(name);
+      const start = Date.now();
+      await stopSandbox(name);
+      expect(Date.now() - start).toBeLessThan(4000);
+      const cfgNachStop = await readSandboxConfig(name);
+      expect(cfgNachStop).toBeDefined();
+      // Gestoppt heißt: entfernen gelingt (eine laufende VM lässt sich nicht entfernen).
+      await expect(removeSandbox(name)).resolves.toBeUndefined();
+    } finally {
+      await stopSandbox(name);
+      await removeSandbox(name);
+    }
+  }, 60_000);
+
   test('ein fehlender Snapshot ist ein klarer Fehler', async () => {
     await expect(startSandbox({ ...spec, snapshot: 'macvibes-gibt-es-nicht-xyz' })).rejects.toThrow(
       /Snapshot „macvibes-gibt-es-nicht-xyz" fehlt/,
