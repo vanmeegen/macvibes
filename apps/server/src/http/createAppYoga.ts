@@ -103,7 +103,10 @@ function involvesDomainError(value: unknown): boolean {
  * deshalb erben Kinder den Filter.
  */
 function createDomainErrorSilentLogger(): Logger {
-  return silenceDomainErrors(new Logger({ level: 'info' }));
+  // 'warn' statt 'info': Yoga 6 protokolliert auf info JEDEN Request
+  // („Request processed" samt Attributblock). Bei Status-Polling im
+  // Sekundentakt ginge im Host-Log alles andere unter.
+  return silenceDomainErrors(new Logger({ level: 'warn' }));
 }
 
 function silenceDomainErrors(log: Logger): Logger {
