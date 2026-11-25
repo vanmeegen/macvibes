@@ -1,6 +1,7 @@
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import IconButton from '@mui/material/IconButton';
 import { useNavigate } from 'react-router-dom';
+import type { JSX } from 'react';
 
 /** Zurück-Pfeil der AppBar: führt zur Projektübersicht. */
 export function BackButton({ testselector }: { testselector: string }): JSX.Element {

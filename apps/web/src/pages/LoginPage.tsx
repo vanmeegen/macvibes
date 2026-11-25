@@ -9,7 +9,7 @@ import ToggleButton from '@mui/material/ToggleButton';
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import Typography from '@mui/material/Typography';
 import { observer } from 'mobx-react-lite';
-import type { FormEvent, MouseEvent } from 'react';
+import type { FormEvent, JSX, MouseEvent } from 'react';
 import type { AuthStore } from '../models/AuthStore';
 import type { LoginMode, LoginModel } from '../models/LoginModel';
 

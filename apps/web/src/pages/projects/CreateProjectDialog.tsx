@@ -14,6 +14,7 @@ import Typography from '@mui/material/Typography';
 import { observer } from 'mobx-react-lite';
 import type { CreateProjectModel } from '../../models/CreateProjectModel';
 import type { ProjectsStore } from '../../models/ProjectsStore';
+import type { JSX } from 'react';
 
 /** Dialog „Neues Projekt": Name und Vorlage. */
 export const CreateProjectDialog = observer(function CreateProjectDialog({

@@ -6,6 +6,7 @@ import DialogContentText from '@mui/material/DialogContentText';
 import DialogTitle from '@mui/material/DialogTitle';
 import { observer } from 'mobx-react-lite';
 import type { ProjectsStore } from '../../models/ProjectsStore';
+import type { JSX } from 'react';
 
 /** Rückfrage vor dem Löschen eines Projekts. */
 export const DeleteConfirmDialog = observer(function DeleteConfirmDialog({

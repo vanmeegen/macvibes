@@ -15,6 +15,7 @@ import type { ChatStore } from '../../models/ChatStore';
 import type { ProjectsStore } from '../../models/ProjectsStore';
 import { BackButton } from '../components/BackButton';
 import { StatusChip } from '../components/StatusChip';
+import type { JSX } from 'react';
 
 /** Kopfzeile der Chat-Seite: Projektname, Modellwahl, Status, Preview-/Chat-Schalter. */
 export const ChatToolbar = observer(function ChatToolbar({

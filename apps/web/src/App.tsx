@@ -16,6 +16,7 @@ import { AdminPage } from './pages/AdminPage';
 import { ChatPage } from './pages/ChatPage';
 import { LoginPage } from './pages/LoginPage';
 import { ProjectsPage } from './pages/ProjectsPage';
+import type { JSX } from 'react';
 
 export const App = observer(function App(): JSX.Element {
   if (!authStore.initialized) {

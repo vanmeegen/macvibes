@@ -11,6 +11,7 @@ import Typography from '@mui/material/Typography';
 import { observer } from 'mobx-react-lite';
 import type { ChatStore } from '../../models/ChatStore';
 import type { SpeechStore } from '../../models/SpeechStore';
+import type { JSX } from 'react';
 
 /** Pulsieren des Mikro-Buttons während der Aufnahme. */
 const RECORDING_PULSE = {

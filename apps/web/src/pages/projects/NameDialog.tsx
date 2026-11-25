@@ -10,6 +10,7 @@ import TextField from '@mui/material/TextField';
 import { observer } from 'mobx-react-lite';
 import type { NameDialogModel } from '../../models/NameDialogModel';
 import type { ProjectsStore } from '../../models/ProjectsStore';
+import type { JSX } from 'react';
 
 /**
  * Dialog „Namen eingeben" zu einem Projekt — gemeinsame Darstellung für

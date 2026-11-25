@@ -14,6 +14,7 @@ import { ChatComposer } from './chat/ChatComposer';
 import { ChatMessageList } from './chat/ChatMessageList';
 import { ChatToolbar } from './chat/ChatToolbar';
 import { PreviewPane } from './chat/PreviewPane';
+import type { JSX } from 'react';
 
 interface ChatPageProps {
   model: ChatPageModel;

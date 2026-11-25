@@ -8,6 +8,7 @@ import { useEffect, useRef } from 'react';
 import type { ChatPageModel } from '../../models/ChatPageModel';
 import type { ChatStore } from '../../models/ChatStore';
 import { MessageBubble } from './MessageBubble';
+import type { JSX } from 'react';
 
 /**
  * Nachrichtenliste samt „Agent arbeitet"-Bubble und Auto-Scroll. Eigener

@@ -5,6 +5,7 @@ import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import { observer } from 'mobx-react-lite';
 import type { ChatPageModel } from '../../models/ChatPageModel';
+import type { JSX } from 'react';
 
 /** Preview-Spalte: iframe aufs Preview-Gateway oder ein Overlay mit dem Status. */
 export const PreviewPane = observer(function PreviewPane({

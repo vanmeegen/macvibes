@@ -13,7 +13,7 @@ import MenuItem from '@mui/material/MenuItem';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 import { observer } from 'mobx-react-lite';
-import type { MouseEvent } from 'react';
+import type { JSX, MouseEvent } from 'react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Project } from '../../api/types';

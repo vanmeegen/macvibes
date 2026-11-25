@@ -16,6 +16,7 @@ import { observer } from 'mobx-react-lite';
 import { useEffect } from 'react';
 import type { AdminUsersStore } from '../models/AdminUsersStore';
 import { BackButton } from './components/BackButton';
+import type { JSX } from 'react';
 
 interface AdminPageProps {
   adminUsersStore: AdminUsersStore;

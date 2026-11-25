@@ -2,6 +2,7 @@ import Chip from '@mui/material/Chip';
 import type { SxProps, Theme } from '@mui/material/styles';
 import type { SandboxStatus } from '../../api/types';
 import { projectStatusChip } from '../../models/projectPresentation';
+import type { JSX } from 'react';
 
 /**
  * Status-Chip eines Projekts (Projektkarte und Chat-Kopfzeile): „arbeitet" bei

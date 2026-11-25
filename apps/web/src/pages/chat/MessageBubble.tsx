@@ -4,6 +4,7 @@ import Paper from '@mui/material/Paper';
 import Typography from '@mui/material/Typography';
 import { observer } from 'mobx-react-lite';
 import type { ChatMessage } from '../../api/types';
+import type { JSX } from 'react';
 
 /** Eine Chat-Nachricht — Darstellung je Rolle (User, Agent, Tool, Thinking, System, Fehler). */
 export const MessageBubble = observer(function MessageBubble({

@@ -12,7 +12,7 @@ import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import Toolbar from '@mui/material/Toolbar';
 import Typography from '@mui/material/Typography';
 import { observer } from 'mobx-react-lite';
-import type { MouseEvent } from 'react';
+import type { JSX, MouseEvent } from 'react';
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { AuthStore } from '../models/AuthStore';
