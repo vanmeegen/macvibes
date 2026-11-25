@@ -33,7 +33,15 @@ export interface DaemonSessionConfig {
   /** Arbeitsverzeichnis des Agenten in der VM (gemounteter Workspace). */
   cwd: string;
   emit: (message: DaemonToHostMessage) => void;
+  /**
+   * Wie lange nach einem Abbruch auf das SDK-`result` des abgebrochenen Turns
+   * gewartet wird, bevor die Query als stumm gilt und verworfen wird.
+   */
+  interruptGraceMs?: number;
 }
+
+/** Default für `interruptGraceMs`. */
+const DEFAULT_INTERRUPT_GRACE_MS = 5_000;
 
 export interface StartTurnParams {
   turnId: string;
@@ -110,6 +118,8 @@ export class DaemonSession {
    * eine seriell verarbeitete Query, das `result` ist die Generationsgrenze.
    */
   private verwerfeBisResult = false;
+  /** Wächter über das ausstehende `result` nach einem Abbruch. */
+  private nachzueglerFrist: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly config: DaemonSessionConfig) {}
 
@@ -135,7 +145,15 @@ export class DaemonSession {
     // korrupte Sitzung zu heilen. Bisher verwarf der Daemon `live` nur bei
     // einem Modellwechsel; bei gleichem Modell landete der Heilungsversuch in
     // genau der haengenden Query, die er heilen sollte.
-    if (this.live !== null && params.resumeSessionId === null && this.live.sessionSeen) {
+    //
+    // Dasselbe gilt, solange das `result` eines abgebrochenen Turns aussteht
+    // (`verwerfeBisResult`): die Query ist dann zweifelhaft — hing sie, bevor
+    // sie je eine Sitzung meldete, landete der Heilungsversuch sonst doch in ihr.
+    if (
+      this.live !== null &&
+      params.resumeSessionId === null &&
+      (this.live.sessionSeen || this.verwerfeBisResult)
+    ) {
       this.verwerfeLive();
     }
     if (this.live !== null && this.live.model !== params.model) {
@@ -179,18 +197,72 @@ export class DaemonSession {
     this.interrupted = true;
     // Nachzügler der aufgegebenen Generation bis zu ihrem result verwerfen (M3).
     this.verwerfeBisResult = true;
+    this.armiereNachzueglerFrist(this.live);
     this.live.handle.interrupt().catch((error: unknown) => {
       console.error('Agent-Daemon: interrupt() nach Verbindungsabbruch fehlgeschlagen:', error);
     });
   }
 
+  /**
+   * Der Host bricht den Turn ab (Stopp, Watchdog, Steering).
+   *
+   * Der Turn ist SOFORT frei, nicht erst beim SDK-`result` des abgebrochenen
+   * Turns: der Host hat seinen Stream schon beendet und kann Millisekunden
+   * später den nächsten Turn schicken. Früher lief der in die Notwehr-Sperre
+   * von `startTurn` — und hing die Query (der Grund für den Abbruch), kam das
+   * `result` nie, der zweite Versuch konnte also nie gelingen.
+   *
+   * Wie bei `abandonTurn` gehört alles, was die Query bis zu ihrem nächsten
+   * `result` liefert, der abgebrochenen Generation (M3).
+   */
   interrupt(turnId: string): void {
     if (this.currentTurnId !== turnId || this.live === null) return;
+    this.currentTurnId = null;
     this.interrupted = true;
+    this.verwerfeBisResult = true;
+    this.armiereNachzueglerFrist(this.live);
     this.live.handle.interrupt().catch((error) => {
       // Der Host hat lokal bereits abgebrochen; hier nur Diagnose.
       console.error('Agent-Daemon: interrupt() fehlgeschlagen:', error);
     });
+    this.emitEvent(turnId, { type: 'turn-aborted' });
+  }
+
+  /**
+   * Netz unter der Nachzügler-Sperre: liefert das SDK nach `interrupt()` kein
+   * `result` (hängende Query), verschluckte die Sperre den kompletten nächsten
+   * Turn. Nach der Frist wird die Query deshalb verworfen; ein Turn, der dann
+   * schon in ihr läuft, endet mit Fehler und der Host versucht es neu.
+   */
+  private armiereNachzueglerFrist(live: LiveQuery): void {
+    this.raeumeNachzueglerFrist();
+    const fristMs = this.config.interruptGraceMs ?? DEFAULT_INTERRUPT_GRACE_MS;
+    const timer = setTimeout(() => {
+      this.nachzueglerFrist = null;
+      if (this.live !== live || !this.verwerfeBisResult) return;
+      console.error(
+        `Agent-Daemon: kein result ${fristMs} ms nach dem Abbruch — Query wird verworfen.`,
+      );
+      this.verwerfeLive();
+      const turnId = this.currentTurnId;
+      if (turnId === null) return;
+      this.currentTurnId = null;
+      this.interrupted = false;
+      this.emitEvent(turnId, {
+        type: 'error',
+        message: 'Der Agent hat nach einem Abbruch nicht mehr reagiert.',
+      });
+      this.emitEvent(turnId, { type: 'turn-aborted' });
+    }, fristMs);
+    // Der Wächter darf den Daemon-Prozess nicht am Leben halten.
+    (timer as { unref?: () => void }).unref?.();
+    this.nachzueglerFrist = timer;
+  }
+
+  private raeumeNachzueglerFrist(): void {
+    if (this.nachzueglerFrist === null) return;
+    clearTimeout(this.nachzueglerFrist);
+    this.nachzueglerFrist = null;
   }
 
   /**
@@ -207,6 +279,7 @@ export class DaemonSession {
     // Eine frische Query kann keine Nachzügler der alten Generation liefern —
     // `consume` filtert die verworfene Query bereits über `this.live === live`.
     this.verwerfeBisResult = false;
+    this.raeumeNachzueglerFrist();
     live.input.end();
     live.handle.interrupt().catch((error: unknown) => {
       console.error('Agent-Daemon: interrupt() beim Verwerfen der Query fehlgeschlagen:', error);
@@ -249,7 +322,10 @@ export class DaemonSession {
         typeof message === 'object' &&
         message !== null &&
         (message as { type?: unknown }).type === 'result';
-      if (istResult) this.verwerfeBisResult = false;
+      if (istResult) {
+        this.verwerfeBisResult = false;
+        this.raeumeNachzueglerFrist();
+      }
       return; // Nachzügler der aufgegebenen Generation — still verwerfen.
     }
 
@@ -276,6 +352,7 @@ export class DaemonSession {
     // Die Query ist tot — es kann keine Nachzügler mehr geben; die Sperre darf
     // den Abbruch des laufenden Turns unten nicht überleben (M3).
     this.verwerfeBisResult = false;
+    this.raeumeNachzueglerFrist();
 
     const turnId = this.currentTurnId;
     if (turnId === null) return;

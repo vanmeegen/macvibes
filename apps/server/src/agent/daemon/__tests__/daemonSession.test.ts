@@ -63,12 +63,13 @@ interface Harness {
   queryParams: QueryParams[];
 }
 
-function makeHarness(): Harness {
+function makeHarness(options: { interruptGraceMs?: number } = {}): Harness {
   const emitted: DaemonToHostMessage[] = [];
   const queries: FakeQuery[] = [];
   const queryParams: QueryParams[] = [];
   const session = new DaemonSession({
     cwd: '/work',
+    ...options,
     emit: (message) => emitted.push(message),
     createQuery: (params) => {
       queryParams.push(params);
@@ -159,7 +160,7 @@ describe('DaemonSession', () => {
     expect(eventsFor(h.emitted, 't-2')).toEqual([{ type: 'turn-completed', sessionId: 'sess-1' }]);
   });
 
-  test('interrupt ruft query.interrupt() und der abgebrochene Turn endet als turn-aborted OHNE Fehler-Event', async () => {
+  test('interrupt ruft query.interrupt() und meldet turn-aborted SOFORT, ohne Fehler-Event', async () => {
     const h = makeHarness();
     h.session.startTurn(START);
     await tick();
@@ -167,11 +168,14 @@ describe('DaemonSession', () => {
     h.session.interrupt('t-1');
     await tick();
     expect(h.queries[0]!.interruptCalls).toBe(1);
+    // Nicht erst beim SDK-result: der Host hat seinen Stream schon beendet,
+    // und der Turn muss im Daemon genauso frei sein.
+    expect(eventsFor(h.emitted, 't-1')).toEqual([{ type: 'turn-aborted' }]);
 
-    // Das SDK beendet den unterbrochenen Turn mit einem error-result.
+    // Das SDK beendet den unterbrochenen Turn mit einem error-result — ein
+    // Nachzügler, der nichts mehr meldet.
     h.queries[0]!.push({ type: 'result', subtype: 'error_during_execution', session_id: 's-1' });
     await tick();
-
     expect(eventsFor(h.emitted, 't-1')).toEqual([{ type: 'turn-aborted' }]);
   });
 
@@ -327,7 +331,10 @@ describe('Verbindungsabbruch mitten im Turn', () => {
     h.session.abandonTurn();
     await tick();
 
-    h.session.startTurn({ ...START, turnId: 't-2' });
+    // Wie der Host: mit der gespeicherten Sitzung. (Ohne — `null` — verlangt
+    // er ausdrücklich einen frischen Start, s. „Folge-Turn direkt nach einem
+    // Abbruch".)
+    h.session.startTurn({ ...START, turnId: 't-2', resumeSessionId: 's-1' });
     await tick();
 
     // KEINE zweite Query: der Abbruch betrifft den Turn, nicht die Sitzung.
@@ -353,7 +360,7 @@ describe('Nachzuegler der aufgegebenen Generation (M3)', () => {
     await tick();
 
     h.session.abandonTurn();
-    h.session.startTurn({ ...START, turnId: 't-2', prompt: 'neu' });
+    h.session.startTurn({ ...START, turnId: 't-2', prompt: 'neu', resumeSessionId: 's-1' });
     await tick();
 
     // Nachzuegler der ALTEN Generation (dieselbe haengende Query):
@@ -390,7 +397,7 @@ describe('Nachzuegler der aufgegebenen Generation (M3)', () => {
     h.queries[0]!.push({ type: 'result', subtype: 'error_during_execution', session_id: 's-1' });
     await tick();
 
-    h.session.startTurn({ ...START, turnId: 't-2', prompt: 'neu' });
+    h.session.startTurn({ ...START, turnId: 't-2', prompt: 'neu', resumeSessionId: 's-1' });
     await tick();
     h.queries[0]!.push({ type: 'result', subtype: 'success', session_id: 's-2' });
     await tick();
@@ -407,7 +414,7 @@ describe('Nachzuegler der aufgegebenen Generation (M3)', () => {
     await tick();
 
     h.session.abandonTurn();
-    h.session.startTurn({ ...START, turnId: 't-2', prompt: 'neu' });
+    h.session.startTurn({ ...START, turnId: 't-2', prompt: 'neu', resumeSessionId: 's-1' });
     await tick();
 
     h.queries[0]!.fail(new Error('Upstream tot'));
@@ -480,5 +487,123 @@ describe('resumeSessionId: null verlangt einen frischen Start', () => {
     await tick();
 
     expect(h.queries.length).toBe(1);
+  });
+});
+
+/**
+ * Der Host beendet seinen Stream beim Abbruch sofort und kann Millisekunden
+ * später den nächsten Turn schicken (Watchdog-Retry, Steering, ein wartender
+ * Turn hinter einem abgebrochenen Warmup). Früher blieb der Turn im Daemon
+ * belegt, bis das SDK-result des abgebrochenen Turns eintraf: der Folge-Turn
+ * lief in die Notwehr-Sperre, wurde abgewiesen und der Daemon neu gestartet.
+ * Hing die Query (der Grund für den Abbruch), kam das result nie — der zweite
+ * Versuch konnte nicht gelingen. Im Echt-VM-Test daemonTransport.msb war genau
+ * das der jahrelang rote Fall „Folge-Turn nach Abbruch".
+ */
+describe('Folge-Turn direkt nach einem Abbruch', () => {
+  test('wird nicht abgewiesen und läuft über dieselbe Query durch', async () => {
+    const h = makeHarness();
+    h.session.startTurn(START);
+    await tick();
+    h.queries[0]!.push({
+      type: 'system',
+      subtype: 'init',
+      session_id: 's-1',
+    });
+    await tick();
+
+    h.session.interrupt('t-1');
+    // KEIN tick, KEIN result dazwischen: der nächste Turn kommt sofort.
+    h.session.startTurn({ ...START, turnId: 't-2', prompt: 'weiter', resumeSessionId: 's-1' });
+    await tick();
+
+    expect(h.emitted.filter((m) => m.kind === 'turn-rejected')).toEqual([]);
+    expect(h.queries).toHaveLength(1);
+
+    // Nachzügler des abgebrochenen Turns bis zu seinem result gehören nicht t-2.
+    h.queries[0]!.push({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'ALT' }] },
+    });
+    h.queries[0]!.push({ type: 'result', subtype: 'error_during_execution', session_id: 's-1' });
+    // Ab hier antwortet das SDK auf t-2.
+    h.queries[0]!.push({ type: 'result', subtype: 'success', session_id: 's-1' });
+    await tick();
+
+    const t2 = eventsFor(h.emitted, 't-2');
+    expect(JSON.stringify(t2)).not.toContain('ALT');
+    expect(t2.at(-1)).toEqual({ type: 'turn-completed', sessionId: 's-1' });
+  });
+
+  test('ein Heilungsversuch (resumeSessionId: null) bekommt eine frische Query, auch ohne gemeldete Sitzung', async () => {
+    // Watchdog-Fall: die Query hängt, bevor sie je eine Sitzung gemeldet hat.
+    // Der Host bricht ab und startet den zweiten Versuch ohne Resume. Solange
+    // das result des abgebrochenen Turns aussteht, ist die alte Query
+    // zweifelhaft — der Versuch darf nicht in ihr landen.
+    const h = makeHarness();
+    h.session.startTurn(START);
+    await tick();
+    h.session.interrupt('t-1');
+    h.session.startTurn({ ...START, turnId: 't-2', resumeSessionId: null });
+    await tick();
+
+    expect(h.emitted.filter((m) => m.kind === 'turn-rejected')).toEqual([]);
+    expect(h.queries).toHaveLength(2);
+    h.queries[1]!.push({ type: 'result', subtype: 'success', session_id: 's-2' });
+    await tick();
+    expect(eventsFor(h.emitted, 't-2').at(-1)).toEqual({
+      type: 'turn-completed',
+      sessionId: 's-2',
+    });
+  });
+
+  test('bleibt das result des abgebrochenen Turns aus, wird die Query nach der Frist verworfen', async () => {
+    const h = makeHarness({ interruptGraceMs: 20 });
+    h.session.startTurn(START);
+    await tick();
+    h.queries[0]!.push({ type: 'system', subtype: 'init', session_id: 's-1' });
+    await tick();
+    h.session.interrupt('t-1');
+    await Bun.sleep(40);
+
+    // Der nächste Turn setzt auf einer frischen Query auf (mit Resume des Hosts).
+    h.session.startTurn({ ...START, turnId: 't-2', resumeSessionId: 's-1' });
+    await tick();
+    expect(h.queries).toHaveLength(2);
+    expect(h.queryParams[1]).toMatchObject({ resumeSessionId: 's-1' });
+  });
+
+  test('läuft beim Ablauf der Frist schon ein Folge-Turn in der stummen Query, wird er mit Fehler abgebrochen', async () => {
+    // Sonst verschluckte die Nachzügler-Sperre seine komplette Antwort und er
+    // hinge bis zum Watchdog des Hosts.
+    const h = makeHarness({ interruptGraceMs: 20 });
+    h.session.startTurn(START);
+    await tick();
+    h.queries[0]!.push({ type: 'system', subtype: 'init', session_id: 's-1' });
+    await tick();
+    h.session.interrupt('t-1');
+    h.session.startTurn({ ...START, turnId: 't-2', resumeSessionId: 's-1' });
+    await Bun.sleep(40);
+
+    const t2 = eventsFor(h.emitted, 't-2');
+    expect(t2.find((e) => e.type === 'error')).toBeDefined();
+    expect(t2.at(-1)).toEqual({ type: 'turn-aborted' });
+    // Danach ist der Daemon wieder frei.
+    h.session.startTurn({ ...START, turnId: 't-3', resumeSessionId: 's-1' });
+    await tick();
+    expect(h.emitted.filter((m) => m.kind === 'turn-rejected')).toEqual([]);
+    expect(h.queries).toHaveLength(2);
+  });
+
+  test('kommt das result rechtzeitig, bleibt die Query erhalten', async () => {
+    const h = makeHarness({ interruptGraceMs: 20 });
+    h.session.startTurn(START);
+    await tick();
+    h.session.interrupt('t-1');
+    h.queries[0]!.push({ type: 'result', subtype: 'error_during_execution', session_id: 's-1' });
+    await Bun.sleep(40);
+    h.session.startTurn({ ...START, turnId: 't-2', resumeSessionId: 's-1' });
+    await tick();
+    expect(h.queries).toHaveLength(1);
   });
 });
