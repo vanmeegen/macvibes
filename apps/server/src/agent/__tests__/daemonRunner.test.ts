@@ -437,3 +437,70 @@ describe('Verklemmter Daemon: Neustart anfordern', () => {
     await gesammelt;
   });
 });
+
+/**
+ * B3 (Härtung 2026-11): Stirbt der Daemon mitten im Turn und meldet sich der
+ * neu gestartete an, ersetzt der Gateway die Verbindung, ohne dass der
+ * laufende Turn davon erfährt (bewusst: ein gerade startender Turn darf nicht
+ * grundlos abbrechen). Der neue Daemon kennt den Turn nicht — der Host wartete
+ * den Idle-Timeout ab (180 s, bei langsamen Modellen 600 s).
+ */
+describe('Verbindung ersetzt oder geordnet abgebaut, während ein Turn läuft', () => {
+  test('ein bereits gesendeter Turn endet sofort mit Fehler + turn-aborted', async () => {
+    const gw = new FakeGateway();
+    const runner = makeRunner(gw);
+    const handle = runner.startTurn(TURN);
+    const collected = collect(handle.events);
+    await tick();
+    const turnId = firstTurnId(gw);
+    gw.notify('sb-p1', { kind: 'message', message: { kind: 'turn-started', turnId } });
+
+    gw.notify('sb-p1', { kind: 'replaced' });
+
+    const events = await collected;
+    expect(events.some((e) => e.type === 'error')).toBe(true);
+    expect(events.at(-1)).toEqual({ type: 'turn-aborted' });
+  });
+
+  test('ein Turn, der noch auf die Verbindung wartet, bleibt unberührt', async () => {
+    // Der Live-Befund vom 2026-07-06: ein gerade startender Turn brach beim
+    // Reconnect grundlos ab. Das darf nicht zurückkommen.
+    const gw = new FakeGateway();
+    gw.armConnectGate();
+    const runner = makeRunner(gw, 5_000);
+    const handle = runner.startTurn(TURN);
+    const collected = collect(handle.events);
+    await tick();
+
+    gw.notify('sb-p1', { kind: 'replaced' });
+    gw.connectGate?.resolve();
+    gw.connectGate = null;
+    await tick();
+    const turnId = firstTurnId(gw);
+    expect(turnId).not.toBe('');
+    gw.emitEvent('sb-p1', turnId, { type: 'turn-completed', sessionId: 's' });
+
+    const events = await collected;
+    expect(events).toEqual([{ type: 'turn-completed', sessionId: 's' }]);
+  });
+
+  test('der eigene geordnete Abbau nach einer Ablehnung erzeugt keinen zusätzlichen Fehler', async () => {
+    const gw = new FakeGateway();
+    // Wie der echte Gateway: der Abbau meldet „replaced" an alle Abonnenten.
+    gw.closeGracefully = (sandbox: string) => {
+      gw.closedGracefully.push(sandbox);
+      gw.notify(sandbox, { kind: 'replaced' });
+    };
+    const runner = makeRunner(gw);
+    const handle = runner.startTurn(TURN);
+    const collected = collect(handle.events);
+    await tick();
+    gw.notify('sb-p1', {
+      kind: 'message',
+      message: { kind: 'turn-rejected', turnId: firstTurnId(gw) },
+    });
+
+    const events = await collected;
+    expect(events).toEqual([{ type: 'turn-aborted' }]);
+  });
+});

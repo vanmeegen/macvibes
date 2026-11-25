@@ -2477,3 +2477,74 @@ describe('Turn-Status für den Client', () => {
     await waitFor(() => !service.isTurnActive(projectId));
   });
 });
+
+/**
+ * B5 (Härtung 2026-11): Warf die Verarbeitung eines Agent-Ereignisses
+ * (Datenbankfehler beim Speichern), schrieb der Host eine Fehlzeile und hörte
+ * auf zuzuhören — brach den Agenten aber nicht ab. Der arbeitete unbeaufsichtigt
+ * weiter, sein Stream blieb offen, und der nächste Turn wurde vom belegten
+ * Daemon abgewiesen.
+ */
+describe('Fehler beim Verarbeiten eines Agent-Ereignisses bricht den Agenten ab', () => {
+  test('abort() wird gerufen und der Ereignisstrom beendet', async () => {
+    let abortAufrufe = 0;
+    let stromBeendet = false;
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        let wecke: () => void = () => {};
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          try {
+            yield { type: 'tool-use', name: 'Bash', detail: 'ls' };
+            // Der Agent arbeitet weiter, bis ihn jemand abbricht.
+            await new Promise<void>((resolve) => {
+              wecke = resolve;
+            });
+            yield { type: 'turn-aborted' };
+          } finally {
+            stromBeendet = true;
+          }
+        })();
+        return {
+          events,
+          abort: () => {
+            abortAufrufe += 1;
+            wecke();
+          },
+        };
+      },
+    };
+    const db = createTestDb();
+    const owner = await createUser(db, 'marco');
+    const projectId = await createProjectRow(db, owner);
+    // Der ZWEITE Insert (die erste Agent-Zeile) wirft; alle anderen gehen durch.
+    let inserts = 0;
+    const echterInsert = db.insert.bind(db) as (t: unknown) => {
+      values: (w: unknown) => { returning: () => Promise<unknown> };
+    };
+    const kaputteDb = new Proxy(db, {
+      get(ziel, eigenschaft, empfaenger): unknown {
+        if (eigenschaft !== 'insert') return Reflect.get(ziel, eigenschaft, empfaenger);
+        return (tabelle: unknown) => ({
+          values: (werte: unknown) => ({
+            returning: async (): Promise<unknown> => {
+              inserts += 1;
+              if (inserts === 2) throw new Error('SQLITE_BUSY: database is locked');
+              return echterInsert(tabelle).values(werte).returning();
+            },
+          }),
+        });
+      },
+    }) as Db;
+    const service = new ChatService(kaputteDb, runner, {}, { prewarmEnabled: false });
+
+    await service.sendMessage(owner, sendInput(projectId, 'hallo'));
+    await waitFor(() => !service.isBusy(projectId), 3000);
+
+    expect(abortAufrufe).toBeGreaterThanOrEqual(1);
+    expect(stromBeendet).toBe(true);
+    const messages = await service.listMessages(projectId);
+    expect(messages.some((m) => m.role === 'error' && m.content.includes('SQLITE_BUSY'))).toBe(
+      true,
+    );
+  });
+});

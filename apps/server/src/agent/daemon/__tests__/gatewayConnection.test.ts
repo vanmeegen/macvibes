@@ -14,6 +14,10 @@ class FakeSocket implements GatewaySocket {
   addEventListener(type: string, listener: (event: { data?: unknown }) => void): void {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
   }
+  closeCalls = 0;
+  close(): void {
+    this.closeCalls += 1;
+  }
   fire(type: 'open' | 'message' | 'close' | 'error', data?: unknown): void {
     if (type === 'open') this.readyState = 1;
     if (type === 'close') this.readyState = 3;
@@ -173,5 +177,70 @@ describe('GatewayConnection — Daemon-Seite der Host-Verbindung', () => {
     expect(t.connection.send({ kind: 'preview-status', status: 'ready' })).toBe(true);
     t.current().fire('close');
     expect(t.connection.send({ kind: 'ping' })).toBe(false);
+  });
+});
+
+/**
+ * B4 (Härtung 2026-11): Verschluckt das VM-Netz den Abriss (kein FIN/RST),
+ * sieht der Daemon kein `close` — er verband sich nicht neu und gab den Turn
+ * nicht frei. Jeder Turn lief in den Timeout des Hosts, bis der TCP-Stack der
+ * VM nach Minuten aufgab. Die Pings gingen ins Leere, ihre Antworten wurden
+ * nie ausgewertet.
+ */
+describe('Pong-Wächter: eine stumme Verbindung wird verworfen', () => {
+  test('nach zwei unbeantworteten Pings: Turn freigeben, Socket schließen, neu verbinden', () => {
+    const t = setup();
+    t.current().fire('open');
+    const stumm = t.current();
+    const ping = t.intervals[0]?.run as () => void;
+
+    ping(); // 1. Ping, noch keine Antwort fällig
+    ping(); // 2. Ping, der erste ist unbeantwortet
+    expect(t.reconnects).toHaveLength(0);
+    ping(); // zwei unbeantwortet → verwerfen
+
+    expect(stumm.closeCalls).toBe(1);
+    expect(t.calls).toEqual(['abandonTurn']);
+    expect(t.intervals[0]?.cancelled).toBe(true);
+    expect(t.reconnects).toHaveLength(1);
+    t.reconnects[0]?.run();
+    expect(t.sockets).toHaveLength(2);
+  });
+
+  test('ein Pong setzt den Zähler zurück', () => {
+    const t = setup();
+    t.current().fire('open');
+    const ping = t.intervals[0]?.run as () => void;
+    for (let i = 0; i < 6; i++) {
+      ping();
+      t.current().fire('message', JSON.stringify({ kind: 'pong' }));
+    }
+    expect(t.current().closeCalls).toBe(0);
+    expect(t.reconnects).toHaveLength(0);
+  });
+
+  test('das späte close-Ereignis des verworfenen Sockets löst keinen zweiten Reconnect aus', () => {
+    const t = setup();
+    t.current().fire('open');
+    const stumm = t.current();
+    const ping = t.intervals[0]?.run as () => void;
+    ping();
+    ping();
+    ping();
+    stumm.fire('close');
+    expect(t.reconnects).toHaveLength(1);
+    expect(t.calls).toEqual(['abandonTurn']);
+  });
+
+  test('eine Nachricht des verworfenen Sockets wird nicht mehr ausgeführt', () => {
+    const t = setup();
+    t.current().fire('open');
+    const stumm = t.current();
+    const ping = t.intervals[0]?.run as () => void;
+    ping();
+    ping();
+    ping();
+    stumm.fire('message', startTurn('spät'));
+    expect(t.calls).toEqual(['abandonTurn']);
   });
 });

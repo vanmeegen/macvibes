@@ -158,6 +158,25 @@ describe('AgentGateway', () => {
     expect(gemeldet).toEqual(['sb-1']);
   });
 
+  test('Ersetzen und geordneter Abbau melden „replaced" (nicht „disconnected")', async () => {
+    // B3: ein bereits gesendeter Turn muss erfahren, dass seine Verbindung weg
+    // ist — „disconnected" bleibt dem echten Abriss vorbehalten.
+    const h = makeHarness();
+    const received: GatewayNotification[] = [];
+    h.gateway.subscribe('sb-1', (n) => received.push(n));
+    await openSocket(h.url('sb-1'));
+    await h.gateway.waitForConnection('sb-1', 2000);
+
+    await openSocket(h.url('sb-1'));
+    await Bun.sleep(50);
+    expect(received.filter((n) => n.kind === 'replaced')).toHaveLength(1);
+
+    h.gateway.closeGracefully('sb-1');
+    await Bun.sleep(50);
+    expect(received.filter((n) => n.kind === 'replaced')).toHaveLength(2);
+    expect(received.filter((n) => n.kind === 'disconnected')).toEqual([]);
+  });
+
   test('Disconnect benachrichtigt Abonnenten und isConnected kippt', async () => {
     const h = makeHarness();
     const received: GatewayNotification[] = [];
