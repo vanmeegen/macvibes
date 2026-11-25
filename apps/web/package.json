@@ -30,13 +30,14 @@
     "@playwright/test": "^1.65.1",
     "@testing-library/jest-dom": "^8.0.0",
     "@testing-library/react": "^16.3.3",
+    "@types/node": "^24",
     "@types/react": "^19.3.1",
     "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^4.3.4",
+    "@vitejs/plugin-react": "^6.3.0",
     "jsdom": "^31.0.1",
     "tree-kill": "^1.2.2",
     "typescript": "6.0.3",
-    "vite": "^5.4.11",
-    "vitest": "^2.1.6"
+    "vite": "^8.3.8",
+    "vitest": "^5.1.1"
   }
 }

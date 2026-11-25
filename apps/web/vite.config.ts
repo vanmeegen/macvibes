@@ -1,5 +1,4 @@
-/// <reference types="vitest" />
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 
 // Für E2E-Läufe zeigt der Proxy auf einen isolierten Test-Server (eigener Port).
