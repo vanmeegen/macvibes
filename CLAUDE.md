@@ -131,6 +131,12 @@ GitHub-Mirror.
 - **Strikte Typen** (siehe `tsconfig.base.json`), keine verschluckten
   Exceptions — jeder `catch` loggt / meldet / gibt ein Result zurück.
 - **Selektion in E2E nur über `data-testselector`**, nie über übersetzte Strings.
+- **Änderungen an Turn-Handling, Agent-Transport oder VM-Lebenszyklus:**
+  zusätzlich `bun run stress` und den Echt-VM-Test
+  (`MACVIBES_TEST_MSB=1 bun test src/sandbox/__tests__/daemonTransport.msb.test.ts`
+  in `apps/server`) — die CI startet keine VMs. Der Integrationstest
+  `hostDaemonIntegration.test.ts` verdrahtet Host und Daemon ohne VM und läuft
+  in der CI mit.
 - **Vor jedem Commit `bun run ci`** (lint + typecheck + test). Nach jedem
   fertigen, grünen Teil committen (deutsche, aussagekräftige Message).
 
@@ -143,6 +149,7 @@ bun run ci                 # lint + typecheck + alle Unit-/Integrationstests
 bun --filter='@macvibes/web' run e2e   # Playwright-E2E (nutzt Prozess-Provider + Fake-Agent)
 bun --filter='@macvibes/web' run e2e:live  # Live-Walkthrough gegen LAUFENDEN Server (echte VMs + Claude; Zugangsdaten via MACVIBES_LIVE_USER/_PASS, s. e2e-live/)
 bun run baselines          # Template-Baseline-Snapshots (neu) bauen — nach Template-Änderungen
+bun run stress             # Stress-Suite (VM-Lebenszyklus, Turn-Handling): eigene Testinstallation auf Port 4100, echte VMs + Claude, ~3 min — s. docs/haertung-turn-und-vm-2026-11.md
 bun run start              # Produktion: Web bauen + Server (liefert dist aus, LAN)
 ```
 

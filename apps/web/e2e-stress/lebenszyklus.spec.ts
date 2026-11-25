@@ -1,7 +1,7 @@
 /**
- * Stresstests für VM-Lebenszyklus und Turn-Handling gegen eine LAUFENDE
+ * Stresstests für VM-Lebenszyklus und Turn-Handling gegen eine getrennte
  * Testinstallation (echte MicroVMs, echter Claude). Jeder Fall legt eigene
- * Projekte an. Nicht Teil der CI — Untersuchungswerkzeug.
+ * Projekte an. Nicht Teil der CI. Start: `bun run stress lebenszyklus`.
  */
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';

@@ -1,6 +1,7 @@
 /**
- * Zweite Runde Stresstests: gezielte Nachstellung der Befunde aus dem
- * Code-Review. Untersuchungswerkzeug, nicht Teil der CI.
+ * Regressionsszenarien zu den live nachgestellten Befunden A1–A4 der Härtung
+ * 2026-11 (docs/haertung-turn-und-vm-2026-11.md). Echte MicroVMs, echter
+ * Claude — nicht Teil der CI. Start: `bun run stress befunde`.
  */
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -92,8 +93,17 @@ test('T1 Arbeits-Anzeige beim Senden während des VM-Boots: flackert sie weg?', 
     if ((await chat.messagesByRole('assistant').count()) > 0 && aktiv === 'false') break;
     await page.waitForTimeout(150);
   }
-  console.log('T1 Verlauf turn-active/status/stop:', verlauf);
-  console.log('T1 Zeilen:', await zeilen(chat));
+  const dauerMs = Date.now() - start;
+  const gesehen = await zeilen(chat);
+  console.log('T1 Verlauf turn-active/status/stop:', verlauf, `${dauerMs}ms`);
+  console.log('T1 Zeilen:', gesehen);
+  // A2: vor der Härtung kollidierte der Vorwärm-Turn mit dieser Nachricht —
+  // „zweiter Versuch" in derselben Sekunde, Antwort nach 61 s.
+  expect(gesehen['system']).toEqual([]);
+  expect(gesehen['error']).toEqual([]);
+  expect(dauerMs).toBeLessThan(25_000);
+  // B1: die Arbeits-Anzeige darf vor der Antwort nicht verschwinden.
+  expect(verlauf.slice(0, -1).filter((e) => e.includes(' false/'))).toEqual([]);
 });
 
 test('T2 Senden unmittelbar nach Stopp (ohne zu warten): Folge-Turn, Hinweiszeilen, Dauer', async ({
@@ -123,7 +133,11 @@ test('T2 Senden unmittelbar nach Stopp (ohne zu warten): Folge-Turn, Hinweiszeil
     timeout: 240_000,
   });
   console.log('T2:', { sendenNachStoppMs: tGesendet, antwortNachMs: Date.now() - t0 });
-  console.log('T2 Zeilen:', await zeilen(chat));
+  const gesehen = await zeilen(chat);
+  console.log('T2 Zeilen:', gesehen);
+  // A3: kein abgewiesener Folge-Turn, kein Daemon-Neustart, keine Fehlzeile.
+  expect(gesehen['error']).toEqual([]);
+  expect((gesehen['system'] ?? []).filter((z) => z.includes('zweiter Versuch'))).toEqual([]);
   console.log(
     'T2 log:',
     logSeit(marke).filter((z) => /Gateway|abgebaut|verworfen|Daemon|zweiter|rejected|ERR/i.test(z)),
@@ -170,50 +184,8 @@ test('T3 VM stirbt unter der offenen Seite: Zeiten, Anzeige, zweite Nachricht', 
     'T3 log:',
     logSeit(marke).filter((z) => z.includes(id) || /ERR|rror|Heil|kaputt|verschwunden/i.test(z)),
   );
-});
-
-test('T4 Server fährt herunter, während ein Projekt geöffnet wird: bleibt eine VM übrig?', async ({
-  page,
-}) => {
-  const projects = new ProjectsPage(page);
-  const chat = new ChatPage(page);
-  const a = name('down-a');
-  const b = name('down-b');
-  await projects.createProject(a, 'pwa');
-  await bereit(chat);
-  await chat.backButton.click();
-  await projects.createProject(b, 'pwa');
-  const idB = projektId(page);
-  await bereit(chat);
-  await chat.backButton.click();
-  // b ist jetzt ohne Betrachter (Grace läuft), a ebenso. Server stoppen und
-  // sofort b wieder öffnen — das enter trifft auf den laufenden Stopp.
-  const pid = execFileSync('lsof', ['-nP', '-iTCP:4100', '-sTCP:LISTEN', '-t'], {
-    encoding: 'utf8',
-  })
-    .trim()
-    .split('\n')[0] as string;
-  const marke = logMarke();
-  process.kill(Number(pid), 'SIGTERM');
-  await projects.openProject(b).catch(() => undefined);
-  await page.waitForTimeout(300);
-  await page.reload().catch(() => undefined);
-  // Warten, bis der Prozess weg ist.
-  for (let i = 0; i < 120; i++) {
-    try {
-      process.kill(Number(pid), 0);
-    } catch {
-      break;
-    }
-    await page.waitForTimeout(500);
-  }
-  await page.waitForTimeout(3000);
-  console.log(
-    'T4 VMs nach Server-Ende:',
-    vms().filter((z) => z.includes(idB) || z.includes('running')),
-  );
-  console.log(
-    'T4 log:',
-    logSeit(marke).filter((z) => /Sandbox|SIGTERM|herunter|übersprungen|ERR|rror/i.test(z)),
-  );
+  // A1: vor der Härtung scheiterte JEDE Nachricht nach 60 s mit einer Fehlzeile.
+  expect(nachErster['error']).toEqual([]);
+  expect((nachErster['assistant'] ?? []).join(' ')).toMatch(/ok/i);
+  expect(ersteMs).toBeLessThan(40_000);
 });

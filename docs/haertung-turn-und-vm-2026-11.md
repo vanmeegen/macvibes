@@ -2,8 +2,11 @@
 
 Auftrag: Turn-Handling sowie Start und Stopp der MicroVMs auf
 Synchronisationsfehler durchsehen, im Betrieb unter Stress testen und
-aufschreiben, was gefunden wurde und wie es zu beheben ist. Dieses Dokument
-ändert keinen Code.
+aufschreiben, was gefunden wurde und wie es zu beheben ist.
+
+**Stand: umgesetzt** (Branch `haertung/turn-vm-2026-11`). Was erledigt ist und
+was bewusst offen bleibt, steht im Abschnitt „Umsetzungsstand" am Ende; die
+Befundbeschreibungen darunter zeigen den Zustand VOR der Härtung.
 
 ## Kurzfassung
 
@@ -491,6 +494,62 @@ und bidirektionaler Abgleich. Dazu die kleinen Client-Punkte aus B11.
 ### Paket 6 — Herunterfahren und Aufräumen: A4, B7, B8, B10, Manager-Punkte aus B11
 
 ### Paket 7 — Port-Vergabe: B9
+
+## Umsetzungsstand
+
+| Befund                              | Stand   | Nachweis                                                                                                  |
+| ----------------------------------- | ------- | --------------------------------------------------------------------------------------------------------- |
+| A1 Tote VM heilt nicht              | behoben | Unit-Tests im `SandboxManager`; live: Antwort 1,8 s nach dem VM-Tod (vorher nie)                          |
+| A2 Vorwärm-Kollision                | behoben | Unit- und Integrationstest; live: erste Nachricht 1,5 s (vorher 61 s)                                     |
+| A3 Abbruch gibt den Turn nicht frei | behoben | Unit- und Integrationstest; `daemonTransport.msb` läuft 3 von 3 (vorher dauerhaft 2 von 3)                |
+| A4 Start beim Herunterfahren        | behoben | Unit-Tests; live: kein „starting" mehr nach SIGTERM                                                       |
+| B1 Turn-Abgleich im Client          | behoben | 18 neue Store-Tests, davon 15 gegen den alten Stand rot; Server-Tests für Hook-Fenster und Wiederaufnahme |
+| B2 Verbindungslücken                | behoben | Store-Tests (Reconnect, gescheiterte Verlaufsabfrage, endgültig geschlossene Verbindung)                  |
+| B3 Ersetzte Verbindung              | behoben | Runner- und Gateway-Tests                                                                                 |
+| B4 Pong-Wächter                     | behoben | Tests mit den Timer-Nähten                                                                                |
+| B5 Abbruch im Fehlerpfad            | behoben | Service-Test mit werfendem Insert                                                                         |
+| B6 Probe überschreibt Push          | behoben | Poller-Tests mit hängender Probe                                                                          |
+| B7 Auto-Commits nacheinander        | behoben | Committer-Tests; zusätzlich Commit nach dem VM-Stopp                                                      |
+| B8 Volume-Rest beim Löschen         | behoben | Manager- und Service-Tests (Lösch-Sperre)                                                                 |
+| B9 Port-Vergabe                     | behoben | Allocator-Test mit verschränkten Proben; Prozess-Provider mit zwei gleichzeitigen Starts                  |
+| B10 Hot-Reload                      | behoben | Manager-Tests                                                                                             |
+
+Aus B11 erledigt: gelöschtes Projekt bei offenem Tab, Entwurf pro Projekt,
+klebendes Fehlerbanner, Bus-Abonnent bei ungültiger Session, werfender fremder
+Stopp, `while` nach dem Warten auf einen Stopp, `isBusy` im Idle-Timer,
+`forget` im Startfenster.
+
+Paket 0: Der Integrationstest Host↔Daemon liegt in
+`apps/server/src/services/__tests__/hostDaemonIntegration.test.ts`; die
+Stress-Suite läuft mit `bun run stress` (13 Szenarien, rund 3 min, alle grün).
+
+### Bewusst nicht umgesetzt
+
+- **Eingereihte zweite Nachricht nach einem Server-Absturz** (B11): Sie bleibt
+  unbeantwortet, weil die Wiederaufnahme nur die letzte Zeile ansieht. Eine
+  Regel „alle Nutzerzeilen ohne Antwort" würde auch alte, nie beantwortete
+  Zeilen aus früheren Versionen beim nächsten Öffnen plötzlich ausführen. Das
+  braucht eine Markierung an der Zeile (Migration), keine Heuristik.
+- **Später Fehlertext** (B11, `drainForErrorDetail`): Der Daemon-Runner beendet
+  seinen Strom beim Abbruch sofort; ein nachgereichter Fehlertext kommt nicht
+  mehr an. Die Fehlzeile nennt jetzt wenigstens die richtige Ursache (A1).
+- **Abgebrochener Erst-Klon** (B11): nicht nachgestellt. Die saubere Lösung
+  (Klon in ein temporäres Verzeichnis und umbenennen) greift in das Layout der
+  Projekt-Volumes ein.
+- **`waitForSandboxReady` abbrechbar** (Teil von A4): Ein Start, der beim
+  Herunterfahren gerade läuft, wird weiter voll abgewartet und danach gestoppt.
+  Die Verriegelung verhindert neue Starts; das Abbrechen des laufenden wäre
+  eine Beschleunigung, keine Korrektur.
+
+### Was die Härtung im Verhalten ändert
+
+- Ein Stopp gibt den Turn im Daemon sofort frei; bleibt das SDK danach 5 s
+  stumm, wird die Sitzung verworfen und der nächste Turn setzt per Resume auf.
+- Nach jedem VM-Stopp läuft ein zweiter Auto-Commit (ohne Änderungen ein
+  `git status`).
+- Der Chat lädt den Verlauf bei jedem Verbindungsaufbau und am Turn-Ende nach.
+- Während des Herunterfahrens und während ein Projekt gelöscht wird, lehnt der
+  Server neue Starts mit einer klaren Meldung ab.
 
 ## Offene Fragen
 
