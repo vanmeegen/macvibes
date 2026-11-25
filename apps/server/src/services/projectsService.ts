@@ -7,7 +7,7 @@ import {
   projectNameSchema,
   resolveSlugCollision,
 } from '@macvibes/shared';
-import { DEFAULT_AGENT_MODEL, allAgentModels, isKnownAgentModel } from '../agent/agentModel';
+import { allAgentModels, defaultAgentModel, isKnownAgentModel } from '../agent/agentModel';
 import type { Db } from '../db/client';
 import { projects, users, type ProjectRow, type UserRow } from '../db/schema';
 import { DomainError, parseOrThrow } from '../core/errors';
@@ -184,8 +184,8 @@ async function insertProjectRow(
         id: crypto.randomUUID(),
         ...values,
         ownerId: owner.id,
-        // Neue Chats starten mit dem Default-Modell (DEFAULT_AGENT_MODEL, agent/agentModel).
-        agentModel: DEFAULT_AGENT_MODEL,
+        // Neue Chats starten mit dem Default-Modell (defaultAgentModel, agent/agentModel).
+        agentModel: defaultAgentModel(),
       })
       .returning();
     const project = inserted[0];

@@ -10,7 +10,7 @@ import { serveWebUi } from './http/staticFiles';
 import { join, resolve } from 'node:path';
 import type { Server } from 'bun';
 import { AGENT_GATEWAY_PATH, AgentGateway, type GatewaySocketData } from './agent/agentGateway';
-import { loadUserAgentModels } from './agent/agentModel';
+import { loadClaudeModels, loadUserAgentModels } from './agent/agentModel';
 import { ClaudeAgentRunner } from './agent/claudeRunner';
 import { buildDaemonBundle } from './agent/daemonBundle';
 import { DaemonAgentRunner } from './agent/daemonRunner';
@@ -54,6 +54,13 @@ const hot = await initHotReload();
 // Seiteneffekt sitzt hier in der Composition Root, nicht in loadConfig().
 loadHomeEnvFile(homeEnvPathFor());
 const config = loadConfig();
+// Die Anthropic-Modelle des Dropdowns sind Konfiguration: eine vorhandene
+// <macvibesHome>/claude-models.json ersetzt die eingebaute Liste.
+const claudeModellDatei = join(config.macvibesHome, 'claude-models.json');
+const claudeModelle = loadClaudeModels(claudeModellDatei);
+if (claudeModelle > 0) {
+  console.log(`${claudeModelle} Anthropic-Modell(e) aus ${claudeModellDatei}`);
+}
 // Nutzereigene Modelle aus <macvibesHome>/models.json in den Katalog mischen.
 // Der Dateizugriff sitzt bewusst HIER (Composition Root, wie loadHomeEnvFile
 // darüber) statt beim Modul-Import von agentModel.ts: sonst hinge jeder

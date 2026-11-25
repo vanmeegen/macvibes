@@ -299,7 +299,7 @@ describe.skipIf(!enabled)(
               prompt: 'Antworte ausschließlich mit dem Wort: bereit. Merke dir die Zahl 42.',
               workspaceDir: '/egal-host-pfad',
               resumeSessionId: null,
-              model: 'claude-sonnet-5',
+              model: 'claude-sonnet-5-5',
             }).events,
           );
         let turn1 = await startTurn1();
@@ -340,7 +340,7 @@ describe.skipIf(!enabled)(
           prompt: 'Zähle langsam und ausführlich von 1 bis 100, jede Zahl einzeln erklärt.',
           workspaceDir: '/egal-host-pfad',
           resumeSessionId: session1,
-          model: 'claude-sonnet-5',
+          model: 'claude-sonnet-5-5',
         });
         const turn2Promise = collectTurn(handle2.events);
         // Auf das erste Lebenszeichen warten, dann abbrechen.
@@ -363,7 +363,7 @@ describe.skipIf(!enabled)(
               'Welche Zahl solltest du dir vorhin merken? Antworte ausschließlich mit der Zahl.',
             workspaceDir: '/egal-host-pfad',
             resumeSessionId: session2,
-            model: 'claude-sonnet-5',
+            model: 'claude-sonnet-5-5',
           }).events,
         );
         expect(turn3.at(-1)?.type).toBe('turn-completed');

@@ -1,16 +1,28 @@
 import { createServer } from 'node:net';
 
-function tryListen(port: number): Promise<number | null> {
+function listenOn(port: number, host: string): Promise<number | null> {
   return new Promise((resolve) => {
     const server = createServer();
     server.unref();
     server.once('error', () => resolve(null));
-    server.listen(port, '0.0.0.0', () => {
+    server.listen(port, host, () => {
       const address = server.address();
       const boundPort = typeof address === 'object' && address !== null ? address.port : null;
       server.close(() => resolve(boundPort));
     });
   });
+}
+
+/**
+ * Ist der Port frei? Geprüft wird auf allen Adressen UND eigens auf dem
+ * Loopback: die Preview einer VM wird an 127.0.0.1 gebunden (H1), und ein
+ * Port, den ein anderes Programm nur dort belegt, ist auf 0.0.0.0 weiter
+ * bindbar — die Prüfung allein dort hielte ihn für frei.
+ */
+async function tryListen(port: number): Promise<number | null> {
+  const gebunden = await listenOn(port, '0.0.0.0');
+  if (gebunden === null) return null;
+  return (await listenOn(gebunden, '127.0.0.1')) === gebunden ? gebunden : null;
 }
 
 /**

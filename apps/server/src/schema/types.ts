@@ -1,5 +1,5 @@
 import type { TemplateEntry } from '@macvibes/shared';
-import type { AgentModelInfo } from '../agent/agentModel';
+import { effectiveAgentModel, type AgentModelInfo } from '../agent/agentModel';
 import type { ChatMessageRow, UserRow } from '../db/schema';
 import type { ChatEventPayload } from '../services/chatService';
 import type { ProjectWithOwner } from '../services/projectsService';
@@ -35,7 +35,9 @@ ProjectRef.implement({
     templateDir: t.exposeString('templateDir'),
     owner: t.field({ type: UserRef, resolve: (project) => project.owner }),
     /** Gewähltes Agenten-Modell (Dropdown im Chat, pro Projekt). */
-    agentModel: t.exposeString('agentModel'),
+    // Das WIRKSAME Modell: steht das gespeicherte nicht (mehr) im Katalog,
+    // zeigt das Dropdown den Default — damit läuft auch der nächste Turn.
+    agentModel: t.string({ resolve: (project) => effectiveAgentModel(project.agentModel) }),
     createdAt: t.string({ resolve: (project) => project.createdAt.toISOString() }),
     lastActivityAt: t.string({ resolve: (project) => project.lastActivityAt.toISOString() }),
     sandboxStatus: t.string({

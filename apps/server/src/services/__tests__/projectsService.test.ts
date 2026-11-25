@@ -1,3 +1,4 @@
+import { registerClaudeModels } from '../../agent/agentModel';
 import { describe, expect, spyOn, test } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -48,6 +49,25 @@ describe('createProject', () => {
     expect(project.devCommand).toBe('bun run dev');
     expect(await listBranches(config.bareRepoPath)).toEqual(['marco/mein-dashboard']);
     expect(await listProjects(db)).toHaveLength(1);
+  });
+
+  test('neue Projekte starten mit dem Default-Modell des Katalogs', async () => {
+    const { db, config, marco } = await setup();
+    const eingebaut = await createProject(db, config, marco, { name: 'Eins', templateDir: 'pwa' });
+    expect(eingebaut.agentModel).toBe('claude-sonnet-5-5');
+
+    // Der Default folgt der konfigurierten Liste (erster Eintrag der
+    // claude-models.json), nicht einer Konstante.
+    registerClaudeModels([{ id: 'claude-opus-6', label: 'Claude Opus 6', slow: false }]);
+    try {
+      const konfiguriert = await createProject(db, config, marco, {
+        name: 'Zwei',
+        templateDir: 'pwa',
+      });
+      expect(konfiguriert.agentModel).toBe('claude-opus-6');
+    } finally {
+      registerClaudeModels(null);
+    }
   });
 
   test('lehnt doppelten Namen desselben Users ab', async () => {

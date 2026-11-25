@@ -52,3 +52,42 @@ describe('PortAllocator — keine Kollision bei parallelen Sandbox-Starts', () =
     alloc.release(b);
   });
 });
+
+/**
+ * Der Preview-Port einer VM wird ans Host-Loopback gebunden (H1). Ein Port,
+ * den ein anderes Programm NUR auf 127.0.0.1 belegt (eine VM einer zweiten
+ * macvibes-Instanz, ein lokaler Dev-Server), ist auf 0.0.0.0 weiter bindbar —
+ * die Prüfung dort hielt ihn für frei, und der VM-Start scheiterte mit
+ * „failed to publish TCP port 127.0.0.1:…: Address already in use".
+ */
+describe('Port nur auf dem Loopback belegt', () => {
+  async function belegeLoopback(): Promise<{ port: number; close: () => Promise<void> }> {
+    const { createServer } = await import('node:net');
+    const server = createServer();
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (typeof address !== 'object' || address === null) throw new Error('keine Adresse');
+    return {
+      port: address.port,
+      close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    };
+  }
+
+  test('findFreePort weicht aus', async () => {
+    const belegt = await belegeLoopback();
+    try {
+      expect(await findFreePort(belegt.port)).not.toBe(belegt.port);
+    } finally {
+      await belegt.close();
+    }
+  });
+
+  test('der PortAllocator vergibt ihn nicht', async () => {
+    const belegt = await belegeLoopback();
+    try {
+      expect(await new PortAllocator().allocate(belegt.port)).not.toBe(belegt.port);
+    } finally {
+      await belegt.close();
+    }
+  });
+});

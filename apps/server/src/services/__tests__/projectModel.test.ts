@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { eq } from 'drizzle-orm';
 import { projects } from '../../db/schema';
+import { DEFAULT_AGENT_MODEL } from '../../agent/agentModel';
 import { DomainError } from '../../core/errors';
 import { setProjectAgentModel } from '../projectsService';
 import { createTestDb, createUser } from '../../testing/testUtils';
@@ -18,17 +19,14 @@ async function setup() {
     devCommand: 'bun run dev',
     previewPort: 5173,
     ownerId: owner.id,
+    // Wie der Service beim Anlegen: das Modell steht ausdrücklich in der Zeile
+    // (der Spalten-Default ist Altbestand, s. db/schema/projects.ts).
+    agentModel: DEFAULT_AGENT_MODEL,
   });
   return { db, admin, owner };
 }
 
 describe('setProjectAgentModel (Modellwahl pro Chat)', () => {
-  test('neue Projekte starten mit dem Default-Modell (Sonnet 5)', async () => {
-    const { db } = await setup();
-    const row = (await db.select().from(projects).where(eq(projects.id, 'p1')))[0];
-    expect(row?.agentModel).toBe('claude-sonnet-5');
-  });
-
   test('setzt ein bekanntes Modell, persistiert es und liefert das Projekt zurück', async () => {
     const { db, owner } = await setup();
     const project = await setProjectAgentModel(db, owner, 'p1', 'Qwen3.8-27B-oQ4e-mtp');
@@ -43,7 +41,7 @@ describe('setProjectAgentModel (Modellwahl pro Chat)', () => {
     await expect(setProjectAgentModel(db, owner, 'p1', 'gpt-5')).rejects.toThrow(DomainError);
     // Der alte Wert bleibt unangetastet.
     const row = (await db.select().from(projects).where(eq(projects.id, 'p1')))[0];
-    expect(row?.agentModel).toBe('claude-sonnet-5');
+    expect(row?.agentModel).toBe('claude-sonnet-5-5');
   });
 
   // M5: Die Ownership-Regel hängt am SERVICE, nicht am Resolver — sie greift
@@ -56,7 +54,7 @@ describe('setProjectAgentModel (Modellwahl pro Chat)', () => {
       /Eigentümer/,
     );
     const row = (await db.select().from(projects).where(eq(projects.id, 'p1')))[0];
-    expect(row?.agentModel).toBe('claude-sonnet-5');
+    expect(row?.agentModel).toBe('claude-sonnet-5-5');
   });
 
   test('auch ein Admin darf das Modell eines fremden Projekts NICHT setzen (R10: Owner-only)', async () => {
@@ -67,7 +65,7 @@ describe('setProjectAgentModel (Modellwahl pro Chat)', () => {
       /Eigentümer/,
     );
     const row = (await db.select().from(projects).where(eq(projects.id, 'p1')))[0];
-    expect(row?.agentModel).toBe('claude-sonnet-5');
+    expect(row?.agentModel).toBe('claude-sonnet-5-5');
   });
 
   test('unbekanntes Projekt wird mit DomainError abgewiesen', async () => {

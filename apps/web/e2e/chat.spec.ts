@@ -99,14 +99,14 @@ test('Nur-Lese-Besucher sieht den Chat-Verlauf', async ({ page, chatPage }) => {
 
 // Modellwahl pro Chat (Dropdown in der Toolbar)
 
-test('Modellwahl: Default ist Sonnet 5, Wechsel persistiert über Reload', async ({
+test('Modellwahl: Default ist Sonnet 5.5, Wechsel persistiert über Reload', async ({
   page,
   chatPage,
 }) => {
   await createOwnProject(page, 'Modellwahl');
 
-  // Neue Chats starten mit Claude Sonnet 5.
-  await expect(chatPage.modelSelect).toContainText('Claude Sonnet 5');
+  // Neue Chats starten mit Claude Sonnet 5.5.
+  await expect(chatPage.modelSelect).toContainText('Claude Sonnet 5.5');
 
   // Umschalten auf das lokale Qwen-Modell …
   await chatPage.selectModel('Qwen3.8-27B-oQ4e-mtp');
@@ -117,8 +117,8 @@ test('Modellwahl: Default ist Sonnet 5, Wechsel persistiert über Reload', async
   await expect(chatPage.modelSelect).toContainText('Qwen 3.8 27B (lokal, oMLX)');
 
   // Zurück auf ein Claude-Modell.
-  await chatPage.selectModel('claude-haiku-4-5');
-  await expect(chatPage.modelSelect).toContainText('Claude Haiku 4.5');
+  await chatPage.selectModel('claude-haiku-5-5');
+  await expect(chatPage.modelSelect).toContainText('Claude Haiku 5.5');
 });
 
 // Diktat: Mikro-Button mit lokaler Browser-Erkennung (Chrome On-Device).

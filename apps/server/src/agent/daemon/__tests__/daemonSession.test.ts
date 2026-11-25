@@ -95,7 +95,7 @@ const START = {
   turnId: 't-1',
   prompt: 'Baue eine Todo-App',
   resumeSessionId: null,
-  model: 'claude-sonnet-5',
+  model: 'claude-sonnet-5-5',
 };
 
 describe('DaemonSession', () => {
@@ -107,7 +107,7 @@ describe('DaemonSession', () => {
     expect(h.queryParams).toHaveLength(1);
     expect(h.queryParams[0]).toMatchObject({
       cwd: '/work',
-      model: 'claude-sonnet-5',
+      model: 'claude-sonnet-5-5',
       resumeSessionId: 'sess-alt',
     });
     expect(h.queries[0]?.promptMessages).toEqual([
@@ -201,12 +201,12 @@ describe('DaemonSession', () => {
       turnId: 't-2',
       prompt: 'weiter',
       resumeSessionId: 'sess-1',
-      model: 'claude-opus-4-8',
+      model: 'claude-opus-5-5',
     });
     await tick();
 
     expect(h.queries).toHaveLength(2);
-    expect(h.queryParams[1]).toMatchObject({ model: 'claude-opus-4-8', resumeSessionId: null });
+    expect(h.queryParams[1]).toMatchObject({ model: 'claude-opus-5-5', resumeSessionId: null });
   });
 
   test('stirbt die Query mitten im Turn, gibt es error + turn-aborted und der nächste Turn baut neu auf', async () => {

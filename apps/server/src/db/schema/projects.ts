@@ -30,7 +30,13 @@ export const projects = sqliteTable(
     claudeSessionModel: text('claude_session_model'),
     /**
      * Vom Nutzer gewähltes Agenten-Modell (Dropdown im Chat, pro Projekt).
-     * Muss im Katalog (agentModel.ts) stehen; Default = Claude Sonnet 5.
+     *
+     * Der Spalten-Default ist ein ALTBESTAND und wird nie wirksam: der Service
+     * setzt das Modell beim Anlegen ausdrücklich (defaultAgentModel), gelesen
+     * wird über effectiveAgentModel. Er bleibt stehen, weil SQLite einen
+     * Default nur per Tabellen-Neubau ändert — und der löscht über die
+     * Fremdschlüssel alle Chat-Nachrichten (s. drizzle/0006_modelle_5_5.sql).
+     * NICHT anpassen.
      */
     agentModel: text('agent_model').notNull().default('claude-sonnet-5'),
   },

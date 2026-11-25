@@ -91,6 +91,34 @@ Gateway auf einem festen Port (`MACVIBES_PREVIEW_GATEWAY_PORT`, Default **4173**
 Damit die Preview von unterwegs sichtbar ist, muss neben der UI (5173 bzw. prod 4000) **einmalig auch Port 4173** im Router/WireGuard geforwardet werden — die
 dynamischen VM-Ports müssen dann nicht mehr freigegeben werden.
 
+## Anthropic-Modelle anpassen
+
+Welche Claude-Modelle im Chat-Dropdown stehen, ist Konfiguration — ein neues
+Modell braucht keinen Neubau. Lege `~/macvibes/claude-models.json` an (Vorlage:
+`apps/server/claude-models.example.json`) und starte den Server neu:
+
+```json
+[
+  { "id": "claude-sonnet-5-5", "label": "Claude Sonnet 5.5" },
+  { "id": "claude-haiku-5-5", "label": "Claude Haiku 5.5" },
+  { "id": "claude-opus-5-5", "label": "Claude Opus 5.5" },
+  { "id": "claude-fable-5-2", "label": "Claude Fable 5.2 * — Achtung, sehr teuer", "zuletzt": true }
+]
+```
+
+- `id` ist die Modell-id der Anthropic-API (muss mit `claude` beginnen), `label`
+  der Name im Dropdown.
+- Der **erste Eintrag** ist das Modell, mit dem neue Projekte starten.
+- `"zuletzt": true` setzt einen Eintrag ans Ende der Liste, hinter alle anderen
+  Modelle.
+- Die Datei **ersetzt** die eingebaute Liste; ohne Datei gilt genau die Liste
+  oben. Fehlerhafte Einträge werden beim Start gemeldet und übersprungen.
+- Steht das Modell eines bestehenden Projekts nicht mehr in der Liste, läuft
+  das Projekt mit dem ersten Eintrag weiter.
+
+Das lokale Modell (Qwen über oMLX) und weitere Anbieter gehören nicht in diese
+Datei, siehe die folgenden Abschnitte.
+
 ## Lokales Modell (oMLX + Qwen 3.8)
 
 Neben den Claude-Modellen steht im Chat-Dropdown **`Qwen 3.8 27B (lokal, oMLX)`**

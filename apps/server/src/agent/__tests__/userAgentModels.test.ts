@@ -93,11 +93,15 @@ describe('parseUserAgentModels (Nutzer-Modelle aus <macvibesHome>/models.json)',
 });
 
 describe('registrierte Nutzer-Modelle erweitern den Katalog', () => {
-  test('allAgentModels = eingebaute + Nutzer-Modelle (in dieser Reihenfolge)', () => {
+  test('allAgentModels = eingebaute + Nutzer-Modelle, das teure Fable bleibt ganz unten', () => {
     registerUserAgentModels([{ id: 'openai/gpt-4o', label: 'GPT-4o', slow: true }]);
     expect(allAgentModels().map((m) => m.id)).toEqual([
-      ...AGENT_MODELS.map((m) => m.id),
+      'claude-sonnet-5-5',
+      'claude-haiku-5-5',
+      'claude-opus-5-5',
+      'Qwen3.8-27B-oQ4e-mtp',
       'openai/gpt-4o',
+      'claude-fable-5-2',
     ]);
   });
 
