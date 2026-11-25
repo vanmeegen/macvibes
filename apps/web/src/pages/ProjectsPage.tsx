@@ -41,8 +41,7 @@ export const ProjectsPage = observer(function ProjectsPage({
   const navigate = useNavigate();
   useEffect(() => {
     void projectsStore.load();
-    projectsStore.startPolling();
-    return () => projectsStore.stopPolling();
+    return projectsStore.startPolling();
   }, [projectsStore]);
 
   const handleFilterChange = (

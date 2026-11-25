@@ -566,6 +566,22 @@ describe('Status-Polling pausiert im versteckten Tab', () => {
     store.stopPolling();
   });
 
+  it('das Stoppen eines abgelösten Pollings beendet das neue nicht (Übersicht räumt NACH dem Chat-Start auf)', () => {
+    // React führt das passive Aufräumen der verlassenen Übersicht erst aus,
+    // nachdem die Chat-Seite ihr Polling (im Layout-Effekt) gestartet hat.
+    const store = new ProjectsStore(makeAuthStore('alice'));
+    const stopOverview = store.startPolling(2000);
+    const stopChat = store.startPolling(1000);
+    stopOverview();
+
+    vi.advanceTimersByTime(1000);
+    expect(mockGql).toHaveBeenCalledTimes(1);
+
+    stopChat();
+    vi.advanceTimersByTime(3000);
+    expect(mockGql).toHaveBeenCalledTimes(1);
+  });
+
   it('reagiert nach stopPolling nicht mehr auf Sichtbarkeitswechsel', () => {
     const store = new ProjectsStore(makeAuthStore('alice'));
     store.startPolling(1000);

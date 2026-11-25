@@ -310,17 +310,25 @@ export class ProjectsStore {
   /**
    * Hält den Status per Polling aktuell — aber nur im sichtbaren Tab: ein
    * versteckter Tab fragt nicht ab und holt den Stand nach, sobald er wieder
-   * sichtbar wird.
+   * sichtbar wird. Liefert die Funktion zurück, die genau dieses Polling
+   * wieder beendet.
    */
-  startPolling(intervalMs = 2000): void {
+  startPolling(intervalMs = 2000): () => void {
     // Ein laufendes Polling wird ERSETZT, nicht behalten: Übersicht und
     // Chat-Seite wollen verschiedene Intervalle, und ein stilles „läuft schon"
     // ließe beim Seitenwechsel das alte Intervall weiterlaufen.
     this.stopPolling();
-    this.pollTimer = setInterval(() => {
+    const timer = setInterval(() => {
       if (!document.hidden) void this.refresh();
     }, intervalMs);
+    this.pollTimer = timer;
     document.addEventListener('visibilitychange', this.refreshWhenVisible);
+    // Der Aufrufer stoppt nur SEIN Polling: React räumt die verlassene Seite
+    // (passiver Effekt) erst auf, nachdem die neue ihr Polling schon gestartet
+    // hat (Layout-Effekt) — ein pauschales Stoppen beendete dann das neue.
+    return () => {
+      if (this.pollTimer === timer) this.stopPolling();
+    };
   }
 
   stopPolling(): void {

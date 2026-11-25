@@ -39,6 +39,7 @@ export class ChatPageModel {
   previewCollapsed = false;
   /** Beobachtet, wann das Projekt der Route in der Liste auftaucht — nicht observable. */
   private disposeProjectReaction: IReactionDisposer | null = null;
+  private stopProjectPolling: (() => void) | null = null;
 
   constructor(
     private readonly projectsStore: ProjectsStore,
@@ -48,11 +49,17 @@ export class ChatPageModel {
   ) {
     makeAutoObservable<
       this,
-      'disposeProjectReaction' | 'projectsStore' | 'chatStore' | 'speechStore' | 'pageLocation'
+      | 'disposeProjectReaction'
+      | 'stopProjectPolling'
+      | 'projectsStore'
+      | 'chatStore'
+      | 'speechStore'
+      | 'pageLocation'
     >(
       this,
       {
         disposeProjectReaction: false,
+        stopProjectPolling: false,
         projectsStore: false,
         chatStore: false,
         speechStore: false,
@@ -81,7 +88,7 @@ export class ChatPageModel {
       void this.projectsStore.load();
     }
     // Status live halten — auch für Nur-Lese-Besucher.
-    this.projectsStore.startPolling(CHAT_POLL_INTERVAL_MS);
+    this.stopProjectPolling = this.projectsStore.startPolling(CHAT_POLL_INTERVAL_MS);
 
     this.disposeProjectReaction = reaction(
       () => this.project?.id ?? null,
@@ -115,7 +122,8 @@ export class ChatPageModel {
     this.disposeProjectReaction?.();
     this.disposeProjectReaction = null;
     this.chatStore.disconnect();
-    this.projectsStore.stopPolling();
+    this.stopProjectPolling?.();
+    this.stopProjectPolling = null;
     this.routeProjectId = null;
   }
 
