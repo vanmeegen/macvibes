@@ -39,6 +39,10 @@ export interface AutoCommitterOptions {
    * Root VOR dem ChatService (dessen Hooks ihn brauchen).
    */
   postError: (projectId: string, text: string) => Promise<void>;
+  /** Test-Naht: der eigentliche Commit (Default: `autoCommit`). */
+  autoCommit?: (repo: ProjectRepo, message: string) => Promise<AutoCommitResult>;
+  /** Test-Naht: gibt es ein Projekt-Repo? (Default: gitDir neben dem Arbeitsbaum.) */
+  repoVorhanden?: (repo: ProjectRepo) => boolean;
 }
 
 export interface AutoCommitter {
@@ -58,24 +62,52 @@ export interface AutoCommitter {
  * stillschweigend, und nie als geworfene Exception im Turn- oder Stopp-Pfad.
  */
 export function createAutoCommitter(options: AutoCommitterOptions): AutoCommitter {
+  const fuehreCommitAus = options.autoCommit ?? autoCommit;
+  // Kriterium ist das gitDir NEBEN dem Arbeitsbaum (F1) — ein `.git` im
+  // Arbeitsbaum wäre gast-geschrieben und damit kein Beleg für ein Repo.
+  const repoVorhanden =
+    options.repoVorhanden ?? ((repo: ProjectRepo) => existsSync(join(repo.gitDir, 'HEAD')));
+  /**
+   * Eine Kette pro Projekt: der Commit nach dem Turn und der Commit vor einem
+   * Stopp (Herunterfahren, Löschen, Idle) liefen sonst gleichzeitig im selben
+   * git-Verzeichnis — einer scheiterte an `index.lock` oder „nothing to commit"
+   * und meldete einen Fehler, den es nicht gab.
+   */
+  const ketten = new Map<string, Promise<void>>();
+  const nacheinander = (projectId: string, arbeit: () => Promise<void>): Promise<void> => {
+    const vorher = ketten.get(projectId) ?? Promise.resolve();
+    // `arbeit` wirft nie (s. commit) — die Kette reißt also nicht ab.
+    const lauf = vorher.then(arbeit);
+    ketten.set(projectId, lauf);
+    void lauf.finally(() => {
+      if (ketten.get(projectId) === lauf) ketten.delete(projectId);
+    });
+    return lauf;
+  };
   const commit = async (projectId: string, message: string, label: string): Promise<void> => {
     try {
-      await autoCommit(projectRepoFor(options.macvibesHome, projectId), message);
+      await fuehreCommitAus(projectRepoFor(options.macvibesHome, projectId), message);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       console.error(`${label} für ${projectId} fehlgeschlagen:`, error);
-      await options.postError(projectId, `${label} fehlgeschlagen: ${detail}`);
+      try {
+        await options.postError(projectId, `${label} fehlgeschlagen: ${detail}`);
+      } catch (postError) {
+        // Die Meldung selbst darf die Kette nicht sprengen (Projekt gelöscht).
+        console.error(`${label}: Fehlermeldung für ${projectId} nicht zustellbar:`, postError);
+      }
     }
   };
   return {
     afterTurn: (projectId, userPrompt) =>
-      commit(projectId, buildCommitMessage(userPrompt), 'Auto-Commit'),
-    saveOpenState: async (projectId, reason) => {
-      // Kriterium ist das gitDir NEBEN dem Arbeitsbaum (F1) — ein `.git` im
-      // Arbeitsbaum wäre gast-geschrieben und damit kein Beleg für ein Repo.
-      const repo = projectRepoFor(options.macvibesHome, projectId);
-      if (!existsSync(join(repo.gitDir, 'HEAD'))) return;
-      await commit(projectId, reason, reason);
-    },
+      nacheinander(projectId, () =>
+        commit(projectId, buildCommitMessage(userPrompt), 'Auto-Commit'),
+      ),
+    saveOpenState: (projectId, reason) =>
+      nacheinander(projectId, async () => {
+        // Erst IN der Kette prüfen: ein Commit davor kann das Repo erst anlegen.
+        if (!repoVorhanden(projectRepoFor(options.macvibesHome, projectId))) return;
+        await commit(projectId, reason, reason);
+      }),
   };
 }

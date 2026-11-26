@@ -143,3 +143,71 @@ describe('notify: Push löst den Statuswechsel sofort aus', () => {
     poller.stop();
   });
 });
+
+/**
+ * B6: Eine Probe, die VOR einem Push gestartet wurde, durfte ihr (älteres)
+ * Ergebnis danach noch anwenden. Beim Boot hieß das: Daemon meldet „ready",
+ * die schon laufende Probe scheitert (sie startete, bevor der Dev-Server
+ * lauschte) → „restarting" unter einer bereiten Vorschau, bis zum nächsten
+ * Poll. Umgekehrt überschrieb eine erfolgreiche Probe ein frisches „failed".
+ */
+describe('Eine laufende Probe überschreibt keinen neueren Push', () => {
+  function haengendeQuelle() {
+    let ablehnen: (error: Error) => void = () => {};
+    let aufloesen: (status: PreviewStatus) => void = () => {};
+    const fetchStatus = (): Promise<PreviewStatus> =>
+      new Promise<PreviewStatus>((resolve, reject) => {
+        aufloesen = resolve;
+        ablehnen = reject;
+      });
+    return {
+      fetchStatus,
+      ablehnen: (e: Error) => ablehnen(e),
+      aufloesen: (s: PreviewStatus) => aufloesen(s),
+    };
+  }
+
+  test('Push „ready", danach scheitert die alte Probe: es bleibt bei „ready"', async () => {
+    const quelle = haengendeQuelle();
+    const poller = new PreviewStatusPoller({
+      fetchStatus: quelle.fetchStatus,
+      startupIntervalMs: 10_000,
+      intervalMs: 10_000,
+    });
+    poller.start();
+    poller.notify('ready');
+    quelle.ablehnen(new Error('Probe scheitert'));
+    await Bun.sleep(10);
+    expect(poller.getStatus()).toBe('ready');
+    poller.stop();
+  });
+
+  test('Push „failed", danach meldet die alte Probe „ready": es bleibt bei „failed"', async () => {
+    const quelle = haengendeQuelle();
+    const poller = new PreviewStatusPoller({
+      fetchStatus: quelle.fetchStatus,
+      startupIntervalMs: 10_000,
+      intervalMs: 10_000,
+    });
+    poller.start();
+    poller.notify('failed');
+    quelle.aufloesen('ready');
+    await Bun.sleep(10);
+    expect(poller.getStatus()).toBe('failed');
+    poller.stop();
+  });
+
+  test('ohne Push dazwischen gilt das Ergebnis der Probe wie bisher', async () => {
+    const quelle = haengendeQuelle();
+    const poller = new PreviewStatusPoller({
+      fetchStatus: quelle.fetchStatus,
+      startupIntervalMs: 10_000,
+      intervalMs: 10_000,
+    });
+    poller.start();
+    quelle.aufloesen('ready');
+    await Bun.sleep(10);
+    expect(poller.getStatus()).toBe('ready');
+    poller.stop();
+  });
+});

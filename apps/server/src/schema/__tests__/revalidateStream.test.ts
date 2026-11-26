@@ -113,4 +113,30 @@ describe('revalidateStream (H6)', () => {
     }
     expect(geschlossen).toBe(true);
   });
+
+  test('ist die Session schon beim Aufbau ungültig, wird die Quelle trotzdem geschlossen', async () => {
+    // B11: die Quelle (der Bus-Abonnent des Chats) ist dann schon angelegt.
+    // Ohne `return()` blieb er im Abonnenten-Set und sammelte Ereignisse, bis
+    // der Prozess endete oder das Projekt gelöscht wurde.
+    let geschlossen = false;
+    const quelleMitReturn: AsyncIterable<number> = {
+      [Symbol.asyncIterator]: () => ({
+        next: async () => ({ value: 1, done: false }),
+        return: async () => {
+          geschlossen = true;
+          return { value: undefined, done: true };
+        },
+      }),
+    };
+    const out = await sammeln(
+      revalidateStream(
+        quelleMitReturn,
+        async () => false,
+        1000,
+        () => 0,
+      ),
+    );
+    expect(out).toEqual([]);
+    expect(geschlossen).toBe(true);
+  });
 });

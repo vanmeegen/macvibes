@@ -121,6 +121,91 @@ describe('Config-Warmup: erster Turn wird schnell, weil beim Öffnen vorgewärmt
     expect((await service.listMessages(projectId)).length).toBe(0);
   });
 
+  test('zwei gleichzeitige prewarm-Aufrufe starten nur EINEN Warmup', async () => {
+    // Zwei enterProject kurz hintereinander (zwei Tabs, StrictMode). Früher
+    // lag zwischen „läuft schon einer?" und dem Eintragen ein await: beide
+    // starteten, der zweite Warmup wurde vom Ein-Turn-Daemon abgewiesen und
+    // löste dessen Neustart aus.
+    let starts = 0;
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        starts += 1;
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          await Bun.sleep(30);
+          yield { type: 'turn-completed', sessionId: 'w' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { owner, service, projectId } = await setup(runner);
+    await Promise.all([
+      service.prewarm(owner, projectId, '/tmp/ws'),
+      service.prewarm(owner, projectId, '/tmp/ws'),
+    ]);
+    await waitFor(() => !service.isBusy(projectId));
+    expect(starts).toBe(1);
+  });
+
+  test('prewarm direkt vor der ersten Nachricht: der echte Turn wartet, statt zu kollidieren', async () => {
+    // Live nachgestellt (2026-11-25): Nachricht sofort nach dem Öffnen eines
+    // neuen Projekts. Der Warmup lief schon an, war aber noch nicht als
+    // laufend eingetragen — der echte Turn startete parallel, wurde vom Daemon
+    // abgewiesen, und die Antwort kam erst nach 60 s.
+    const order: string[] = [];
+    let aktiv = 0;
+    let maxGleichzeitig = 0;
+    const runner: AgentRunner = {
+      startTurn(options: TurnOptions): TurnHandle {
+        const istWarmup = options.prompt.includes('bereit');
+        order.push(istWarmup ? 'warmup' : 'real');
+        aktiv += 1;
+        maxGleichzeitig = Math.max(maxGleichzeitig, aktiv);
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          await Bun.sleep(40);
+          if (!istWarmup) yield { type: 'text-delta', text: 'echt' };
+          aktiv -= 1;
+          yield { type: 'turn-completed', sessionId: 'x' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { owner, service, projectId } = await setup(runner);
+    // OHNE await: genau das Fenster, in dem prewarm noch in seiner DB-Abfrage hängt.
+    const warm = service.prewarm(owner, projectId, '/tmp/ws');
+    await service.sendMessage(owner, sendInput(projectId, 'echte Nachricht'));
+    await warm;
+    await waitFor(() => !service.isBusy(projectId));
+    expect(maxGleichzeitig).toBe(1);
+    expect(order.at(-1)).toBe('real');
+  });
+
+  test('prewarm startet nicht, während ein Turn läuft', async () => {
+    // Reload oder zweiter Tab mitten im ersten Turn eines Projekts ohne
+    // Sitzung: ein Warmup würde abgewiesen und risse den laufenden Turn mit.
+    const prompts: string[] = [];
+    let releaseReal: () => void = () => {};
+    const runner: AgentRunner = {
+      startTurn(options: TurnOptions): TurnHandle {
+        prompts.push(options.prompt);
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          await new Promise<void>((r) => {
+            releaseReal = r;
+          });
+          yield { type: 'turn-completed', sessionId: 'x' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { owner, service, projectId } = await setup(runner);
+    await service.sendMessage(owner, sendInput(projectId, 'echte Nachricht'));
+    await waitFor(() => prompts.length === 1);
+    await service.prewarm(owner, projectId, '/tmp/ws');
+    await Bun.sleep(30);
+    expect(prompts).toHaveLength(1);
+    releaseReal();
+    await waitFor(() => !service.isTurnActive(projectId));
+  });
+
   test('echter Turn wartet auf den laufenden Warmup (keine msb-Konkurrenz)', async () => {
     const order: string[] = [];
     let releaseWarmup: () => void = () => {};
@@ -2274,5 +2359,242 @@ describe('Re-Entry-Resume (resumeUnansweredTurn)', () => {
     expect((await service.listMessages(projectId)).filter((m) => m.role === 'user')).toHaveLength(
       1,
     );
+  });
+});
+
+/**
+ * A1: Antwortet der Agent nicht, weil die VM oder der Daemon weg ist, nannte
+ * die Fehlzeile „die Claude-API antwortet nicht" — die falsche Spur.
+ */
+describe('Fehlzeile nach einem Hänger nennt die richtige Ursache', () => {
+  const stumm: AgentRunner = {
+    startTurn(): TurnHandle {
+      const events: AsyncIterable<never> = {
+        [Symbol.asyncIterator]: () => ({ next: () => new Promise<never>(() => {}) }),
+      };
+      return { events, abort: () => {} };
+    },
+  };
+
+  async function fehlzeile(erreichbar: boolean | undefined): Promise<string> {
+    const db = createTestDb();
+    const owner = await createUser(db, 'marco');
+    const projectId = await createProjectRow(db, owner);
+    const service = new ChatService(
+      db,
+      stumm,
+      erreichbar === undefined ? {} : { isAgentReachable: () => erreichbar },
+      { timeouts: { firstEventMs: 20, coldStartMs: 30 }, abortGraceMs: 10, prewarmEnabled: false },
+    );
+    await service.sendMessage(owner, sendInput(projectId, 'hallo'));
+    await waitFor(() => !service.isTurnActive(projectId), 3000);
+    const messages = await service.listMessages(projectId);
+    return messages.find((m) => m.role === 'error')?.content ?? '';
+  }
+
+  test('Sandbox nicht erreichbar: die Zeile sagt das und verweist auf den Neustart', async () => {
+    const text = await fehlzeile(false);
+    expect(text).toContain('Sandbox');
+    expect(text).not.toContain('Claude-API');
+  });
+
+  test('Sandbox erreichbar: es bleibt beim Hinweis auf die API', async () => {
+    expect(await fehlzeile(true)).toContain('Claude-API');
+    expect(await fehlzeile(undefined)).toContain('Claude-API');
+  });
+});
+
+/**
+ * B1 (Server-Seite): Zwei Stellen, an denen der Turn-Status, den der Client
+ * sieht, vom echten abwich.
+ */
+describe('Turn-Status für den Client', () => {
+  test('eine Zeile aus dem Turn-Ende-Hook meldet KEINEN laufenden Turn mehr', async () => {
+    // Der Auto-Commit läuft nach dem Turn-Ende in der Pump-Schleife. Postete
+    // er eine Fehlzeile, trug sie turnActive:true — die Anzeige sprang für bis
+    // zu 5 s zurück auf „Agent arbeitet".
+    const db = createTestDb();
+    const owner = await createUser(db, 'marco');
+    const projectId = await createProjectRow(db, owner);
+    const imHook: { belegt: boolean | null } = { belegt: null };
+    const service: ChatService = new ChatService(
+      db,
+      new FakeAgentRunner(1),
+      {
+        onTurnEnd: async (id) => {
+          imHook.belegt = service.isBusy(id);
+          await service.postMessage(id, 'error', 'Auto-Commit fehlgeschlagen');
+        },
+      },
+      { prewarmEnabled: false },
+    );
+    const payloads: ChatEventPayload[] = [];
+    const subscription = service.subscribe(projectId);
+    void (async () => {
+      for await (const payload of subscription) payloads.push(payload);
+    })();
+
+    await service.sendMessage(owner, sendInput(projectId, 'hallo'));
+    await waitFor(() => payloads.some((p) => p.message.content.includes('Auto-Commit')));
+
+    expect(payloads.at(-1)?.turnActive).toBe(false);
+    // Für die Sandbox bleibt das Projekt während des Hooks belegt — Grace und
+    // Verdrängung dürfen den Auto-Commit nicht unterbrechen.
+    expect(imHook.belegt).toBe(true);
+    await waitFor(() => !service.isBusy(projectId));
+  });
+
+  test('ein wiederaufgenommener Turn wird sofort als laufend gemeldet', async () => {
+    // Nach einem Server-Neustart nimmt enterProject die unbeantwortete
+    // Nachricht wieder auf. Ohne Ereignis blieb der Turn unsichtbar (kein
+    // Indikator, kein Stopp), bis der Agent sein erstes Ereignis schickte.
+    let freigeben: () => void = () => {};
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          await new Promise<void>((r) => {
+            freigeben = r;
+          });
+          yield { type: 'turn-completed', sessionId: 's' };
+        })();
+        return { events, abort: () => {} };
+      },
+    };
+    const { owner, service, projectId } = await setupChat(runner, { prewarmEnabled: false });
+    // Unbeantwortete Nutzerzeile wie nach einem Absturz mitten im Turn.
+    await service.postMessage(projectId, 'user', 'unbeantwortet');
+    const payloads: ChatEventPayload[] = [];
+    const subscription = service.subscribe(projectId);
+    void (async () => {
+      for await (const payload of subscription) payloads.push(payload);
+    })();
+
+    expect(await service.resumeUnansweredTurn(owner, projectId, '/tmp/ws')).toBe(true);
+    await waitFor(() => payloads.length >= 1);
+    expect(payloads[0]?.message.content).toBe('unbeantwortet');
+    expect(payloads[0]?.turnActive).toBe(true);
+    freigeben();
+    await waitFor(() => !service.isTurnActive(projectId));
+  });
+});
+
+/**
+ * B5 (Härtung 2026-11): Warf die Verarbeitung eines Agent-Ereignisses
+ * (Datenbankfehler beim Speichern), schrieb der Host eine Fehlzeile und hörte
+ * auf zuzuhören — brach den Agenten aber nicht ab. Der arbeitete unbeaufsichtigt
+ * weiter, sein Stream blieb offen, und der nächste Turn wurde vom belegten
+ * Daemon abgewiesen.
+ */
+describe('Fehler beim Verarbeiten eines Agent-Ereignisses bricht den Agenten ab', () => {
+  test('abort() wird gerufen und der Ereignisstrom beendet', async () => {
+    let abortAufrufe = 0;
+    let stromBeendet = false;
+    const runner: AgentRunner = {
+      startTurn(): TurnHandle {
+        let wecke: () => void = () => {};
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          try {
+            yield { type: 'tool-use', name: 'Bash', detail: 'ls' };
+            // Der Agent arbeitet weiter, bis ihn jemand abbricht.
+            await new Promise<void>((resolve) => {
+              wecke = resolve;
+            });
+            yield { type: 'turn-aborted' };
+          } finally {
+            stromBeendet = true;
+          }
+        })();
+        return {
+          events,
+          abort: () => {
+            abortAufrufe += 1;
+            wecke();
+          },
+        };
+      },
+    };
+    const db = createTestDb();
+    const owner = await createUser(db, 'marco');
+    const projectId = await createProjectRow(db, owner);
+    // Der ZWEITE Insert (die erste Agent-Zeile) wirft; alle anderen gehen durch.
+    let inserts = 0;
+    const echterInsert = db.insert.bind(db) as (t: unknown) => {
+      values: (w: unknown) => { returning: () => Promise<unknown> };
+    };
+    const kaputteDb = new Proxy(db, {
+      get(ziel, eigenschaft, empfaenger): unknown {
+        if (eigenschaft !== 'insert') return Reflect.get(ziel, eigenschaft, empfaenger);
+        return (tabelle: unknown) => ({
+          values: (werte: unknown) => ({
+            returning: async (): Promise<unknown> => {
+              inserts += 1;
+              if (inserts === 2) throw new Error('SQLITE_BUSY: database is locked');
+              return echterInsert(tabelle).values(werte).returning();
+            },
+          }),
+        });
+      },
+    }) as Db;
+    const service = new ChatService(kaputteDb, runner, {}, { prewarmEnabled: false });
+
+    await service.sendMessage(owner, sendInput(projectId, 'hallo'));
+    await waitFor(() => !service.isBusy(projectId), 3000);
+
+    expect(abortAufrufe).toBeGreaterThanOrEqual(1);
+    expect(stromBeendet).toBe(true);
+    const messages = await service.listMessages(projectId);
+    expect(messages.some((m) => m.role === 'error' && m.content.includes('SQLITE_BUSY'))).toBe(
+      true,
+    );
+  });
+});
+
+describe('forget im Startfenster eines Turns (B11)', () => {
+  test('der Turn eines vergessenen Projekts läuft nicht mehr an oder wird sofort abgebrochen', async () => {
+    // Das Projekt wird gelöscht, während sein Turn noch auf den Warmup wartet:
+    // es gibt noch kein Handle zum Abbrechen. Ohne Pin startete der Turn danach
+    // für ein gelöschtes Projekt und lief bis in den Watchdog.
+    let warmupFreigeben: () => void = () => {};
+    const echteStarts: { abgebrochen: boolean }[] = [];
+    const runner: AgentRunner = {
+      startTurn(options: TurnOptions): TurnHandle {
+        if (options.prompt.includes('bereit')) {
+          const events = (async function* (): AsyncGenerator<AgentEvent> {
+            await new Promise<void>((r) => {
+              warmupFreigeben = r;
+            });
+            yield { type: 'turn-completed', sessionId: 'w' };
+          })();
+          return { events, abort: () => {} };
+        }
+        const start = { abgebrochen: false };
+        echteStarts.push(start);
+        let wecke: () => void = () => {};
+        const events = (async function* (): AsyncGenerator<AgentEvent> {
+          await new Promise<void>((r) => {
+            wecke = r;
+          });
+          yield { type: 'turn-aborted' };
+        })();
+        return {
+          events,
+          abort: () => {
+            start.abgebrochen = true;
+            wecke();
+          },
+        };
+      },
+    };
+    const { owner, service, projectId } = await setup(runner);
+    await service.prewarm(owner, projectId, '/tmp/ws');
+    await Bun.sleep(10);
+    await service.sendMessage(owner, sendInput(projectId, 'hallo'));
+    await Bun.sleep(10);
+
+    service.forget(projectId);
+    warmupFreigeben();
+    await Bun.sleep(80);
+
+    expect(echteStarts.every((s) => s.abgebrochen)).toBe(true);
   });
 });

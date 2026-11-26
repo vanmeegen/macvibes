@@ -52,6 +52,8 @@ export interface TurnAttemptDeps {
   publish: (projectId: string, message: ChatMessageRow, turnActive: boolean) => void;
   /** Für den Idle-Timer der Sandbox (R9). */
   onAgentActivity: (projectId: string) => void;
+  /** Ist der Agent-Daemon der Sandbox verbunden? Nur für die Fehlzeile (A1). */
+  isAgentReachable: (projectId: string) => boolean;
   /** Timeouts für schnelle bzw. langsame (lokale) Modelle — die Wahl fällt pro Turn. */
   fastTimeouts: AgentTimeouts;
   slowTimeouts: AgentTimeouts;
@@ -251,8 +253,11 @@ export class TurnAttempt {
               `Der Agent hat ${secs}s lang nicht reagiert und wurde abgebrochen.` +
                 (detail
                   ? `\n\n${detail}`
-                  : ' Kein weiterer Fehlertext verfügbar — mögliche Ursache: die Claude-API ' +
-                    'antwortet nicht (Netz-/Rate-Limit-Problem).') +
+                  : this.deps.isAgentReachable(this.projectId)
+                    ? ' Kein weiterer Fehlertext verfügbar — mögliche Ursache: die Claude-API ' +
+                      'antwortet nicht (Netz-/Rate-Limit-Problem).'
+                    : ' Die Sandbox des Projekts ist nicht erreichbar (die VM oder ihr ' +
+                      'Agent-Prozess reagiert nicht). Die nächste Nachricht startet sie neu.') +
                 (this.sawWork ? `\n\n${CONTINUE_HINT}` : ''),
             );
           }
@@ -263,6 +268,15 @@ export class TurnAttempt {
         await this.handleEvent(step.value);
       }
     } catch (error) {
+      // Der Host hört ab hier nicht mehr zu — dann darf auch der Agent nicht
+      // weiterarbeiten: er schriebe unbeaufsichtigt in den Workspace, sein
+      // Stream bliebe offen, und der nächste Turn träfe einen belegten Daemon.
+      // Bewusst rawHandle: kein Nutzerabbruch.
+      try {
+        rawHandle.abort();
+      } catch (abortError) {
+        console.error(`Agent von ${this.projectId} nicht abbrechbar:`, abortError);
+      }
       // Runner-Fehler nie verschlucken — als error-Zeile in die Historie.
       // Der Insert selbst darf aber NICHT werfen (F18): wurde das Projekt
       // während des Turns gelöscht, scheitert er am Fremdschlüssel, und die
@@ -277,6 +291,13 @@ export class TurnAttempt {
       }
     } finally {
       this.slot.currentHandle = null;
+      // Den Ereignisstrom des Runners in jedem Fall schließen (Listener,
+      // Quittungs-Timer): nach einem Fehler stünde sein Generator sonst
+      // dauerhaft offen. Nicht abwarten — ein Strom, der gerade auf den Agenten
+      // wartet, kehrt erst mit dessen nächstem Ereignis zurück.
+      void Promise.resolve(iterator.return?.()).catch((returnError: unknown) => {
+        console.error(`Ereignisstrom von ${this.projectId} nicht schließbar:`, returnError);
+      });
       // Rest schreiben, BEVOR das Turn-Ende signalisiert wird — sonst stünde in
       // der DB ein älterer Stand als im letzten Event. Darf nicht werfen (F18,
       // wie der Fehler-Insert oben: Projekt während des Turns gelöscht).

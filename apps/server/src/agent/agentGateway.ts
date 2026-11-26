@@ -8,7 +8,14 @@ export { AGENT_GATEWAY_PATH };
 
 /** Was ein Gateway-Nutzer (DaemonAgentRunner) pro Sandbox mitbekommt. */
 export type GatewayNotification =
-  { kind: 'message'; message: DaemonToHostMessage } | { kind: 'disconnected' };
+  | { kind: 'message'; message: DaemonToHostMessage }
+  | { kind: 'disconnected' }
+  /**
+   * Die Verbindung wurde durch eine neue ersetzt (Daemon-Neustart) oder
+   * geordnet abgebaut. Kein Ausfall — aber ein Turn, dessen Kommando schon an
+   * die ALTE Verbindung ging, bekommt keine Antwort mehr.
+   */
+  | { kind: 'replaced' };
 
 export type GatewayListener = (notification: GatewayNotification) => void;
 
@@ -33,8 +40,18 @@ export class AgentGateway {
   private readonly listeners = new Map<string, Set<GatewayListener>>();
   private readonly connectWaiters = new Map<string, Set<() => void>>();
 
-  constructor(options: { tokens: VmTokenRegistry }) {
+  private readonly onDisconnected: ((sandbox: string) => void) | undefined;
+
+  constructor(options: {
+    tokens: VmTokenRegistry;
+    /**
+     * Wird bei jedem ECHTEN Verbindungsabriss gerufen (nicht bei Ersetzen oder
+     * geordnetem Abbau) — das früheste Zeichen einer toten VM (A1).
+     */
+    onDisconnected?: (sandbox: string) => void;
+  }) {
     this.tokens = options.tokens;
+    this.onDisconnected = options.onDisconnected;
   }
 
   /** Upgrade-Handler für index.ts — undefined, wenn der Socket übernommen wurde. */
@@ -154,6 +171,7 @@ export class AgentGateway {
     this.connections.delete(sandbox);
     console.log(`Agent-Gateway: Verbindung von ${sandbox} geordnet abgebaut (Neustart)`);
     ws.close(4001, 'Neustart angefordert');
+    this.notify(sandbox, { kind: 'replaced' });
   }
 
   /** Abonniert Nachrichten/Disconnects einer Sandbox; Rückgabe: Abbestellen. */
@@ -182,6 +200,7 @@ export class AgentGateway {
     if (previous !== undefined) {
       // Daemon-Neustart: die neue Verbindung gilt, die alte ist tot.
       previous.close(4000, 'Ersetzt durch neue Daemon-Verbindung');
+      this.notify(sandbox, { kind: 'replaced' });
     }
     const waiters = this.connectWaiters.get(sandbox);
     if (waiters !== undefined) {
@@ -216,6 +235,7 @@ export class AgentGateway {
       `Agent-Gateway: ${sandbox} getrennt (Code ${code ?? '?'}, ${logSafe(reason ?? '')})`,
     );
     this.notify(sandbox, { kind: 'disconnected' });
+    this.onDisconnected?.(sandbox);
   }
 
   private notify(sandbox: string, notification: GatewayNotification): void {

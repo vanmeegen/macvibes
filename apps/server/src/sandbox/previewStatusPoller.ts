@@ -30,6 +30,8 @@ export class PreviewStatusPoller {
   private status: PreviewStatus = 'starting';
   private everReady = false;
   private stopped = false;
+  /** Zählt die Pushes — eine Probe gilt nur, wenn währenddessen keiner kam (B6). */
+  private pushGeneration = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly deps: PreviewStatusPollerDeps) {}
@@ -62,20 +64,28 @@ export class PreviewStatusPoller {
    */
   notify(status: PreviewStatus): void {
     if (this.stopped) return;
+    this.pushGeneration += 1;
     this.everReady = this.everReady || status === 'ready';
     this.setStatus(status);
   }
 
   private async poll(): Promise<void> {
     if (this.stopped) return;
+    // Kam während der Probe ein Push, ist ihr Ergebnis älter als er — der
+    // Push gewinnt, die nächste Probe prüft ihn nach (B6).
+    const generation = this.pushGeneration;
     try {
       const status = await this.deps.fetchStatus();
-      this.everReady = this.everReady || status === 'ready';
-      this.setStatus(status);
+      if (generation === this.pushGeneration) {
+        this.everReady = this.everReady || status === 'ready';
+        this.setStatus(status);
+      }
     } catch {
       // Status-Quelle nicht erreichbar: beim Boot normal (starting),
       // nach einem ready ein Ausfall (restarting) — nie ein stiller Hänger.
-      this.setStatus(this.everReady ? 'restarting' : 'starting');
+      if (generation === this.pushGeneration) {
+        this.setStatus(this.everReady ? 'restarting' : 'starting');
+      }
     }
     if (this.stopped) return;
     this.timer = setTimeout(

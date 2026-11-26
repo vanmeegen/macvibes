@@ -18,8 +18,11 @@ interface Harness {
 const servers: Server<GatewaySocketData>[] = [];
 const sockets: WebSocket[] = [];
 
-function makeHarness(): Harness {
-  const gateway = new AgentGateway({ tokens });
+function makeHarness(onDisconnected?: (sandbox: string) => void): Harness {
+  const gateway = new AgentGateway({
+    tokens,
+    ...(onDisconnected !== undefined ? { onDisconnected } : {}),
+  });
   const server = Bun.serve({
     port: 0,
     fetch: (request, srv) => {
@@ -141,6 +144,37 @@ describe('AgentGateway', () => {
     await Bun.sleep(50);
     expect(incoming).toHaveLength(1);
     expect(JSON.parse(incoming[0]!)).toMatchObject({ kind: 'start-turn', turnId: 't-1' });
+  });
+
+  test('ein echter Verbindungsabriss wird zusätzlich global gemeldet (Signal für den SandboxManager)', async () => {
+    // A1: der Abriss ist das früheste Zeichen einer toten VM. Der Manager hat
+    // keinen Abonnenten pro Sandbox — er bekommt die Meldung über diesen Hook.
+    const gemeldet: string[] = [];
+    const h = makeHarness((sandbox) => gemeldet.push(sandbox));
+    const ws = await openSocket(h.url('sb-1'));
+    await h.gateway.waitForConnection('sb-1', 2000);
+    ws.close();
+    await Bun.sleep(50);
+    expect(gemeldet).toEqual(['sb-1']);
+  });
+
+  test('Ersetzen und geordneter Abbau melden „replaced" (nicht „disconnected")', async () => {
+    // B3: ein bereits gesendeter Turn muss erfahren, dass seine Verbindung weg
+    // ist — „disconnected" bleibt dem echten Abriss vorbehalten.
+    const h = makeHarness();
+    const received: GatewayNotification[] = [];
+    h.gateway.subscribe('sb-1', (n) => received.push(n));
+    await openSocket(h.url('sb-1'));
+    await h.gateway.waitForConnection('sb-1', 2000);
+
+    await openSocket(h.url('sb-1'));
+    await Bun.sleep(50);
+    expect(received.filter((n) => n.kind === 'replaced')).toHaveLength(1);
+
+    h.gateway.closeGracefully('sb-1');
+    await Bun.sleep(50);
+    expect(received.filter((n) => n.kind === 'replaced')).toHaveLength(2);
+    expect(received.filter((n) => n.kind === 'disconnected')).toEqual([]);
   });
 
   test('Disconnect benachrichtigt Abonnenten und isConnected kippt', async () => {

@@ -91,3 +91,43 @@ describe('Port nur auf dem Loopback belegt', () => {
     }
   });
 });
+
+/**
+ * B9: Zwischen „ist der Wunsch-Port reserviert?" und dem Reservieren lag die
+ * Probe am Betriebssystem (zwei awaits). Zwei Starts mit demselben Wunsch-Port
+ * konnten beide die Probe bestehen und denselben Port bekommen.
+ */
+describe('PortAllocator — Zuteilungen laufen nacheinander', () => {
+  test('bestehen zwei verschränkte Proben für denselben Wunsch-Port, bekommt ihn trotzdem nur einer', async () => {
+    let naechsterFreier = 50_000;
+    const freigaben: (() => void)[] = [];
+    // Probe, die den Wunsch-Port IMMER als frei meldet (genau das Fenster) und
+    // erst auf Zuruf antwortet.
+    const probe = async (port: number): Promise<number | null> => {
+      await new Promise<void>((resolve) => freigaben.push(resolve));
+      return port === 0 ? naechsterFreier++ : port;
+    };
+    const allocator = new PortAllocator(probe);
+    const a = allocator.allocate(5173);
+    const b = allocator.allocate(5173);
+    // Alle wartenden Proben nach und nach beantworten.
+    for (let i = 0; i < 6; i++) {
+      await Bun.sleep(2);
+      for (const frei of freigaben.splice(0)) frei();
+    }
+    const [portA, portB] = await Promise.all([a, b]);
+    expect(portA).toBe(5173);
+    expect(portB).not.toBe(5173);
+  });
+
+  test('eine gescheiterte Zuteilung blockiert die folgenden nicht', async () => {
+    let aufrufe = 0;
+    const allocator = new PortAllocator(async (port) => {
+      aufrufe += 1;
+      if (aufrufe === 1) throw new Error('Probe kaputt');
+      return port === 0 ? 50_100 : port;
+    });
+    await expect(allocator.allocate(5173)).rejects.toThrow('Probe kaputt');
+    expect(await allocator.allocate(5173)).toBe(5173);
+  });
+});

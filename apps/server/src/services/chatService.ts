@@ -21,6 +21,12 @@ export interface ChatHooks {
   onAgentActivity?: (projectId: string) => void;
   /** Nach jedem abgeschlossenen Turn — Auto-Commit (R8, B4). */
   onTurnEnd?: (projectId: string, userPrompt: string) => Promise<void>;
+  /**
+   * Ist der Agent-Daemon der Sandbox gerade mit dem Host verbunden? Nur für
+   * die Wortwahl der Fehlzeile nach einem Hänger (A1). Fehlt der Hook, gilt
+   * der Agent als erreichbar.
+   */
+  isAgentReachable?: (projectId: string) => boolean;
 }
 
 export interface SendMessageInput {
@@ -36,6 +42,12 @@ type QueuedTurn = AttemptTurn;
 interface ProjectChatState {
   queue: QueuedTurn[];
   pumpRunning: boolean;
+  /**
+   * Die Pump-Schleife steckt gerade im Turn-Ende-Hook (Auto-Commit). Für die
+   * Sandbox ist das Projekt dann weiter belegt, für den Client läuft aber
+   * kein Turn mehr.
+   */
+  imTurnEndeHook: boolean;
   /**
    * Handle des laufenden Turns — das UMHÜLLTE aus `TurnAttempt`, nicht das des
    * Runners. Sein `abort()` markiert den Turn als Nutzerabbruch und beendet ihn
@@ -145,6 +157,7 @@ export class ChatService {
         this.insertMessage(projectId, turnId, role, content),
       publish: (projectId, message, turnActive) => this.publish(projectId, message, turnActive),
       onAgentActivity: (projectId) => this.hooks.onAgentActivity?.(projectId),
+      isAgentReachable: (projectId) => this.hooks.isAgentReachable?.(projectId) ?? true,
       fastTimeouts: {
         idleMs,
         // Nie länger warten als der Idle-Timeout — der Start-Timeout ist die UNTERE Schranke.
@@ -162,6 +175,7 @@ export class ChatService {
     this.warmup = new ConfigWarmup(this.store, runner, {
       enabled: options.prewarmEnabled ?? true,
       timeoutMs: timeouts.warmupMs ?? 60_000,
+      isTurnActive: (projectId) => this.isTurnActive(projectId),
     });
   }
 
@@ -171,6 +185,7 @@ export class ChatService {
       state = {
         queue: [],
         pumpRunning: false,
+        imTurnEndeHook: false,
         currentHandle: null,
         activeTurnId: null,
         abortActiveTurnId: null,
@@ -194,7 +209,16 @@ export class ChatService {
   isTurnActive(projectId: string): boolean {
     const state = this.states.get(projectId);
     if (!state) return false;
-    return state.pumpRunning || state.queue.length > 0 || state.currentHandle !== null;
+    // Im Turn-Ende-Hook (Auto-Commit) läuft die Pump-Schleife noch, der Turn
+    // ist aber vorbei: eine Zeile, die der Hook postet, trüge sonst
+    // turnActive:true und die Anzeige spränge zurück auf „Agent arbeitet".
+    const pumptEinenTurn = state.pumpRunning && !state.imTurnEndeHook;
+    return pumptEinenTurn || state.queue.length > 0 || state.currentHandle !== null;
+  }
+
+  /** Arbeitet die Pump-Schleife noch — Turn ODER Turn-Ende-Hook? */
+  private pumpLaeuft(projectId: string): boolean {
+    return this.states.get(projectId)?.pumpRunning ?? false;
   }
 
   /**
@@ -205,7 +229,11 @@ export class ChatService {
    * garantiert nach dem Lauf (ConfigWarmup.prewarm) — kein Dauer-busy-Risiko.
    */
   isBusy(projectId: string): boolean {
-    return this.warmup.isRunning(projectId) || this.isTurnActive(projectId);
+    // Auch der Turn-Ende-Hook (Auto-Commit) belegt die Sandbox: Grace und
+    // Verdrängung dürfen ihn nicht unterbrechen.
+    return (
+      this.warmup.isRunning(projectId) || this.isTurnActive(projectId) || this.pumpLaeuft(projectId)
+    );
   }
 
   /**
@@ -309,7 +337,7 @@ export class ChatService {
     workspaceDir: string,
   ): Promise<boolean> {
     // Früher Guard nur als billiger Kurzschluss — er allein genügt NICHT.
-    if (this.isTurnActive(projectId)) return false;
+    if (this.isTurnActive(projectId) || this.pumpLaeuft(projectId)) return false;
     // Feature-Gating (s. o.): fremdes oder unbekanntes Projekt → still false.
     // VOR dem Lesen der letzten Zeile und VOR dem lazy state() — kein DB-Lesen der Historie
     // und kein liegenbleibender State-Eintrag für fremde Projekte.
@@ -325,11 +353,15 @@ export class ChatService {
     // erste Gewinner macht seinen Push bzw. `pumpRunning` (pump setzt es
     // synchron vor dem ersten await) sofort sichtbar, der zweite sieht hier
     // isTurnActive === true.
-    if (this.isTurnActive(projectId)) return false;
+    if (this.isTurnActive(projectId) || this.pumpLaeuft(projectId)) return false;
     if (lastRow === undefined || lastRow.role !== 'user') return false;
     const state = this.state(projectId);
     state.queue.push({ turnId: lastRow.turnId, prompt: lastRow.content, workspaceDir });
     this.startPump(projectId);
+    // Den Betrachtern sagen, dass jetzt ein Turn läuft: es entsteht keine neue
+    // Zeile, also käme sonst bis zum ersten Agent-Ereignis nichts an — kein
+    // Indikator, kein Stopp-Knopf, und der Nutzer schickte die Frage erneut.
+    this.publish(projectId, lastRow, true);
     return true;
   }
 
@@ -424,6 +456,12 @@ export class ChatService {
     if (state === undefined) return;
     state.queue.length = 0;
     state.currentHandle?.abort();
+    // Turn im Startfenster (aktiv, aber noch ohne Handle — er wartet auf den
+    // Warmup oder die DB): den Abbruch an seine turnId pinnen, wie stopTurn es
+    // tut. Sonst startete er gleich für ein Projekt, das es nicht mehr gibt.
+    if (state.currentHandle === null && state.activeTurnId !== null) {
+      state.abortActiveTurnId = state.activeTurnId;
+    }
     this.bus.forget(projectId);
     this.states.delete(projectId);
     this.warmup.forget(projectId);
@@ -565,6 +603,7 @@ export class ChatService {
       this.publish(projectId, lastRow, state.queue.length > 0);
     }
     if (completed) {
+      state.imTurnEndeHook = true;
       try {
         await this.hooks.onTurnEnd?.(projectId, turn.prompt);
       } catch (error) {
@@ -572,6 +611,8 @@ export class ChatService {
         // deleteProject) darf die Pump-Schleife nicht sprengen — sonst bleibt
         // die restliche Queue verwaist liegen und isBusy für immer true.
         console.error(`onTurnEnd-Hook für ${projectId} schlug fehl:`, error);
+      } finally {
+        state.imTurnEndeHook = false;
       }
     }
   }

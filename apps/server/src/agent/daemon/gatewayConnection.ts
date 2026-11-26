@@ -5,6 +5,7 @@ import type { DaemonToHostMessage, HostToDaemonMessage } from './protocol';
 export interface GatewaySocket {
   readonly readyState: number;
   send(data: string): void;
+  close(): void;
   addEventListener(
     type: 'open' | 'message' | 'close' | 'error',
     listener: (event: { data?: unknown }) => void,
@@ -40,6 +41,12 @@ const PING_INTERVAL_MS = 15_000;
 
 /** WebSocket.OPEN — als Zahl, damit die Test-Naht keinen globalen WebSocket braucht. */
 const SOCKET_OPEN = 1;
+
+/**
+ * So viele Pings dürfen unbeantwortet bleiben, bevor die Verbindung als tot
+ * gilt. Zwei statt einem: ein einzelner Pong kann im Lastfall verspätet sein.
+ */
+const MAX_UNBEANTWORTETE_PINGS = 2;
 
 /** Wartezeit vor dem n-ten Reconnect-Versuch: 0,5 s, verdoppelt bis 8 s. */
 function reconnectDelayMs(attempt: number): number {
@@ -100,22 +107,58 @@ export class GatewayConnection {
     const ws = this.createSocket(this.options.url);
     this.socket = ws;
     let stopPing: (() => void) | null = null;
+    let unbeantwortetePings = 0;
+    /** Verbindung schon abgebaut (close-Ereignis ODER Pong-Wächter)? */
+    let abgebaut = false;
+
+    const baueAb = (grund: string): void => {
+      if (abgebaut) return;
+      abgebaut = true;
+      stopPing?.();
+      if (this.socket === ws) this.socket = null;
+      // Der Host hat den Turn bei einem Abriss seinerseits abgebrochen. Ohne
+      // diesen Aufruf bliebe der Turn in der Session gesetzt und ihre
+      // Notwehr-Sperre wiese ab da JEDEN Folge-Turn ab.
+      this.options.session.abandonTurn();
+      const delayMs = reconnectDelayMs(this.attempt);
+      this.attempt += 1;
+      this.logError(`Agent-Daemon: ${grund} — Reconnect in ${delayMs}ms`);
+      this.schedule(() => this.connect(), delayMs);
+    };
 
     ws.addEventListener('open', () => {
       this.log('Agent-Daemon: mit Host-Gateway verbunden');
       // Nach erfolgreichem Connect beginnt der Backoff wieder vorn.
       this.attempt = 0;
       this.sendOn(ws, { kind: 'ready' });
-      stopPing = this.every(() => void this.sendOn(ws, { kind: 'ping' }), PING_INTERVAL_MS);
+      stopPing = this.every(() => {
+        // Pong-Wächter: verschluckt das VM-Netz den Abriss, kommt nie ein
+        // close-Ereignis. Bleiben die Antworten aus, ist die Verbindung tot —
+        // selbst abbauen, statt bis zum Aufgeben des TCP-Stacks zu warten.
+        if (unbeantwortetePings >= MAX_UNBEANTWORTETE_PINGS) {
+          baueAb('Gateway antwortet nicht auf Pings');
+          try {
+            ws.close();
+          } catch (error) {
+            this.logError('Agent-Daemon: Schließen der stummen Verbindung fehlgeschlagen:', error);
+          }
+          return;
+        }
+        if (this.sendOn(ws, { kind: 'ping' })) unbeantwortetePings += 1;
+      }, PING_INTERVAL_MS);
     });
 
     ws.addEventListener('message', (event) => {
+      // Nachzügler einer bereits verworfenen Verbindung nicht mehr ausführen.
+      if (abgebaut) return;
       const raw = typeof event.data === 'string' ? event.data : '';
       const message = parseHostToDaemon(raw);
       if (message === null) {
         this.logError('Agent-Daemon: unverständliche Host-Nachricht verworfen:', raw.slice(0, 200));
         return;
       }
+      // Jede Nachricht des Hosts beweist, dass die Verbindung lebt.
+      unbeantwortetePings = 0;
       // pong: Heartbeat-Antwort — hält den NAT-Flow in beide Richtungen aktiv.
       if (message.kind === 'pong') return;
       this.log(
@@ -126,16 +169,7 @@ export class GatewayConnection {
     });
 
     ws.addEventListener('close', () => {
-      stopPing?.();
-      if (this.socket === ws) this.socket = null;
-      // Der Host hat den Turn bei einem Abriss seinerseits abgebrochen. Ohne
-      // diesen Aufruf bliebe der Turn in der Session gesetzt und ihre
-      // Notwehr-Sperre wiese ab da JEDEN Folge-Turn ab.
-      this.options.session.abandonTurn();
-      const delayMs = reconnectDelayMs(this.attempt);
-      this.attempt += 1;
-      this.logError(`Agent-Daemon: Gateway-Verbindung weg — Reconnect in ${delayMs}ms`);
-      this.schedule(() => this.connect(), delayMs);
+      baueAb('Gateway-Verbindung weg');
     });
 
     ws.addEventListener('error', (event) => {

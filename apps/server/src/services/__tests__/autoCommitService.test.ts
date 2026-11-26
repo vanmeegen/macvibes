@@ -255,3 +255,89 @@ describe('createAutoCommitter — Integration mit ChatService (R8)', () => {
     expect(fehler).toEqual([]);
   });
 });
+
+/**
+ * B7 (Härtung 2026-11): Der Commit nach dem Turn und der Commit vor einem
+ * Stopp (Herunterfahren, Löschen, Idle) konnten gleichzeitig im selben
+ * git-Verzeichnis laufen. Einer scheiterte an `index.lock` oder „nothing to
+ * commit" und schrieb eine falsche Fehlzeile in den Chat.
+ */
+describe('createAutoCommitter — ein Commit nach dem anderen pro Projekt', () => {
+  function aufbau() {
+    let gleichzeitig = 0;
+    let maxGleichzeitig = 0;
+    const reihenfolge: string[] = [];
+    const freigaben: (() => void)[] = [];
+    const fehler: string[] = [];
+    const committer = createAutoCommitter({
+      macvibesHome: '/tmp/egal',
+      postError: async (_projectId, text) => {
+        fehler.push(text);
+      },
+      repoVorhanden: () => true,
+      autoCommit: async (_repo, message) => {
+        gleichzeitig += 1;
+        maxGleichzeitig = Math.max(maxGleichzeitig, gleichzeitig);
+        reihenfolge.push(`start:${message}`);
+        await new Promise<void>((resolve) => freigaben.push(resolve));
+        reihenfolge.push(`ende:${message}`);
+        gleichzeitig -= 1;
+        return 'committed';
+      },
+    });
+    return { committer, reihenfolge, freigaben, fehler, max: () => maxGleichzeitig };
+  }
+
+  test('afterTurn und saveOpenState desselben Projekts überlappen nie', async () => {
+    const t = aufbau();
+    const a = t.committer.afterTurn('p1', 'baue etwas');
+    const b = t.committer.saveOpenState('p1', 'Auto-Commit vor Sandbox-Stopp');
+    await Bun.sleep(5);
+    expect(t.freigaben).toHaveLength(1);
+    t.freigaben[0]?.();
+    await Bun.sleep(5);
+    expect(t.freigaben).toHaveLength(2);
+    t.freigaben[1]?.();
+    await Promise.all([a, b]);
+    expect(t.max()).toBe(1);
+    expect(t.reihenfolge).toEqual([
+      'start:Agent: baue etwas',
+      'ende:Agent: baue etwas',
+      'start:Auto-Commit vor Sandbox-Stopp',
+      'ende:Auto-Commit vor Sandbox-Stopp',
+    ]);
+  });
+
+  test('verschiedene Projekte warten nicht aufeinander', async () => {
+    const t = aufbau();
+    const a = t.committer.afterTurn('p1', 'eins');
+    const b = t.committer.afterTurn('p2', 'zwei');
+    await Bun.sleep(5);
+    expect(t.freigaben).toHaveLength(2);
+    for (const frei of t.freigaben) frei();
+    await Promise.all([a, b]);
+  });
+
+  test('ein gescheiterter Commit hält den nächsten nicht auf', async () => {
+    const aufrufe: string[] = [];
+    const fehler: string[] = [];
+    const committer = createAutoCommitter({
+      macvibesHome: '/tmp/egal',
+      postError: async (_projectId, text) => {
+        fehler.push(text);
+      },
+      repoVorhanden: () => true,
+      autoCommit: async (_repo, message) => {
+        aufrufe.push(message);
+        if (aufrufe.length === 1) throw new Error('index.lock');
+        return 'committed';
+      },
+    });
+    await Promise.all([
+      committer.afterTurn('p1', 'eins'),
+      committer.saveOpenState('p1', 'Auto-Commit vor Sandbox-Stopp'),
+    ]);
+    expect(aufrufe).toHaveLength(2);
+    expect(fehler).toHaveLength(1);
+  });
+});

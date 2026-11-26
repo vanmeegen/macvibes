@@ -48,12 +48,34 @@ export async function findFreePort(preferred: number): Promise<number> {
  */
 export class PortAllocator {
   private readonly reserved = new Set<number>();
+  /** Zuteilungen laufen strikt nacheinander (s. `allocate`). */
+  private kette: Promise<unknown> = Promise.resolve();
 
-  /** Reserviert und liefert einen freien, noch nicht vergebenen Host-Port. */
-  async allocate(preferred: number): Promise<number> {
+  /**
+   * @param probe Liefert den gebundenen Port, wenn `port` frei ist (bei 0 einen
+   *   vom System gewählten), sonst `null`. Test-Naht; Default prüft das OS.
+   */
+  constructor(private readonly probe: (port: number) => Promise<number | null> = tryListen) {}
+
+  /**
+   * Reserviert und liefert einen freien, noch nicht vergebenen Host-Port.
+   *
+   * Eine Zuteilung nach der anderen: zwischen „ist der Wunsch-Port reserviert?"
+   * und dem Reservieren liegt die Probe am Betriebssystem. Liefen zwei
+   * Zuteilungen verschränkt, konnten beide die Probe bestehen und denselben
+   * Port bekommen.
+   */
+  allocate(preferred: number): Promise<number> {
+    const lauf = this.kette.then(() => this.zuteilen(preferred));
+    // Die Kette darf an einem Fehler nicht reißen.
+    this.kette = lauf.catch(() => undefined);
+    return lauf;
+  }
+
+  private async zuteilen(preferred: number): Promise<number> {
     // Wunsch-Port nur nehmen, wenn er weder OS-belegt NOCH schon reserviert ist.
     if (!this.reserved.has(preferred)) {
-      const got = await tryListen(preferred);
+      const got = await this.probe(preferred);
       if (got === preferred) {
         this.reserved.add(preferred);
         return preferred;
@@ -61,7 +83,7 @@ export class PortAllocator {
     }
     // Sonst einen OS-vergebenen Port suchen, der nicht schon reserviert ist.
     for (let attempt = 0; attempt < 50; attempt++) {
-      const candidate = await tryListen(0);
+      const candidate = await this.probe(0);
       if (candidate === null) break;
       if (!this.reserved.has(candidate)) {
         this.reserved.add(candidate);

@@ -20,7 +20,12 @@ export async function* revalidateStream<T>(
 ): AsyncGenerator<T> {
   // Vor dem ersten Wert prüfen: eine bereits ungültige Session darf nicht
   // einmal das erste Event sehen.
-  if (!(await isStillValid())) return;
+  if (!(await isStillValid())) {
+    // Die Quelle ist schon angelegt (Bus-Abonnent des Chats). Ohne `return()`
+    // bliebe sie abonniert und sammelte Ereignisse, die niemand mehr liest.
+    await source[Symbol.asyncIterator]().return?.();
+    return;
+  }
   let zuletztGeprueft = now();
 
   // for await schließt die Quelle bei return/throw selbst (Generator-Protokoll),

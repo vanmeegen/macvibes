@@ -59,6 +59,10 @@ export class DaemonAgentRunner implements AgentRunner {
     let finished = false;
     let aborted = false;
     let acked = false;
+    /** Ist das start-turn-Kommando schon an den Daemon gegangen? */
+    let gesendet = false;
+    /** Baut dieser Runner die Verbindung gerade selbst ab (nach turn-rejected)? */
+    let bautSelbstAb = false;
 
     const pushAll = (events: AgentEvent[]): void => {
       if (finished) return;
@@ -75,6 +79,18 @@ export class DaemonAgentRunner implements AgentRunner {
         // die Claude-Session selbst überlebt in der VM.
         pushAll([
           { type: 'error', message: 'Verbindung zum Agent-Daemon verloren' },
+          { type: 'turn-aborted' },
+        ]);
+        return;
+      }
+      if (notification.kind === 'replaced') {
+        // Die Verbindung, an die das Kommando ging, gibt es nicht mehr; der
+        // neue Daemon kennt den Turn nicht. Ohne das wartete der Host den
+        // Idle-Timeout ab (Minuten). Ein Turn, der noch NICHT gesendet hat,
+        // bleibt unberührt — er sendet gleich an die neue Verbindung.
+        if (!gesendet || bautSelbstAb) return;
+        pushAll([
+          { type: 'error', message: 'Der Agent-Daemon wurde neu gestartet' },
           { type: 'turn-aborted' },
         ]);
         return;
@@ -100,6 +116,7 @@ export class DaemonAgentRunner implements AgentRunner {
         // der Daemon bliebe verklemmt. Danach ist die Registrierung frei,
         // waitForConnection des chatService-Retrys wartet echt auf den
         // frischen Daemon statt sofort auf den sterbenden zurückzukehren.
+        bautSelbstAb = true;
         gateway.closeGracefully(sandbox);
         pushAll(
           neustartAngefordert
@@ -165,6 +182,7 @@ export class DaemonAgentRunner implements AgentRunner {
           resumeSessionId: options.resumeSessionId,
           model,
         });
+        gesendet = sent;
         if (!sent) {
           // send() liefert false auch für eine noch REGISTRIERTE Verbindung,
           // deren Frame verworfen wurde (Bun ws.send() → 0: Socket schließt

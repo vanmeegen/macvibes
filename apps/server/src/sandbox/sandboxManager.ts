@@ -30,6 +30,12 @@ export interface SandboxManagerOptions {
   /** Hook vor jedem Stopp — Auto-Commit eines offenen Stands (R8/R9). */
   onBeforeStop?: (projectId: string) => Promise<void>;
   /**
+   * Hook NACH dem Stopp der VM, bevor der Eintrag `stopped` meldet — sichert,
+   * was der Agent zwischen dem Commit vor dem Stopp und dem Ende der VM noch
+   * geschrieben hat (B7). Fehler blockieren den Stopp nicht.
+   */
+  onAfterStop?: (projectId: string) => Promise<void>;
+  /**
    * Hook vor jedem Frischstart — Auto-Commit eines offenen Stands (N7): msb
    * startet mit .replace(), eine nach einem Hot-Reload verwaiste VM gleichen
    * Namens wird also ohne stop() (und damit ohne onBeforeStop) überbootet.
@@ -67,7 +73,22 @@ export interface SandboxManagerOptions {
    * Ein VM-Neustart repariert kaputten Code ohnehin nicht. Default 2 min.
    */
   healCooldownMs?: number;
+  /**
+   * Ist der Agent-Daemon der VM gerade mit dem Host verbunden? Zusammen mit
+   * dem Vorschau-Status das Anzeichen, ob eine als `running` geführte VM noch
+   * lebt (A1). Fehlt die Angabe, zählt nur der Vorschau-Status.
+   */
+  isAgentConnected?: (projectId: string) => boolean;
+  /**
+   * Wie lange nach einem Verbindungsabriss des Daemons gewartet wird, bevor
+   * die VM geprüft wird — monit startet einen abgestürzten Daemon in der VM
+   * von selbst neu. Default 10 s.
+   */
+  agentReconnectGraceMs?: number;
 }
+
+/** Default für `agentReconnectGraceMs`. */
+const DEFAULT_AGENT_RECONNECT_GRACE_MS = 10_000;
 
 /** Default-Sperrfrist zwischen zwei Heilungs-Neustarts (M2). */
 const DEFAULT_HEAL_COOLDOWN_MS = 2 * 60 * 1000;
@@ -138,6 +159,24 @@ export function viewerKey(userId: string, connectionId: string): string {
 export class SandboxManager {
   private readonly entries = new Map<string, SandboxEntry>();
   /**
+   * Nach `detachForReload` (nur Dev-Hot-Reload): dieser Manager ist ein
+   * verwaistes Objekt und darf NIE wieder Timer stellen, VMs starten oder
+   * stoppen — die neue Ausführung führt dieselben VMs.
+   */
+  private abgekoppelt = false;
+  /**
+   * Nach `stopAll` (Herunterfahren): keine neuen Starts mehr. Der HTTP-Server
+   * nimmt bis zum Prozessende Anfragen an; ohne diesen Riegel startete ein
+   * `enter` nach dem Stopp frisch, und die VM überlebte den Server (A4).
+   */
+  private faehrtHerunter = false;
+  /**
+   * Projekte, die gerade gelöscht werden (B8): für sie startet nichts mehr.
+   * Ein enter, das den Lösch-Stopp nur abwartete, startete sonst frisch und
+   * legte das Projekt-Volume neu an.
+   */
+  private readonly wirdGeloescht = new Set<string>();
+  /**
    * Wann zuletzt ein Heilungs-Neustart lief (M2) — bewusst am Manager, nicht
    * am Entry: der Frischstart ersetzt das Entry-Objekt, die Sperrfrist muss
    * den Neustart aber überleben.
@@ -171,14 +210,24 @@ export class SandboxManager {
 
   /** Gemeinsamer Kern von enter (mit Betrachter) und ensureRunning (ohne). */
   private async acquire(context: SandboxContext, viewer: string | null): Promise<void> {
+    this.pruefeAnnahme(context.projectId);
     let existing = this.entries.get(context.projectId);
     // Ein laufender Stopp muss ZUERST fertig werden (F17): sonst startet hier
     // eine neue VM unter demselben msb-Namen, während stop() noch auf den
     // Auto-Commit wartet — und räumt sie anschließend gleich wieder ab.
-    if (existing && existing.status === 'stopping' && existing.stopPromise) {
-      await existing.stopPromise;
+    // `while`, nicht `if`: stünde der Eintrag nach dem Warten erneut auf
+    // `stopping`, ersetzte der Frischstart unten einen sterbenden Eintrag.
+    while (existing && existing.status === 'stopping' && existing.stopPromise) {
+      // Ein gescheiterter Stopp ist nicht das Problem dessen, der danach
+      // öffnet — der Eintrag steht per finally trotzdem auf `stopped`.
+      await existing.stopPromise.catch((error: unknown) => {
+        console.error(`Sandbox ${context.projectId}: vorheriger Stopp schlug fehl:`, error);
+      });
       existing = this.entries.get(context.projectId);
     }
+    // Während des Wartens kann das Herunterfahren begonnen haben (A4) oder
+    // das Projekt gelöscht worden sein (B8).
+    this.pruefeAnnahme(context.projectId);
     if (existing && existing.status === 'starting' && existing.startPromise) {
       // Start läuft schon — darauf warten, damit der Agent nicht auf eine noch
       // nicht exec-bereite VM losfeuert ("no agent endpoint found", Race-Fix).
@@ -216,6 +265,19 @@ export class SandboxManager {
       // (inkl. Auto-Commit) und dann der normale Frischstart-Pfad; die
       // Betrachter überleben das per H11-Übernahme. Nie unter einem laufenden
       // Turn (auch Warmup, N9) — ein toter Turn löst sich über den Watchdog.
+      //
+      // A1: Die Prüfung, ob die VM noch lebt, passiert HIER im Pfad, sobald
+      // es Anzeichen gibt (Daemon getrennt, Vorschau nicht bereit) — der
+      // gedrosselte Hintergrund-Touch meldete das erst NACH dem Zugriff, der
+      // es gebraucht hätte, und eine tote VM zeigt „restarting", nie „failed".
+      if (!existing.vmVerschwunden && this.verdachtAufToteVm(existing)) {
+        const lebt = await this.vmLebt(existing);
+        // Über das await kann sich alles geändert haben — neu bewerten.
+        if (this.entries.get(context.projectId) !== existing || existing.status !== 'running') {
+          return this.acquire(context, viewer);
+        }
+        if (!lebt) existing.vmVerschwunden = true;
+      }
       const kaputt = existing.vmVerschwunden || existing.handle?.previewStatus() === 'failed';
       // Sperrfrist (Deckel): höchstens EIN Heil-Neustart pro Frist und
       // Projekt — sonst löste bei dauerhaft „failed" jedes enter/ensureRunning
@@ -361,8 +423,10 @@ export class SandboxManager {
    */
   private armGrace(entry: SandboxEntry): void {
     this.clearGrace(entry);
+    if (this.abgekoppelt) return;
     entry.graceTimer = setTimeout(() => {
       entry.graceTimer = null;
+      if (this.abgekoppelt) return;
       // Zombie-Guard (wie der N8-Guard in forget): stop() trifft „was auch
       // immer gerade unter dieser ID registriert ist". Gehört dieser Timer zu
       // einem ERSETZTEN Eintrag (z. B. blieb er an einem gescheiterten Start
@@ -451,9 +515,17 @@ export class SandboxManager {
         }
       }
 
+      const hatteVm = entry.handle !== null;
       try {
         await entry.handle?.stop();
       } finally {
+        if (hatteVm && this.options.onAfterStop) {
+          try {
+            await this.options.onAfterStop(projectId);
+          } catch (error) {
+            console.error(`onAfterStop für ${projectId} schlug fehl:`, error);
+          }
+        }
         entry.handle = null;
         // `viewers` bleibt BEWUSST stehen (H11): die Betrachter-Einträge
         // gehören zur Lebensdauer der SUBSCRIPTION, nicht der VM. Eine offene
@@ -476,6 +548,18 @@ export class SandboxManager {
   }
 
   /**
+   * Sperrt ein Projekt für neue Starts — der erste Schritt des Löschens (B8).
+   * Aufgehoben durch `forget` (Löschen gelungen) oder die zurückgegebene
+   * Funktion (Löschen gescheitert, das Projekt existiert weiter).
+   */
+  sperreFuerLoeschen(projectId: string): () => void {
+    this.wirdGeloescht.add(projectId);
+    return () => {
+      this.wirdGeloescht.delete(projectId);
+    };
+  }
+
+  /**
    * Vergisst ein Projekt vollständig — für gelöschte Projekte.
    *
    * Ohne das blieb der Eintrag samt Kontext, Betrachter-Set und Timern für die
@@ -484,6 +568,7 @@ export class SandboxManager {
    * Buchhaltungsteil ab und startet oder stoppt nichts.
    */
   forget(projectId: string): void {
+    this.wirdGeloescht.delete(projectId);
     const entry = this.entries.get(projectId);
     if (entry === undefined) return;
     // Ist die Sandbox nicht (mehr) gestoppt, ist zwischen dem stop() des
@@ -545,6 +630,11 @@ export class SandboxManager {
    * Supervisor überwachen die weiterlaufenden Sandboxes zu Recht weiter).
    */
   detachForReload(): void {
+    // Dauerhaft, nicht nur für die jetzt vorhandenen Timer: ein nachlaufendes
+    // Agent-Ereignis des alten ChatService armierte sonst einen frischen
+    // Idle-Timer, der 30 min später die inzwischen von der neuen Ausführung
+    // geführte VM stoppte und ihr Token entwertete.
+    this.abgekoppelt = true;
     for (const entry of this.entries.values()) {
       this.clearGrace(entry);
       this.clearIdle(entry);
@@ -556,23 +646,132 @@ export class SandboxManager {
     return this.entries.size;
   }
 
+  /**
+   * Stoppt alle Sandboxes — der Schritt des Herunterfahrens. Danach nimmt der
+   * Manager keine Starts mehr an (A4).
+   *
+   * `allSettled` statt `all`: ein einzelner gescheiterter Stopp beendete sonst
+   * den Schritt sofort, während die Auto-Commits der anderen noch liefen. Und
+   * in Runden: ein Start, der beim ersten Durchlauf gerade lief, ist danach
+   * ein neuer zu stoppender Eintrag.
+   */
   async stopAll(): Promise<void> {
-    await Promise.all([...this.entries.keys()].map((projectId) => this.stop(projectId)));
+    this.faehrtHerunter = true;
+    for (let runde = 0; runde < 5; runde++) {
+      const aktive = [...this.entries.entries()]
+        .filter(([, entry]) => entry.status !== 'stopped')
+        .map(([projectId]) => projectId);
+      if (aktive.length === 0) return;
+      const ergebnisse = await Promise.allSettled(aktive.map((id) => this.stop(id)));
+      for (const [i, ergebnis] of ergebnisse.entries()) {
+        if (ergebnis.status === 'rejected') {
+          console.error(`Sandbox ${aktive[i] ?? '?'} beim Herunterfahren:`, ergebnis.reason);
+        }
+      }
+    }
+  }
+
+  /** Lehnt neue Starts ab, sobald der Manager abgekoppelt ist oder herunterfährt. */
+  private pruefeAnnahme(projectId: string): void {
+    if (this.wirdGeloescht.has(projectId)) {
+      throw new DomainError('Das Projekt wird gerade gelöscht.');
+    }
+    if (this.faehrtHerunter) {
+      throw new DomainError(
+        'Der Server fährt gerade herunter — bitte gleich noch einmal versuchen.',
+      );
+    }
+    if (this.abgekoppelt) {
+      throw new DomainError('Diese Server-Ausführung wurde abgelöst — bitte die Seite neu laden.');
+    }
   }
 
   private touch(entry: SandboxEntry): void {
     entry.lastActivityAt = Date.now();
     this.clearIdle(entry);
+    if (this.abgekoppelt) return;
     entry.idleTimer = setTimeout(() => {
       entry.idleTimer = null;
+      if (this.abgekoppelt) return;
       // Zombie-Guard — s. Begründung in armGrace.
       if (this.entries.get(entry.context.projectId) !== entry) return;
+      // Wie der Grace-Timer: nie unter einem laufenden Turn stoppen. Mit den
+      // Defaults greift das nicht (jedes Agent-Ereignis setzt die Frist neu),
+      // bei kleinem MACVIBES_IDLE_MS und einem stillen Turn aber schon.
+      if (this.options.isBusy?.(entry.context.projectId)) {
+        this.touch(entry);
+        return;
+      }
       // Mit Rejection-Handler (F18/N5) — wie in forget()/touchVm().
       void this.stop(entry.context.projectId).catch((error: unknown) => {
         console.error(`Idle-Stopp für ${entry.context.projectId} schlug fehl:`, error);
       });
     }, this.options.idleMs);
     this.touchVm(entry);
+  }
+
+  /** Anzeichen, dass eine als `running` geführte VM tot sein könnte (A1). */
+  private verdachtAufToteVm(entry: SandboxEntry): boolean {
+    if (!this.options.touchSandbox) return false;
+    if (this.options.isAgentConnected?.(entry.context.projectId) === false) return true;
+    return entry.handle?.previewStatus() === 'restarting';
+  }
+
+  /**
+   * Fragt die Laufzeit, ob die VM noch läuft. Ein Fehler der Abfrage selbst
+   * (msb hängt) ist KEIN „verschwunden" — dann lieber nichts tun als eine
+   * gesunde VM neu starten.
+   */
+  private async vmLebt(entry: SandboxEntry): Promise<boolean> {
+    const touchSandbox = this.options.touchSandbox;
+    if (!touchSandbox) return true;
+    try {
+      entry.lastVmTouchAt = Date.now();
+      return await touchSandbox(entry.context.projectId);
+    } catch (error) {
+      console.error(`VM-Zustand von ${entry.context.projectId} nicht prüfbar:`, error);
+      return true;
+    }
+  }
+
+  /**
+   * Der Agent-Daemon dieser VM hat die Verbindung verloren (A1). Das ist das
+   * früheste Zeichen einer toten VM — aber auch der Normalfall bei einem
+   * Daemon-Neustart durch monit. Deshalb: Frist abwarten; ist der Daemon dann
+   * immer noch weg, die VM prüfen. Lebt sie nicht mehr, wird bei offenem Tab
+   * neu gestartet (der Nutzer soll nicht erst an einer Fehlermeldung merken,
+   * dass etwas weg ist), sonst der Eintrag als gestoppt abgeräumt.
+   */
+  noteAgentDisconnected(projectId: string): void {
+    const entry = this.entries.get(projectId);
+    if (!entry || entry.status !== 'running' || this.abgekoppelt) return;
+    const fristMs = this.options.agentReconnectGraceMs ?? DEFAULT_AGENT_RECONNECT_GRACE_MS;
+    const timer = setTimeout(() => {
+      void this.pruefeNachAbriss(entry).catch((error: unknown) => {
+        console.error(`Prüfung nach Verbindungsabriss von ${projectId} fehlgeschlagen:`, error);
+      });
+    }, fristMs);
+    (timer as { unref?: () => void }).unref?.();
+  }
+
+  private async pruefeNachAbriss(entry: SandboxEntry): Promise<void> {
+    const projectId = entry.context.projectId;
+    const nochAktuell = (): boolean =>
+      this.entries.get(projectId) === entry && entry.status === 'running' && !this.abgekoppelt;
+    if (!nochAktuell()) return;
+    if (this.options.isAgentConnected?.(projectId) !== false) return;
+    const lebt = await this.vmLebt(entry);
+    if (lebt || !nochAktuell()) return;
+    entry.vmVerschwunden = true;
+    // Unter einem laufenden Turn nie eingreifen — der löst sich über seinen
+    // Watchdog, und der nächste Zugriff heilt (vmVerschwunden ist gesetzt).
+    if (this.options.isBusy?.(projectId) === true) return;
+    console.warn(`Sandbox ${projectId}: VM ist nach einem Verbindungsabriss verschwunden.`);
+    if (entry.viewers.size > 0) {
+      await this.acquire(entry.context, null);
+    } else {
+      await this.stop(projectId);
+    }
   }
 
   /**
@@ -656,7 +855,12 @@ export class SandboxManager {
       const victim = candidates.reduce((oldest, e) =>
         e.lastActivityAt < oldest.lastActivityAt ? e : oldest,
       );
-      await this.stop(victim.context.projectId);
+      // Scheitert der Stopp des Verdrängten, ist das nicht das Problem dessen,
+      // der gerade startet: der Eintrag steht per finally trotzdem auf
+      // `stopped`, die Kapazität ist frei.
+      await this.stop(victim.context.projectId).catch((error: unknown) => {
+        console.error(`Verdrängung von ${victim.context.projectId} schlug fehl:`, error);
+      });
     }
   }
 }

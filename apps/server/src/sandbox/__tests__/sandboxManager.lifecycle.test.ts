@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { SandboxContext, SandboxHandle, SandboxProvider } from '../provider';
 import { SandboxManager } from '../sandboxManager';
-import { ctx, setup, torProvider } from './sandboxManagerFixtures';
+import { FakeProvider, ctx, setup, torProvider } from './sandboxManagerFixtures';
 
 describe('enter', () => {
   test('startet die Sandbox und meldet Statusübergänge', async () => {
@@ -440,5 +440,50 @@ describe('onBeforeStart: offener Stand wird gesichert, bevor eine neue VM bootet
     await manager.enter(ctx('p1'), 'u1');
     expect(manager.status('p1')).toBe('running');
     expect(ablauf).toEqual(['beforeStart:p1', 'start:p1']);
+  });
+});
+
+describe('Stand nach dem VM-Stopp sichern (B7)', () => {
+  test('onAfterStop läuft nach dem Stopp der VM und vor „stopped"', async () => {
+    // Der Commit VOR dem Stopp läuft, während die VM noch schreibt. Was der
+    // Agent in diesen letzten Sekunden ändert, kam sonst erst beim nächsten
+    // Öffnen in den Branch — bis dahin fehlte es im Bare-Repo, im Mirror und
+    // beim Kopieren des Projekts.
+    const provider = new FakeProvider();
+    const ablauf: string[] = [];
+    const manager = new SandboxManager({
+      provider,
+      graceMs: 10_000,
+      idleMs: 10_000,
+      maxSandboxes: 8,
+      onBeforeStop: async () => {
+        ablauf.push('vorher');
+      },
+      onAfterStop: async () => {
+        ablauf.push(`nachher (VM gestoppt: ${provider.stopCalls.length === 1})`);
+      },
+      onStatusChange: (_id, status) => {
+        if (status === 'stopped') ablauf.push('stopped');
+      },
+    });
+    await manager.enter(ctx('p1'), 'u1');
+    await manager.stop('p1');
+    expect(ablauf).toEqual(['vorher', 'nachher (VM gestoppt: true)', 'stopped']);
+  });
+
+  test('ein werfender onAfterStop blockiert den Stopp nicht', async () => {
+    const provider = new FakeProvider();
+    const manager = new SandboxManager({
+      provider,
+      graceMs: 10_000,
+      idleMs: 10_000,
+      maxSandboxes: 8,
+      onAfterStop: async () => {
+        throw new Error('git kaputt');
+      },
+    });
+    await manager.enter(ctx('p1'), 'u1');
+    await manager.stop('p1');
+    expect(manager.status('p1')).toBe('stopped');
   });
 });

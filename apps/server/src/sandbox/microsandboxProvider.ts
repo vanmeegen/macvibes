@@ -82,6 +82,11 @@ export function microsandboxSandboxName(projectId: string): string {
   return `macvibes-${projectId}`;
 }
 
+/** Umkehrung von `microsandboxSandboxName`; `null` für fremde Namen. */
+export function projectIdFromSandboxName(sandbox: string): string | null {
+  return sandbox.startsWith('macvibes-') ? sandbox.slice('macvibes-'.length) : null;
+}
+
 /**
  * Hostname, unter dem eine msb-VM ihren Host erreicht (NAT-Alias des
  * libkrun-Gateways). Das ist msb-spezifische Netz-Topologie, KEIN
@@ -164,8 +169,13 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       await this.bootVm(context, name, hostPort, { workspaceDir, agentConfigDir, bunCacheDir });
     } catch (error) {
       this.config.agentDaemon.revokeToken(name);
-      this.ports.release(hostPort);
-      await this.stopVm(name);
+      // Erst die VM stoppen, DANN den Port freigeben: bis dahin hält sie ihn,
+      // und eine frühere Freigabe gäbe ihn schon an den nächsten Start.
+      try {
+        await this.stopVm(name);
+      } finally {
+        this.ports.release(hostPort);
+      }
       throw error;
     }
 
@@ -196,8 +206,12 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
         this.config.agentDaemon.revokeToken(name);
         unsubscribeStatus();
         poller.stop();
-        this.ports.release(hostPort);
-        await this.stopVm(name);
+        try {
+          await this.stopVm(name);
+        } finally {
+          // Erst NACH dem Stopp freigeben — vorher hält die VM den Port noch.
+          this.ports.release(hostPort);
+        }
       },
     };
   }
