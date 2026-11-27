@@ -8,7 +8,7 @@
     "start": "bun run src/index.ts",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint --deny-warnings",
-    "test": "bun test",
+    "test": "bun test --parallel",
     "db:generate": "drizzle-kit generate",
     "baselines": "bun scripts/buildBaselines.ts"
   },

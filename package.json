@@ -24,8 +24,8 @@
     "test": "bun run --filter='*' test && bun run test:scripts",
     "typecheck:scripts": "tsc -p scripts",
     "test:scripts": "bun test scripts",
-    "format": "prettier --write .",
-    "format:check": "prettier --check .",
+    "format": "bun fmt",
+    "format:check": "bun fmt --check",
     "db:generate": "cd apps/server && bun run db:generate",
     "ci": "bun run format:check && bun run lint && bun run typecheck && bun run test",
     "start": "bun run build:web && cd apps/server && bun run start",
@@ -42,16 +42,15 @@
     "husky": "^9.1.7",
     "lint-staged": "^17.6.2",
     "oxlint": "1.95.0",
-    "prettier": "^3.10.1",
     "typescript": "7.0.2"
   },
   "lint-staged": {
     "*.{ts,tsx}": [
       "oxlint --fix",
-      "prettier --write"
+      "bun fmt"
     ],
     "*.{json,md,css,html,yml,yaml}": [
-      "prettier --write"
+      "bun fmt"
     ]
   }
 }
