@@ -25,7 +25,7 @@ leichtgewichtig, komplett lokal, alles TypeScript auf Bun.
 | Datenbank | `bun:sqlite` + Drizzle ORM (Migrationen: drizzle-kit)         |
 | Frontend  | React 19 + MobX + MUI v9, gebaut mit Vite                     |
 | Tests     | `bun test` (Server/Shared), Vitest (Web), Playwright (E2E)    |
-| Qualität  | oxlint, Prettier, Husky + lint-staged                         |
+| Qualität  | oxlint, bun fmt, Husky + lint-staged                          |
 | Sandbox   | microsandbox (self-hosted MicroVMs)                           |
 
 ## Struktur
